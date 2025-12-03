@@ -1,0 +1,14 @@
+numpy
+xarray
+zarr
+fsspec
+s3fs
+matplotlib
+jax
+jaxlib
+optax
+diffrax==0.7.0
+equinox==0.13.2
+lineax==0.0.8
+optimistix==0.0.11
+torax
