@@ -1,0 +1,24 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.so
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local caches
+.cache/
+*.log
+
+# Virtual environments
+venv/
+.env/
+torax_env/
+
+# Large input data files
+data/
+
+# Simulation outputs and derived artifacts
+outputs/
+simulate_outputs.npz
+
