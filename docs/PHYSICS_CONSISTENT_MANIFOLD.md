@@ -4,9 +4,8 @@
 
 ## 1. Motivation
 
-Conventional manifold learning minimizes a purely data-driven loss such as $\|\mathbf{T}_{model}-\mathbf{T}_{data}\|^2$. The resulting manifold may interpolate the measurements yet fails to respect the diffusion physics that governs the plasma. In practice the learned states can sit in regions where the conductive flux is enormous, forcing the neural source term to counteract the deterministic physics instead of capturing the genuinely missing phenomena.
-
-**Physics-consistent goal.** We learn an equilibrium manifold $\mathcal{M}$ that resides inside the slow (approximately null) space of the transport operator. Profiles restricted to $\mathcal{M}$ satisfy $\tfrac{d\mathbf{T}}{dt}\approx 0$ under the diffusion dynamics, so any residual neural source focuses on true exogenous effects rather than canceling large unbalanced fluxes.
+**Physics-consistent goal.** We model the system state as a superposition 
+ 
 
 ## 2. Governing Transport Model
 
@@ -140,3 +139,173 @@ forcing $\mathbf{c}_{\text{latent}}$ to span shapes that satisfy the steady-stat
 | `rho`, `Vprime` | Equilibrium files | Geometry for diffusion |
 
 Multiple packs (`data/*_torax_training*.npz`) share the solver grid and model weights but retain shot-specific masks and controls. Clean synthetic targets in `simulate_outputs.npz` provide regression baselines.
+
+## 9. HPC Optimization Strategies for Avoiding Local Minima
+
+Training physics-consistent manifolds is challenging due to:
+1. **Non-convex loss landscape** from the coupled ODE-PDE system
+2. **Multiple time scales** (fast diffusion vs. slow L/H dynamics)
+3. **Interacting loss terms** ($\mathcal{L}_{\text{data}}$ vs. $\mathcal{L}_{\text{slow}}$)
+
+### 9.1 Advanced Optimizers
+
+**Recommendations:**
+
+- **Adam** (default): Good baseline with adaptive learning rates
+  - `--lr 1e-3` typically works well
+  - Consider `--weight_decay 1e-5` for regularization
+
+- **AdamW**: Better weight decay handling than Adam
+  - Decouples weight decay from gradient updates
+  - More stable for long training runs
+  - `--optimizer adamw --weight_decay 1e-4`
+
+- **LAMB** (Layer-wise Adaptive Moments optimizer for Batch training)
+  - Better for very large datasets with many shots
+  - Adapts learning rate per-layer
+  - More robust to batch size changes
+  - `--optimizer lamb --lr 1e-3`
+
+- **Lion** (EvoLved Sign Momentum)
+  - More memory efficient than Adam
+  - Often escapes sharp minima better
+  - Try lower learning rates: `--optimizer lion --lr 3e-4`
+
+### 9.2 Learning Rate Schedules
+
+**Critical for avoiding plateaus:**
+
+- **Cosine Annealing**: Gradually reduces LR with periodic "warm restarts"
+  ```bash
+  --lr_schedule cosine --lr 1e-3 --lr_min 1e-6 --steps 5000
+  ```
+  - Smooth decay helps fine-tuning
+  - Prevents oscillations at convergence
+
+- **Warmup + Cosine**: Best for large-scale training
+  ```bash
+  --lr_schedule warmup_cosine --warmup_steps 200 --lr 1e-3 --lr_min 1e-6
+  ```
+  - Warmup stabilizes early training (critical when $\mathcal{L}_{\text{slow}}$ is noisy)
+  - Cosine decay refines solution
+
+- **Exponential Decay**: Simple but effective
+  ```bash
+  --lr_schedule exponential --lr 1e-3 --lr_min 1e-6 --steps 3000
+  ```
+
+### 9.3 Gradient Clipping
+
+Stiff ODE solvers can produce explosive gradients:
+- **Default**: `--grad_clip 1.0` (gradient norm clipping)
+- **For unstable datasets**: Try `--grad_clip 0.5`
+- **For smooth convergence**: Increase to `--grad_clip 2.0`
+
+### 9.4 Random Restarts (Ensemble Strategy)
+
+Run multiple training sessions with different seeds:
+```bash
+for seed in {0..4}; do
+  python -m scripts.train_ode_physics_manifold \
+    --seed $seed \
+    --steps 3000 \
+    --out outputs/physics_manifold_seed${seed} \
+    data/*_torax_training.npz
+done
+```
+- Select best model based on validation loss
+- Average predictions from top-3 models for robustness
+- Different initializations explore different basins
+
+### 9.5 Hyperparameter Tuning Recommendations
+
+**For HPC with many shots (10+ packs):**
+
+```bash
+python -m scripts.train_ode_physics_manifold \
+  --steps 5000 \
+  --optimizer adamw \
+  --lr 5e-4 \
+  --lr_schedule warmup_cosine \
+  --warmup_steps 300 \
+  --lr_min 1e-7 \
+  --weight_decay 1e-4 \
+  --grad_clip 1.0 \
+  --lambda_phy 0.01 \
+  --checkpoint_every 250 \
+  --early_stop_patience 500 \
+  --num_restarts 3 \
+  data/*_torax_training.npz
+```
+
+**Key principles:**
+- Start with moderate `lambda_phy` (0.01-0.1), increase if profiles drift from physics
+- Use warmup when adding new shots (geometry variations need adaptation)
+- Lower learning rates (1e-4 to 5e-4) for stable long runs
+- Checkpoint frequently to recover from divergence
+
+### 9.6 Monitoring and Diagnostics
+
+**Track these metrics** (add to training loop):
+1. **Component losses**: Separate $\mathcal{L}_{\text{data}}$ and $\mathcal{L}_{\text{slow}}$
+2. **Gradient norms**: Detect vanishing/exploding gradients
+3. **Latent trajectory**: Monitor $z(t)$ range (should stay ~[-3, 3])
+4. **Manifold shape**: Visualize $\mathbf{T}(z)$ for $z\in\{-2,0,2\}$
+
+### 9.7 Architecture Adjustments
+
+If still stuck in local minima after optimization tuning:
+- **Increase MLP capacity**: Change `SourceNN` from 64→128 nodes or depth 3→4
+- **Add residual connections**: Help gradient flow through deep networks
+- **Increase manifold basis**: More B-spline centers (currently 5, try 7-9)
+- **Curriculum learning**: Train on easy shots first, gradually add complex ones
+
+### 9.8 Physics Loss Annealing
+
+Gradually increase $\lambda_{\text{phy}}$ during training:
+```python
+# In training loop
+lambda_current = lambda_phy * min(1.0, step / warmup_steps)
+```
+- Start data-fitting focused, then enforce physics constraints
+- Prevents early training collapse from conflicting gradients
+
+### 9.9 Example HPC SLURM Script
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=fusion_manifold
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:1
+#SBATCH --time=12:00:00
+#SBATCH --mem=32G
+
+module load cuda/12.0
+source venv/bin/activate
+
+# Multi-seed ensemble
+for seed in {0..4}; do
+  python -m scripts.train_ode_physics_manifold \
+    --seed $seed \
+    --steps 10000 \
+    --optimizer adamw \
+    --lr 5e-4 \
+    --lr_schedule warmup_cosine \
+    --warmup_steps 500 \
+    --lambda_phy 0.02 \
+    --out outputs/manifold_s${seed} \
+    data/*_torax_training.npz &
+done
+wait
+
+# Select best model
+python -m scripts.evaluate_models outputs/manifold_s*
+```
+
+**Recommendations summary:**
+- **Short test runs**: Adam + constant LR to verify setup
+- **Production HPC**: AdamW + warmup_cosine + multiple seeds
+- **Large datasets (>20 shots)**: LAMB optimizer with batch processing
+- **Stuck in plateau**: Lower LR by 10x or switch to Lion optimizer
