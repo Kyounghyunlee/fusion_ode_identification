@@ -1,0 +1,41 @@
+data:
+  data_dir: "data"
+  # List specific shot numbers or use "all" to train on all .npz files in data_dir
+  shots: "all" 
+  # shots: [24209, 24210] 
+
+system:
+  device: "gpu" # Options: "cpu", "gpu" (JAX will auto-detect GPU if available)
+
+training:
+  # HPC Strategy: Random Restarts
+  num_restarts: 3
+  
+  # Optimization
+  optimizer: "adamw" # Options: adam, adamw, lion
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  
+  # Scheduler
+  warmup_steps: 2000
+  total_steps: 100000
+  
+  # Gradient Clipping (Crucial for stiff ODEs)
+  grad_clip: 1.0
+  
+  # Physics Loss Annealing
+  lambda_phy_max: 0.1
+  lambda_phy_warmup_steps: 10000
+  
+  # Batching (Number of shots per gradient step - JAX vmap)
+  batch_size: 4 # Adjust based on GPU memory (e.g., 20 shots might fit if small, else batch)
+
+output:
+  save_dir: "outputs/hpc_models"
+  model_name: "physics_manifold_model"
+  save_best_only: true
+
+model:
+  layers: 64
+  depth: 3
+  latent_dim: 1 # Fixed to 1 as per theory

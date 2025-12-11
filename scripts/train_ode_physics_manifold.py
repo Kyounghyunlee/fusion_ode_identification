@@ -181,11 +181,12 @@ class HybridField(eqx.Module):
         # 3. Divergence
         Vp = jnp.clip(jnp.asarray(Vp_vals), 1e-6, None)
         Vp_face = 0.5 * (Vp[1:] + Vp[:-1])
-        dr_node = rho[2:] - rho[:-2]
-        dr_node = jnp.maximum(dr_node, 1e-6)
+        # Cell width is half the distance between neighbors for non-uniform grid
+        dr_cell = 0.5 * (rho[2:] - rho[:-2])
+        dr_cell = jnp.maximum(dr_cell, 1e-6)
         flux_right = Vp_face[1:] * flux[1:]
         flux_left = Vp_face[:-1] * flux[:-1]
-        diff_term = (flux_right - flux_left) / (Vp[1:-1] * dr_node)
+        diff_term = (flux_right - flux_left) / (Vp[1:-1] * dr_cell)
 
         # 4. Source NN
         control_interp = jnp.stack([
@@ -316,7 +317,9 @@ def parse_pack(path):
     ts_mask = mask if mask.sum() >= max(1, fallback.sum() // 10) else fallback
 
     Te0 = Te[0].copy()
-    if np.nanmin(Te0) <= 10.0 or not np.all(np.isfinite(Te0)):
+    # Check validity: must be finite and above threshold.
+    # We check isfinite first to avoid RuntimeWarning from nanmin on all-NaN slices.
+    if not np.all(np.isfinite(Te0)) or np.nanmin(Te0) <= 10.0:
         edge_val = 10.0
         core_val = 100.0
         Te0 = edge_val + (core_val - edge_val) * (1.0 - rho ** 2)
