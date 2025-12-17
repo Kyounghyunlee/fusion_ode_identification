@@ -55,12 +55,26 @@ def _psi_edge_value(eq: xr.Dataset, psi2d: xr.DataArray, itime: int) -> float:
     Requires R_lcfs(time,npts), Z_lcfs(time,npts) in equilibrium dataset.
     If not available, falls back to mean psi on outer boundary of the grid.
     """
+    psi_max = float(np.nanmax(psi2d.values))
+    lcfs_r_keys = ("R_lcfs", "lcfs_r")
+    lcfs_z_keys = ("Z_lcfs", "lcfs_z")
+
     try:
-        R_lcfs = eq["R_lcfs"].isel(time=itime)
-        Z_lcfs = eq["Z_lcfs"].isel(time=itime)
+        r_key = next(k for k in lcfs_r_keys if k in eq)
+        z_key = next(k for k in lcfs_z_keys if k in eq)
+        R_lcfs = eq[r_key]
+        Z_lcfs = eq[z_key]
+
+        # Align time dimension if present
+        if "time" in R_lcfs.dims:
+            R_lcfs = R_lcfs.isel(time=itime)
+        if "time" in Z_lcfs.dims:
+            Z_lcfs = Z_lcfs.isel(time=itime)
+
         r_name, z_name = _get_RZ_coords(eq)
         psi_s = psi2d.interp({r_name: R_lcfs, z_name: Z_lcfs})
-        return float(np.nanmean(psi_s.values))
+        psi_edge = float(np.nanmax(psi_s.values))
+        return psi_max if not np.isfinite(psi_edge) or psi_edge < psi_max else psi_edge
     except Exception:
         # Fallback: average psi on the rectangular boundary
         arr = psi2d.values
@@ -69,7 +83,8 @@ def _psi_edge_value(eq: xr.Dataset, psi2d: xr.DataArray, itime: int) -> float:
         left = arr[:, 0]
         right = arr[:, -1]
         boundary = np.concatenate([top, bottom, left, right])
-        return float(np.nanmean(boundary))
+        psi_edge = float(np.nanmax(boundary))
+        return psi_max if not np.isfinite(psi_edge) or psi_edge < psi_max else psi_edge
 
 
 def compute_rho_scalars(eq: xr.Dataset, itime: Optional[int] = None) -> Dict[str, float]:

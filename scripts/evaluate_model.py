@@ -9,8 +9,9 @@ Loads a trained model and generates comparison plots (Model vs Observation).
 """
 
 import os
-import yaml
 import json
+import argparse
+import yaml
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -52,6 +53,19 @@ def load_model(model_path, rho):
     )
     
     return eqx.tree_deserialise_leaves(model_path, model)
+
+
+def masked_mse_weighted(pred, obs, mask):
+    mask = mask.astype(jnp.float64)
+    col_weight = jnp.mean(mask, axis=0)
+    col_weight = jnp.where(
+        jnp.sum(col_weight) > 0,
+        col_weight / (jnp.sum(col_weight) + 1e-8),
+        jnp.ones_like(col_weight) / col_weight.size,
+    )
+    weight_grid = mask * col_weight
+    resid = (pred - obs) ** 2
+    return float(jnp.sum(weight_grid * resid) / (jnp.sum(weight_grid) + 1e-8))
 
 def run_inference(model, bundle: ShotBundle):
     t0, t1 = bundle.ts_t[0], bundle.ts_t[-1]
@@ -162,21 +176,50 @@ def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, save_dir):
     plt.savefig(os.path.join(save_dir, f"shot_{shot_id}_latent.png"))
     plt.close()
 
+def summarize_data(bundles):
+    stats = []
+    for b in bundles:
+        cov = float(b.mask.mean())
+        n_rho = b.mask.shape[1]
+        n_t = b.mask.shape[0]
+        stats.append((b.shot_id, cov, n_t, n_rho))
+    return stats
+
+
 def main():
-    config = load_config()
-    model_path = os.path.join(config['output']['save_dir'], f"{config['output']['model_name']}_best.eqx")
+    ap = argparse.ArgumentParser(description="Evaluate trained physics manifold model")
+    ap.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
+    ap.add_argument("--model-id", default=None, help="Override model_id from config")
+    ap.add_argument("--data-check", action="store_true", help="Print mask coverage summary before eval")
+    args = ap.parse_args()
+
+    config = load_config(args.config)
+    
+    model_id = args.model_id or config['output'].get('model_id', 'default_run')
+    base_save_dir = config['output']['save_dir']
+    base_log_dir = config['output'].get('log_dir', 'logs')
+    
+    model_dir = os.path.join(base_save_dir, model_id)
+    log_dir = os.path.join(base_log_dir, model_id)
+    
+    model_path = os.path.join(model_dir, f"{config['output']['model_name']}_best.eqx")
     
     if not os.path.exists(model_path):
         print(f"Model not found at {model_path}. Run training first.")
         return
 
     print("Loading Data...")
-    bundles, rho = load_data(config)
+    bundles, rho_ref = load_data(config)
+    if args.data_check:
+        cov_stats = summarize_data(bundles)
+        print("Mask coverage (mean over grid) and shapes:")
+        for sid, cov, n_t, n_r in cov_stats:
+            print(f"  shot {sid}: cov={cov:.3f}, t={n_t}, rho={n_r}")
     
     print("Loading Model...")
-    model = load_model(model_path, rho)
+    model = load_model(model_path, rho_ref)
     
-    eval_dir = os.path.join(config['output']['save_dir'], "evaluation")
+    eval_dir = os.path.join(log_dir, "evaluation")
     os.makedirs(eval_dir, exist_ok=True)
     
     print("Running Inference...")
@@ -192,10 +235,9 @@ def main():
     for bundle in bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle)
-        
-        # Calculate MSE
-        mask = bundle.mask
-        mse = float(jnp.sum(mask * (Te_model - bundle.ts_Te)**2) / jnp.sum(mask))
+
+        # Calculate weighted MSE (mask + per-column coverage)
+        mse = masked_mse_weighted(Te_model, bundle.ts_Te, bundle.mask)
         print(f"  MSE: {mse:.4f}")
         total_mse += mse
         
@@ -217,7 +259,8 @@ def main():
         }
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
-        plot_results(bundle.ts_t, rho, bundle.ts_Te, Te_model, zs, bundle.shot_id, eval_dir)
+        rho_vals = np.array(bundle.ode_args[0])
+        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, zs, bundle.shot_id, eval_dir)
         
     report["overall_metrics"] = {
         "mean_mse": total_mse / len(bundles)

@@ -13,3 +13,5 @@ torax
 ipywidgets
 PyYAML
 netCDF4
+requests
+jaxopt

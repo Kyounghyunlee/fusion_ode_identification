@@ -22,3 +22,7 @@ data/
 outputs/
 simulate_outputs.npz
 
+
+# Training and chat logs
+logs/
+
