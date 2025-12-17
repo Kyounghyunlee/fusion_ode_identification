@@ -10,21 +10,21 @@ system:
   device: "gpu"
 
 training:
-  # Keep a single pass (no restarts) for quick smoke
-  num_restarts: 1
+  # Longer, higher-quality run
+  num_restarts: 3
 
   optimizer: "adamw"
   learning_rate: 3.0e-4
   weight_decay: 1.0e-5
 
-  # Short AdamW run to hand off to L-BFGS
-  warmup_steps: 3
-  total_steps: 10
+  # Longer AdamW phase before L-BFGS
+  warmup_steps: 200
+  total_steps: 5000
   batch_size: 64
-  grad_clip: 1.0e5
+  grad_clip: 1.0e4
 
   # logging
-  log_every: 100
+  log_every: 50
 
   # loss weights (explicit)
   huber_delta: 10.0
@@ -36,20 +36,20 @@ training:
   lambda_zreg: 1.0e-5
 
   # Optional EMA (0 disables)
-  ema_decay: 0.0
+  ema_decay: 0.999
 
   # Enable a short, safe L-BFGS finetune after AdamW
   lbfgs_finetune: true
-  lbfgs_maxiter: 5
-  lbfgs_history: 5
-  lbfgs_batch_shots: 1
-  lbfgs_tol: 1.0e-4
+  lbfgs_maxiter: 200
+  lbfgs_history: 10
+  lbfgs_batch_shots: 2
+  lbfgs_tol: 5.0e-5
 
 output:
   model_id: "production_run_v1"
   save_dir: "models"
   log_dir: "logs"
-  model_name: "physics_manifold_model"
+  model_name: "tokamak ode model"
 
 model:
   layers: 128
