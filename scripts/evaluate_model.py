@@ -11,6 +11,8 @@ Loads a trained model and generates comparison plots (Model vs Observation).
 import os
 import json
 import argparse
+from typing import List, NamedTuple
+
 import yaml
 import jax
 import jax.numpy as jnp
@@ -19,39 +21,110 @@ import matplotlib.pyplot as plt
 import equinox as eqx
 import diffrax
 
-# Import model definitions from the training script
-from train_ode_physics_manifold_hpc import HybridField, SourceNN, EquilibriumManifold, LatentDynamics, load_data, ShotBundle
+# Import model definitions and constants from the training script
+from train_ode_physics_manifold_hpc import (
+    HybridField,
+    SourceNN,
+    LatentDynamics,
+    load_data,
+    ShotBundle,
+    MAX_SOLVER_STEPS,
+)
 
 jax.config.update("jax_enable_x64", True)
+
+
+class EvalBundle(NamedTuple):
+    ts_t: jnp.ndarray
+    ts_Te: jnp.ndarray
+    mask: jnp.ndarray
+    Te0: jnp.ndarray
+    z0: float
+    shot_id: int
+    rho: jnp.ndarray
+    Vprime: jnp.ndarray
+    ctrl_t: jnp.ndarray
+    ctrl_vals: jnp.ndarray
+    ctrl_means: jnp.ndarray
+    ctrl_stds: jnp.ndarray
+    ne_vals: jnp.ndarray
+    Te_edge: jnp.ndarray
+    obs_idx: jnp.ndarray
 
 def load_config(config_path="config/config.yaml"):
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
-def load_model(model_path, rho):
-    # Re-instantiate the model structure (must match training script exactly)
-    # We need dummy keys/values just to build the skeleton
-    key = jax.random.PRNGKey(0)
-    
-    # Basis (must match training)
-    centers = jnp.linspace(0.1, 0.9, 5)
-    diff = jnp.abs(rho[:, None] - centers[None, :])
-    Phi = jnp.clip(1.0 - diff / 0.18, 0.0, 1.0)
-    
-    model = HybridField(
-        nn=SourceNN(key),
-        manifold=EquilibriumManifold(
-            Phi=Phi,
-            base_coef=jnp.zeros(5),
-            latent_coef=jnp.zeros(5),
-            latent_gain=1.0
-        ),
-        latent=LatentDynamics(
-            alpha=1.0, beta=1.0, gamma=1.0,
-            mu_weights=jnp.zeros(3), mu_bias=0.0, mu_ref=0.0
+
+def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
+    """Unstack the padded ShotBundle produced by training load_data into per-shot bundles."""
+
+    bundles: List[EvalBundle] = []
+    n_shots = stacked.ts_t.shape[0]
+
+    for i in range(n_shots):
+        t_len = int(stacked.t_len[i])
+
+        ts_t = jnp.asarray(stacked.ts_t[i, :t_len])
+        ts_Te = jnp.asarray(stacked.ts_Te[i, :t_len])
+        mask = jnp.asarray(stacked.mask[i, :t_len])
+        Te0 = jnp.asarray(stacked.Te0[i])
+        z0 = float(stacked.z0[i])
+        rho = jnp.asarray(stacked.rho_rom[i])
+        Vprime = jnp.asarray(stacked.Vprime_rom[i])
+        ctrl_t = jnp.asarray(stacked.ctrl_t[i, :t_len])
+        ctrl_vals = jnp.asarray(stacked.ctrl_vals[i, :t_len])
+        ctrl_means = jnp.asarray(stacked.ctrl_means[i])
+        ctrl_stds = jnp.asarray(stacked.ctrl_stds[i])
+        ne_vals = jnp.asarray(stacked.ne_vals[i, :t_len])
+        Te_edge = jnp.asarray(stacked.Te_edge[i, :t_len])
+        obs_idx = jnp.asarray(stacked.obs_idx[i])
+        shot_id = int(stacked.shot_id[i])
+
+        bundles.append(
+            EvalBundle(
+                ts_t=ts_t,
+                ts_Te=ts_Te,
+                mask=mask,
+                Te0=Te0,
+                z0=z0,
+                shot_id=shot_id,
+                rho=rho,
+                Vprime=Vprime,
+                ctrl_t=ctrl_t,
+                ctrl_vals=ctrl_vals,
+                ctrl_means=ctrl_means,
+                ctrl_stds=ctrl_stds,
+                ne_vals=ne_vals,
+                Te_edge=Te_edge,
+                obs_idx=obs_idx,
+            )
         )
+
+    return bundles
+
+def load_model(model_path, config):
+    """Recreate the trained model structure for deserialization."""
+    key = jax.random.PRNGKey(0)
+
+    layers = int(config.get("model", {}).get("layers", 64))
+    depth = int(config.get("model", {}).get("depth", 3))
+    latent_gain = float(config.get("model", {}).get("latent_gain", 1.0))
+    source_scale = float(config.get("model", {}).get("source_scale", 3.0e5))
+
+    model = HybridField(
+        nn=SourceNN(key, source_scale=source_scale, layers=layers, depth=depth),
+        latent=LatentDynamics(
+            alpha=jnp.array(1.0, dtype=jnp.float64),
+            beta=jnp.array(1.0, dtype=jnp.float64),
+            gamma=jnp.array(1.0, dtype=jnp.float64),
+            mu_weights=jnp.zeros(3, dtype=jnp.float64),
+            mu_bias=jnp.array(0.0, dtype=jnp.float64),
+            mu_ref=jnp.array(0.0, dtype=jnp.float64),
+        ),
+        latent_gain=latent_gain,
     )
-    
+
     return eqx.tree_deserialise_leaves(model_path, model)
 
 
@@ -67,114 +140,149 @@ def masked_mse_weighted(pred, obs, mask):
     resid = (pred - obs) ** 2
     return float(jnp.sum(weight_grid * resid) / (jnp.sum(weight_grid) + 1e-8))
 
-def run_inference(model, bundle: ShotBundle):
-    t0, t1 = bundle.ts_t[0], bundle.ts_t[-1]
-    # Evolve nodes 0..N-2
+def _build_ode_args(bundle: EvalBundle):
+    ctrl_interp = diffrax.LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+    ne_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.ne_vals)
+    Te_bc_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.Te_edge)
+    return (
+        bundle.rho,
+        bundle.Vprime,
+        ctrl_interp,
+        bundle.ctrl_means,
+        bundle.ctrl_stds,
+        ne_interp,
+        Te_bc_interp,
+    )
+
+
+def run_inference(model, bundle: EvalBundle):
+    t0, t1 = float(bundle.ts_t[0]), float(bundle.ts_t[-1])
+
+    ode_args = _build_ode_args(bundle)
+
     y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.array([bundle.z0], dtype=jnp.float64)])
 
-    solver = diffrax.Tsit5()
+    solver = diffrax.Kvaerno5()
+    controller = diffrax.PIDController(rtol=1e-3, atol=1e-3)
     saveat = diffrax.SaveAt(ts=bundle.ts_t)
-    
-    sol = diffrax.diffeqsolve(
-        diffrax.ODETerm(model), solver, t0, t1, y0=y0, dt0=5e-4,
-        saveat=saveat, max_steps=100000, throw=False, args=bundle.ode_args
-    )
-    
-    Te_hats = sol.ys[:, :-1]
-    zs = sol.ys[:, -1]
-    Te_bc = bundle.ode_args[-1]
-    
-    def reconstruct(Te_hat_row):
-        return jnp.append(Te_hat_row, Te_bc / model.Te_scale) * model.Te_scale
 
-    Te_model = jax.vmap(reconstruct)(Te_hats)
+    sol = diffrax.diffeqsolve(
+        diffrax.ODETerm(model),
+        solver,
+        t0,
+        t1,
+        y0=y0,
+        dt0=1e-4,
+        stepsize_controller=controller,
+        saveat=saveat,
+        max_steps=MAX_SOLVER_STEPS,
+        throw=False,
+        args=ode_args,
+    )
+
+    ys_clean = jnp.nan_to_num(sol.ys, nan=0.0, posinf=0.0, neginf=0.0)
+    Te_hats = ys_clean[:, :-1]
+    zs = ys_clean[:, -1]
+
+    Te_bc_ts = ode_args[-1].evaluate(bundle.ts_t)
+
+    def reconstruct(Te_hat_row, bc_val):
+        return jnp.append(Te_hat_row, bc_val / model.Te_scale) * model.Te_scale
+
+    Te_model = jax.vmap(reconstruct)(Te_hats, Te_bc_ts)
     return Te_model, zs
 
-def analyze_physics_components(model, bundle, Te_model, zs):
-    """
-    Decompose the tendency into Diffusion and Source terms to check physics consistency.
-    """
-    # We need to evaluate the tendency at each time step
-    # This is computationally expensive but necessary for diagnostics
-    
-    def get_terms(t, Te, z):
-        # Re-use the logic from HybridField.compute_physics_tendency
-        # But we need to extract the intermediate values
-        args = bundle.ode_args
-        (rho_vals, Vp_vals, control_ts, control_vals, control_means, control_stds, 
-         ne_ts, ne_vals, Te_bc) = args
-        rho = jnp.asarray(rho_vals)
-        
-        # 1. Diffusivity
-        chi_edge = model.chi_edge_base - model.chi_edge_drop * model.manifold.gate(z)
-        chi_edge = jnp.clip(chi_edge, 0.1, 5.0)
-        w_ped = jax.nn.sigmoid((rho - model.ped_center) / model.ped_width)
-        chi = model.chi_core + w_ped * (chi_edge - model.chi_core)
+def analyze_physics_components(model, bundle: EvalBundle, Te_model, zs):
+    """Compute mean magnitudes for total tendency and NN source for quick diagnostics."""
 
-        # 2. Flux (FVM)
-        dr_face = jnp.maximum(jnp.diff(rho), 1e-6)
-        grad_T = jnp.diff(Te) / dr_face
-        chi_face = 0.5 * (chi[:-1] + chi[1:])
-        flux_face = -chi_face * grad_T
+    ode_args = _build_ode_args(bundle)
 
-        # 3. Divergence
-        Vp = jnp.clip(jnp.asarray(Vp_vals), 1e-6, None)
-        Vp_face = 0.5 * (Vp[:-1] + Vp[1:])
-        total_flux_face = Vp_face * flux_face
-        flux_diff = total_flux_face - jnp.concatenate([jnp.array([0.0]), total_flux_face[:-1]])
-        
-        dr_dual = 0.5 * (rho[2:] - rho[:-2])
-        dr_0 = 0.5 * rho[1]
-        dr_cell = jnp.concatenate([jnp.array([dr_0]), dr_dual])
-        
-        divergence = flux_diff / (Vp[:-1] * dr_cell)
+    def total_tendency(t, Te_row, z_val):
+        return model.compute_physics_tendency(t, Te_row, z_val, ode_args)
 
-        # 4. Source NN
-        control_interp = jnp.stack([jnp.interp(t, control_ts, control_vals[:, i]) for i in range(control_vals.shape[-1])])
-        control_norm = (control_interp - control_means) / (control_stds + 1e-6)
-        ne_interp = jnp.clip(jnp.stack([jnp.interp(t, ne_ts, ne_vals[:, j]) for j in range(ne_vals.shape[-1])]), 1e17, model.ne_scale)
+    def source_only(t, Te_row, z_val):
+        return model.compute_source(t, Te_row, z_val, ode_args)
 
-        S_nn = jax.vmap(lambda r, T, n: model.nn(r, T / model.Te_scale, n / model.ne_scale, control_norm, z))(rho[:-1], Te[:-1], ne_interp[:-1])
-        
-        return jnp.mean(jnp.abs(divergence)), jnp.mean(jnp.abs(S_nn))
+    f_vals = jax.vmap(total_tendency)(bundle.ts_t, Te_model, zs)
+    s_vals = jax.vmap(source_only)(bundle.ts_t, Te_model, zs)
 
-    # Vectorize over time
-    vmap_terms = jax.vmap(get_terms)
-    diff_mags, source_mags = vmap_terms(bundle.ts_t, Te_model, zs)
-    
-    return jnp.mean(diff_mags), jnp.mean(source_mags)
+    return jnp.mean(jnp.abs(f_vals)), jnp.mean(jnp.abs(s_vals))
 
-def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, save_dir):
+def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, plots_dir):
+    ts_np = np.asarray(ts)
+    rho_np = np.asarray(rho)
+    Te_obs_np = np.asarray(Te_obs)
+    Te_model_np = np.asarray(Te_model)
+    zs_np = np.asarray(zs)
+
     # 1. Temperature Profile Evolution (Heatmap)
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
     
     # Obs
-    c1 = ax[0].contourf(ts, rho, Te_obs.T, levels=20, cmap='inferno')
+    c1 = ax[0].contourf(ts_np, rho_np, Te_obs_np.T, levels=20, cmap='inferno')
     ax[0].set_title(f"Shot {shot_id}: Observed Te")
     ax[0].set_ylabel("rho")
     plt.colorbar(c1, ax=ax[0])
     
     # Model
-    c2 = ax[1].contourf(ts, rho, Te_model.T, levels=20, cmap='inferno')
+    c2 = ax[1].contourf(ts_np, rho_np, Te_model_np.T, levels=20, cmap='inferno')
     ax[1].set_title(f"Shot {shot_id}: Model Te")
     ax[1].set_xlabel("Time (s)")
     ax[1].set_ylabel("rho")
     plt.colorbar(c2, ax=ax[1])
     
     plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, f"shot_{shot_id}_heatmap.png"))
+    plt.savefig(os.path.join(plots_dir, f"shot_{shot_id}_heatmap.png"))
     plt.close()
     
     # 2. Latent Dynamics
     plt.figure(figsize=(10, 4))
-    plt.plot(ts, zs, label='Latent z')
+    plt.plot(ts_np, zs_np, label='Latent z')
     plt.title(f"Shot {shot_id}: Latent Coordinate Evolution")
     plt.xlabel("Time (s)")
     plt.ylabel("z")
     plt.grid(True)
     plt.legend()
-    plt.savefig(os.path.join(save_dir, f"shot_{shot_id}_latent.png"))
+    plt.savefig(os.path.join(plots_dir, f"shot_{shot_id}_latent.png"))
     plt.close()
+
+
+def plot_time_series(ts, rho, Te_obs, Te_model, mask, obs_idx, shot_id, plots_dir, max_traces: int = 6):
+    ts_np = np.asarray(ts)
+    rho_np = np.asarray(rho)
+    Te_obs_np = np.asarray(Te_obs)
+    Te_model_np = np.asarray(Te_model)
+    mask_np = np.asarray(mask)
+
+    idxs = np.array(obs_idx)
+    if idxs.size == 0:
+        idxs = np.arange(min(5, Te_obs_np.shape[1]))
+    idxs = idxs[:max_traces]
+
+    n_rows = idxs.size
+    fig, axes = plt.subplots(n_rows, 1, figsize=(12, 3 * n_rows), sharex=True)
+    axes = np.atleast_1d(axes)
+
+    obs_labeled = False
+    for ax, idx in zip(axes, idxs):
+        ax.plot(ts_np, Te_model_np[:, idx], label="Model", linewidth=2.0, color="tab:blue")
+
+        obs_mask = mask_np[:, idx] > 0.5
+        if np.any(obs_mask):
+            ax.scatter(ts_np[obs_mask], Te_obs_np[obs_mask, idx], label="Observed" if not obs_labeled else None, color="tab:orange", s=14, alpha=0.8)
+            obs_labeled = True
+
+        ax.set_ylabel(f"Te @ rho={rho_np[idx]:.2f}")
+        ax.grid(True, alpha=0.3)
+
+    axes[-1].set_xlabel("Time (s)")
+    if obs_labeled:
+        axes[0].legend(loc="best")
+
+    fig.suptitle(f"Shot {shot_id}: Model vs Observation (time series)")
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
+    fig.savefig(os.path.join(plots_dir, f"shot_{shot_id}_timeseries.png"))
+    plt.close(fig)
 
 def summarize_data(bundles):
     stats = []
@@ -209,18 +317,21 @@ def main():
         return
 
     print("Loading Data...")
-    bundles, rho_ref = load_data(config)
+    stacked_bundles, rho_rom, _, _ = load_data(config)
+    eval_bundles = build_eval_bundles(stacked_bundles)
     if args.data_check:
-        cov_stats = summarize_data(bundles)
+        cov_stats = summarize_data(eval_bundles)
         print("Mask coverage (mean over grid) and shapes:")
         for sid, cov, n_t, n_r in cov_stats:
             print(f"  shot {sid}: cov={cov:.3f}, t={n_t}, rho={n_r}")
     
     print("Loading Model...")
-    model = load_model(model_path, rho_ref)
+    model = load_model(model_path, config)
     
     eval_dir = os.path.join(log_dir, "evaluation")
+    plots_dir = os.path.join(eval_dir, "plots")
     os.makedirs(eval_dir, exist_ok=True)
+    os.makedirs(plots_dir, exist_ok=True)
     
     print("Running Inference...")
     
@@ -232,7 +343,7 @@ def main():
     
     total_mse = 0.0
     
-    for bundle in bundles:
+    for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle)
 
@@ -259,11 +370,12 @@ def main():
         }
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
-        rho_vals = np.array(bundle.ode_args[0])
-        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, zs, bundle.shot_id, eval_dir)
+        rho_vals = np.array(bundle.rho)
+        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, zs, bundle.shot_id, plots_dir)
+        plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
     report["overall_metrics"] = {
-        "mean_mse": total_mse / len(bundles)
+        "mean_mse": total_mse / len(eval_bundles)
     }
     
     # Save Report

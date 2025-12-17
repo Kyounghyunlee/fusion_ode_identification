@@ -62,6 +62,30 @@ python preprocessing/build_training_pack.py --discover
 python scripts/inspect_data.py
 ```
 
+## Configuration
+
+Edit [config/config.yaml](config/config.yaml) to set data paths, shots, and outputs. Minimal example:
+```yaml
+data:
+	data_dir: "data"
+	shots: [27567, 27568]
+	intersection_rho_threshold: 0.05
+	rom_n_interior: 16
+output:
+	model_id: "production_run_v1"
+	save_dir: "models"
+	log_dir: "logs"
+	model_name: "physics_manifold_model"
+training:
+	batch_size: 64
+	total_steps: 1000
+	learning_rate: 3.0e-4
+model:
+	latent_gain: 1.0
+	source_scale: 3.0e5
+```
+Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in `data_dir`.
+
 ## Running Training on GPU
 
 We have a wrapper that exports CUDA paths and runs the training script with the current config.
@@ -77,9 +101,22 @@ tmux new -s train
 # detach: Ctrl+b then d; reattach: tmux attach -t train
 ```
 
-## Configuration
+## Evaluate a Trained Model
 
-Training configuration lives in [config/config.yaml](config/config.yaml). Key knobs:
-- `model.source_scale`: Source NN scale (≈3e5 for physical units).
-- `training.grad_clip`: Gradient clipping value.
-- `training.batch_size`: Batch size.
+Generate evaluation plots and metrics for the saved checkpoint:
+```bash
+python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
+```
+Outputs go to `logs/<model_id>/evaluation/` (JSON report + PNG plots).
+
+## Dependency Management
+
+- Install pinned deps (after creating/activating the venv):
+```bash
+pip install -r requirements.txt
+```
+- Add or update deps: edit `requirements.in`, then regenerate and install:
+```bash
+pip-compile --output-file=requirements.txt requirements.in
+pip install -r requirements.txt
+```
