@@ -3,6 +3,8 @@ Evaluation Script for Physics-Consistent Manifold Model
 Loads a trained model and generates comparison plots (Model vs Observation).
 """
 
+# scripts/evaluate_model.py
+
 """
 Evaluation Script for Physics-Consistent Manifold Model
 Loads a trained model and generates comparison plots (Model vs Observation).
@@ -17,19 +19,16 @@ import yaml
 import jax
 import jax.numpy as jnp
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import equinox as eqx
 import diffrax
 
-# Import model definitions and constants from the training script
-from train_ode_physics_manifold_hpc import (
-    HybridField,
-    SourceNN,
-    LatentDynamics,
-    load_data,
-    ShotBundle,
-    MAX_SOLVER_STEPS,
-)
+from fusion_ode_identification.model import HybridField, SourceNN, LatentDynamics
+from fusion_ode_identification.data import load_data
+from fusion_ode_identification.types import ShotBundle
+from fusion_ode_identification.loss import MAX_SOLVER_STEPS
 
 jax.config.update("jax_enable_x64", True)
 

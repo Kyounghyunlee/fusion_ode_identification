@@ -13,6 +13,8 @@ Usage:
   python -m scripts.build_training_pack --discover
 """
 
+# preprocessing/build_training_pack.py
+
 from __future__ import annotations
 
 import argparse

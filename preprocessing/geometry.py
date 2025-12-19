@@ -7,6 +7,8 @@ Assumptions:
 - Coordinates are named "R" and "Z" for the poloidal plane. Adjust if needed.
 """
 
+# preprocessing/geometry.py
+
 from __future__ import annotations
 
 import math

@@ -1,3 +1,5 @@
+# scripts/inspect_data.py
+
 import numpy as np
 import glob
 import os

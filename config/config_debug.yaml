@@ -19,9 +19,9 @@ training:
   weight_decay: 3.0e-5
 
   # Longer AdamW phase before L-BFGS
-  warmup_steps: 5
+  warmup_steps: 1
   total_steps: 5
-  batch_size: 5
+  batch_size: 10
   grad_clip: 1.0e3
 
   # logging
@@ -45,8 +45,8 @@ training:
   ema_decay: 0.999
 
   # Enable a short, safe L-BFGS finetune after AdamW
-  lbfgs_finetune: False
-  lbfgs_maxiter: 1
+  lbfgs_finetune: true
+  lbfgs_maxiter: 2
   lbfgs_history: 1
   lbfgs_batch_shots: 2
   lbfgs_tol: 5.0e-5

@@ -1,3 +1,5 @@
+# scripts/inspect_debug.py
+
 import numpy as np
 import os
 import diffrax

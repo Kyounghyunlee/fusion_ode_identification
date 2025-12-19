@@ -88,17 +88,93 @@ Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in
 
 ## Running Training on GPU
 
-We have a wrapper that exports CUDA paths and runs the training script with the current config.
+This repo supports both “auto” device selection (whatever JAX sees) and explicit forcing of CPU/GPU.
+
+Important:
+- Run commands from the repo root.
+- If you run ad-hoc one-liners (`python -c ...`), export `PYTHONPATH="$PWD"` so imports work.
+
+### Auto (CPU or GPU)
+
+If you are on a GPU node and your JAX install supports CUDA, this will use GPU automatically; otherwise it will run on CPU.
+
+```bash
+export PYTHONPATH="$PWD"
+python train_tokamak_ode_hpc.py --config config/config.yaml
+```
+
+### Force CPU
+
+```bash
+export PYTHONPATH="$PWD"
+export JAX_PLATFORMS=cpu
+python train_tokamak_ode_hpc.py --config config/config.yaml
+```
+
+### Force GPU (generic)
+
+On a GPU node, you can force CUDA backend like this:
+
+```bash
+export PYTHONPATH="$PWD"
+export JAX_PLATFORMS=cuda
+python train_tokamak_ode_hpc.py --config config/config.yaml
+```
+
+### Force GPU (HPC wrapper)
+
+We provide a wrapper that loads modules and exports CUDA/NCCL paths for the SDCC environment, then runs training.
 
 - Standard run:
 ```bash
-./scripts/run_training_gpu.sh
+./scripts/run_training_gpu.sh --config config/config.yaml
 ```
 - With tmux (recommended):
 ```bash
 tmux new -s train
-./scripts/run_training_gpu.sh
+./scripts/run_training_gpu.sh --config config/config.yaml
 # detach: Ctrl+b then d; reattach: tmux attach -t train
+```
+
+### What to expect in logs
+
+The first step typically triggers a large JAX/XLA compile. The training script prints a warmup/compile timing line before the main loop so a “quiet period” is clearly identified as compile time.
+
+## Debugging (single-shot)
+
+There are two convenient options:
+
+### Option A: Standalone debug runner (recommended)
+
+Runs a single-shot forward solve using the configured checkpoint selection, then writes:
+- `out/debug_shot_<SHOT>.png` (Te traces + z(t) + BC + div/src diagnostics)
+- `out/debug_shot_<SHOT>.npz` (arrays used in the plot + diagnostics)
+
+```bash
+export PYTHONPATH="$PWD"
+python -c "from fusion_ode_identification.debug import run_debug_shot; run_debug_shot('config/config.yaml', 27567, out_dir='out', solver_throw=False)"
+ls -lh out/debug_shot_27567.png out/debug_shot_27567.npz
+```
+
+On SDCC/HPC GPU nodes, you can run the same command through the GPU wrapper (so you inherit the module loads + CUDA/NCCL library paths):
+
+```bash
+./scripts/run_training_gpu.sh --python -c "from fusion_ode_identification.debug import run_debug_shot; run_debug_shot('config/config.yaml', 27567, out_dir='out', solver_throw=False)"
+```
+
+### Option B: Debug-eval via the training entrypoint
+
+This loads the dataset, loads a checkpoint, runs evaluation for one shot, and writes PNG/NPZ into `out/`:
+
+```bash
+export PYTHONPATH="$PWD"
+python train_tokamak_ode_hpc.py --config config/config.yaml --debug_eval_only --debug_eval_shot 27567
+```
+
+On SDCC/HPC GPU nodes, the equivalent wrapper run is:
+
+```bash
+./scripts/run_training_gpu.sh --config config/config.yaml --debug_eval_only --debug_eval_shot 27567
 ```
 
 ## Evaluate a Trained Model
