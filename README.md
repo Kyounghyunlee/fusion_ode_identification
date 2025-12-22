@@ -86,6 +86,98 @@ model:
 ```
 Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in `data_dir`.
 
+## Connect to Compute Node
+
+**Important:** Training must run on the compute node, not the login node.
+
+### Step 1: Find Available Compute Nodes
+
+```bash
+# List all partitions and nodes
+sinfo
+
+# Or search for GPU partitions specifically
+sinfo | grep gpu
+```
+
+Look for the `titan` partition with node `98dci4-gpu-0002`.
+
+### Step 2: Check Node Resources
+
+```bash
+# See detailed node information
+scontrol show node 98dci4-gpu-0002
+
+# Quick check: just show key resources
+scontrol show node 98dci4-gpu-0002 | grep -E "State|CPUTot|RealMemory|Gres"
+```
+
+Expected output shows:
+- `State=IDLE` or `ALLOCATED` (availability)
+- `CPUTot=20` (20 CPU cores available)
+- `RealMemory=256000` (256 GB RAM)
+- `Gres=gpu:8` (8 GPUs available)
+
+### Step 3: Connect to Compute Node
+
+**Option A: Maximum resources (recommended for training)**
+```bash
+srun --partition=titan --gres=gpu:8 --cpus-per-task=20 --mem=200G --pty bash
+```
+This allocates all 8 GPUs, 20 CPUs, and 200GB RAM.
+
+**Option B: Minimal resources (for testing)**
+```bash
+srun --partition=titan --gres=gpu:1 --cpus-per-task=4 --mem=32G --pty bash
+```
+This allocates 1 GPU, 4 CPUs, and 32GB RAM for quick tests.
+
+### Step 4: Verify You're on Compute Node
+
+```bash
+# Check hostname (should show 98dci4-gpu-0002)
+hostname
+
+# Check available GPUs (should show 8 × Tesla P100)
+nvidia-smi -L
+
+# Check CPUs
+nproc
+
+# Check memory
+free -h
+```
+
+### Step 5: Run Training
+
+Once on the compute node:
+```bash
+# Standard training run
+./scripts/run_training_gpu.sh --config config/config.yaml
+
+# Or with tmux (recommended for long runs)
+tmux new -s train
+./scripts/run_training_gpu.sh --config config/config.yaml
+# Detach: Ctrl+b then d
+# Reattach later: tmux attach -t train
+```
+
+### Step 6: Return to Login Node
+
+When training is complete or you want to disconnect:
+```bash
+exit
+```
+
+Your session on the compute node ends and you return to the login node.
+
+### Notes on Resource Allocation
+
+- **Automatic scaling**: Training code uses `jax.pmap` to automatically distribute across all allocated GPUs
+- **Batch size**: Will be adjusted to be divisible by number of GPUs
+- **Each GPU processes**: `batch_size / n_gpus` shots in parallel
+- **Node specifications**: 8 × Tesla P100 (16GB each), 20 CPUs, 256GB RAM total
+
 ## Running Training on GPU
 
 This repo supports both “auto” device selection (whatever JAX sees) and explicit forcing of CPU/GPU.

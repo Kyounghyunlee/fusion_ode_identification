@@ -20,7 +20,7 @@
 ## Model Architecture (training script)
 - `HybridField`: PDE-inspired RHS combining diffusion (chi profile), finite-volume divergence, and a learned source NN. Latent scalar `z` evolves via a low-order ODE (`LatentDynamics`).
 - `SourceNN`: small MLP taking `(rho, Te, ne, controls, z)`; final layer zero-initialized for stability, scaled by `source_scale`.
-- `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `train_ode_physics_manifold_hpc.load_data`.
+- `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `fusion_ode_identification.data.load_data` and consumed by `train_tokamak_ode_hpc.py`.
 - Loss: weighted Huber data term, source magnitude regularizer, weak-constraint model error, regime supervision on `z`, latent regularization.
 
 ## Parallelism and Performance (why GPU, what the terms mean)
@@ -30,6 +30,7 @@
 - **`pmap` (parallel map)**: Splits the batch across GPUs. Each GPU runs the same compiled code on its chunk. Gradients are averaged (all-reduce) so the update is as if it saw the whole batch.
 - **`jit` (just-in-time compile)**: First call traces the function (slow); the compiled version then runs fast. We JIT the training step so the ODE solve, loss, and optimizer are fused.
 - **Adaptive ODE on GPU**: diffrax solvers (Kvaerno5 + PID controller) run inside JIT. Control flow is staged; math kernels still land on GPU. NaN guards keep the solver stable.
+- **Adaptive ODE on GPU**: diffrax solvers run inside JIT (`Kvaerno5` by default; optionally `Tsit5` or IMEX `KenCarp3`). The first step includes a one-time warmup compile so the initial “quiet period” is clearly attributed to XLA compilation.
 - **EMA (exponential moving average)**: A smoothed copy of weights that often generalizes better. Optax updates it cheaply each step.
 - **Gradient clipping**: Limit global gradient norm to avoid exploding updates.
 - **L-BFGS finetune**: After AdamW, an optional quasi-Newton refinement on a small batch to squeeze a bit more accuracy.
@@ -52,7 +53,7 @@ Let $B$ be batch size (shots), $N_\rho$ radial points.
 1) **State per batch:** $T \in \mathbb{R}^{B \times N_\rho}$, $z \in \mathbb{R}^B$.
 2) **Finite-volume flux/divergence** (schematic):
 $$
-	ext{grad}_T = D T,\quad \text{flux} = -\tfrac12 (P\chi) \odot \text{grad}_T,\quad \text{div} = A\,\text{flux},
+	ext{grad}_T = D T,\quad \text{flux} = -(P\,V'\chi) \odot \text{grad}_T,\quad \text{div} = A\,\text{flux},
 $$
 with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumulation matrix. Batched over $B$, these are matrix–matrix ops that GPUs accelerate.
 3) **Source MLP:** For each $(\rho, t)$ row, $S_\theta([\rho, T, n_e, u, z])$ is an MLP layer $Y = XW + b$ (GEMM). Batched over $(B \times N_\rho)$ rows → large GEMM on GPU.
@@ -69,7 +70,7 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 
 ## Data Flow
 - Packs (`*_torax_training.npz`) contain time bases (`t`, `t_ts`), profiles (Te, ne), masks, geometry (`rho`, `Vprime`), controls, regimes.
-- `load_data` loads packs, aligns grids, builds ROM rho grid, computes intersection observation indices, constructs `ShotBundle` with interpolants for controls, ne, and edge Te.
+- `fusion_ode_identification.data.load_data` loads packs, aligns per-shot time windows, builds an intersection observed set, builds a ROM grid, constructs edge boundary-condition traces, and stacks everything into a padded `ShotBundle`.
 - Training loop samples batches of `ShotBundle`s, runs `diffeqsolve` over each shot, computes losses, and updates parameters.
 
 ## Why This Is Faster Than CPU (even for ODEs)
@@ -82,20 +83,15 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 - First step may be slower (JIT compile); subsequent steps are fast.
 - Batch sizes must divide number of devices for `pmap`.
 - Watch memory: padded batches increase footprint; adjust batch size if OOM.
-- Ensure CUDA/JAX wheels match driver/toolkit; use the provided `run_training_gpu.sh` wrapper.
+- Ensure CUDA/JAX wheels match driver/toolkit; on SDCC/HPC use `scripts/run_training_gpu.sh`.
 
 ## Recent Optimization and Solver Fixes (stability + perf)
-- **Static solver selection:** `solver_name` is threaded as a static arg through `pmap/jit/vmap` so XLA sees one solver specialization (KenCarp3 IMEX vs Kvaerno5/Tsit5). Avoids recompiles and shape polymorphism errors.
-- **LossCfg static in validation JIT:** `eval_loss_on_indices` now treats `loss_cfg` as static, preventing tracer-to-float concretization when building `PIDController` tolerances.
-- **IMEX decomposition for KenCarp3:** Split RHS into explicit (NN source + latent) and implicit (diffusion) via `diffrax.MultiTerm`, matching solver expectations and eliminating stiffness-related instability.
-- **Deterministic batching + clamping:** When shot count < requested batch, we clamp to `n_shots * n_devices` and permute per device, ensuring every shot appears twice in the first step and avoiding uneven replica loads.
-- **Safe dt0 estimation:** Initial step size derived from masked mean `dt` over valid windows (with clip), replacing brittle dynamic slicing that sometimes produced zero/negative `dt0`.
-- **Strictly increasing time padding:** `pad_time_to_max_strict` pads with positive eps steps, guaranteeing monotone time for diffrax interpolants/SaveAt.
-- **Dtype-stable norms:** Grad and update norms accumulate in float32 to avoid bfloat16 drift and are averaged across devices with `pmean`.
-- **No silent repartitioning:** `make_step` works directly on partitioned params; optimizer state shape is validated to match params before replication.
-- **NaN/Inf guards:** Gradients are scanned for non-finite values; if found, the update is skipped and norm logged zero, preventing optimizer corruption.
-- **Validation-based checkpointing:** Fixed train/val split per restart; best-on-val checkpoints (and EMA snapshots when enabled) are saved to reduce overfitting/regressions.
-- **Divergence/core safeguards:** Core volume floor and divergence floor prevent division blow-ups; boundary and source values are clipped to physical ranges before loss.
+- **Static solver/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so the solver choice and `LossCfg` are compile-time constants.
+- **IMEX decomposition for KenCarp3:** `fusion_ode_identification.loss.shot_loss` uses `diffrax.MultiTerm` where the nonstiff term is (source + latent) and the stiff term is diffusion/divergence only.
+- **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term.
+- **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends small positive eps steps, guaranteeing monotone `ts_t`/`ctrl_t` after padding.
+- **Numerical guards:** state clipping (`Te`, `z`, controls), soft clipping on $dT/dt$ (`softclip(..., 1e4)`), diffusion denominator floors near the core, and “skip update on NaN/Inf grads”.
+- **Checkpointing:** best-on-validation checkpoints are written, with optional EMA snapshots when `training.ema_decay > 0`.
 
 ## References (package docs)
 - JAX: https://jax.readthedocs.io
