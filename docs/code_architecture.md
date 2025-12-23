@@ -89,12 +89,18 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 ## Recent Optimization and Solver Fixes (stability + perf)
 - **IMEX-only branch:** All Diffrax and non-IMEX solver paths removed for simplicity. Implicit diffusion operator now exactly matches explicit discretization (conservative flux-form).
 - **Static IMEX/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so `LossCfg` and `IMEXConfig` are compile-time constants.
-- **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term.
+- **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term. IMEX integrator uses `active_mask` to freeze dynamics in padded regions.
 - **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends steps guaranteed to remain strictly increasing even after float32 downcast, using `max(eps, ulp64, ulp32)` at the last time value.
 - **Smooth clamps replace hard clips:** State bounds (Te, z) enforced via softplus-based smooth clamps to preserve nonzero gradients near saturation, reducing gradient-killing.
-- **All-radii supervision:** Training loss now supervises all interior masked radii (weighted by per-column coverage) rather than a small intersection subset, improving data utilization.
+- **All-radii supervision with inverse-coverage weighting:** Training loss now supervises all interior masked radii with inverse-coverage normalized weights (each radius gets comparable total weight regardless of observation density), eliminating "coverage² punishment" of sparse radii and improving data utilization.
+- **Lambda_z smoothness regularization:** `lambda_z` is implemented as a latent smoothness penalty (mean squared Δz across time) rather than a no-op, encouraging stable latent trajectories.
+- **EMA validation and independent best tracking:** When `training.ema_decay > 0`, the training script evaluates both raw and EMA parameters on validation at log intervals, tracks separate global bests (`_best.eqx` for raw, `_best_ema.eqx` for EMA), and logs both metrics for comparison.
+- **Geometry precomputation (P1.2):** Per-shot geometry arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) are computed once and passed through IMEX args, eliminating repeated recomputation in every substep and significantly reducing diffusion operator overhead.
+- **Interpolant-free IMEX substeps (P1.1):** Controls and edge BC are evaluated once at save points and linearly blended across substeps, removing per-substep searchsorted interpolation overhead.
+- **IMEX lax.cond branch fix:** `interval_scan` active/inactive branches now return identical carry tuple structures `(y, t, Te_edge, ctrl, ne)` to satisfy JAX's type-structure invariant.
 - **Numerical guards:** diffusion denominator floors near the core, "skip update on NaN/Inf grads", and finiteness checks on solver success.
-- **Checkpointing:** best-on-validation checkpoints are written as `_best.eqx` and `_best_ema.eqx` when `training.ema_decay > 0`. Evaluation/debug prefer EMA first.
+- **L-BFGS finetune correctness:** Uses shared `build_model_template` for deserialization (matching trained model statics), selects hardest train-only shots (never validation), and finetunes the full inexact parameter tree rather than last-layer-only.
+- **Multi-GPU one-shot debug:** Device list is reduced to `min(n_devices, n_shots)` when `--debug_one_shot` is used on multi-GPU allocations, preventing batch-sizing failures.
 - **X64 enforcement:** `JAX_ENABLE_X64=1` exported in the canonical GPU wrapper for consistent dtype behavior across training/eval/smoke checks.
 - **Smoke checks:** Lightweight sanity checks added: `scripts/smoke_diffusion_sanity.py` (const profile → div≈0, BC coupling sign), `scripts/smoke_time_padding_strict.py` (padding strictness under downcast), `scripts/check_bc.py` (edge BC sanity).
 

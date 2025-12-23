@@ -86,9 +86,19 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         order_ref = np.argsort(rho_ref_np)
         rho_ref_np = rho_ref_np[order_ref]
 
+    # Uniform-grid-only: the canonical grid is linspace(0,1,N).
+    # If the NPZ rho is not close to uniform, we still proceed by interpolating
+    # onto the uniform grid later, but we warn early to avoid silent surprises.
+    rho_ref_target = np.linspace(0.0, 1.0, rho_ref_np.size, dtype=float)
+    if not np.allclose(rho_ref_np, rho_ref_target, rtol=1e-3, atol=1e-6):
+        logging.warning(
+            "[data] NPZ rho grid is not close to linspace(0,1,N) (N=%d). Will interpolate onto a uniform grid.",
+            int(rho_ref_np.size),
+        )
+
     def interp_profile_to_grid(values_t_s, mask_t_s, rho_src, rho_dst):
         Nt = values_t_s.shape[0]
-        out_val = np.zeros((Nt, rho_dst.size), dtype=float)
+        out_val = np.full((Nt, rho_dst.size), np.nan, dtype=float)
         out_mask = np.zeros_like(out_val)
         for i in range(Nt):
             row_val = values_t_s[i]
@@ -103,8 +113,29 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             rs, uniq_idx = np.unique(rs, return_index=True)
             vs = vs[uniq_idx]
             ms = ms[uniq_idx]
-            out_val[i] = np.interp(rho_dst, rs, vs, left=0.0, right=0.0)
+            # Constant extrapolation outside the observed rho range avoids injecting
+            # artificial Te=0 (or ne=0) that can create huge diffusion gradients.
+            left = float(vs[0])
+            right = float(vs[-1])
+            out_val[i] = np.interp(rho_dst, rs, vs, left=left, right=right)
             out_mask[i] = np.interp(rho_dst, rs, ms, left=0.0, right=0.0)
+        # Fill time rows with no observations by carrying last valid profile forward,
+        # then backward-fill any initial missing rows.
+        row_has_val = np.isfinite(out_val).any(axis=1)
+        if not np.any(row_has_val):
+            out_val = np.zeros_like(out_val)
+        else:
+            last_valid = None
+            for i in range(Nt):
+                if row_has_val[i]:
+                    last_valid = out_val[i].copy()
+                elif last_valid is not None:
+                    out_val[i] = last_valid
+            if not row_has_val[0]:
+                first_idx = int(np.where(row_has_val)[0][0])
+                out_val[:first_idx] = out_val[first_idx]
+            out_val = np.nan_to_num(out_val, nan=0.0, posinf=0.0, neginf=0.0)
+
         out_mask = (out_mask > 0.5).astype(float)
         return out_val, out_mask
 
@@ -218,71 +249,26 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     if len(raw_shots) == 0:
         raise RuntimeError("No usable shots after overlap/monotonic filtering (raw_shots empty).")
 
-    col_cov_stack = np.stack([s["mask"].mean(axis=0) for s in raw_shots], axis=0)
-    col_cov_min = col_cov_stack.min(axis=0)
-    tau_cap = float(config["data"].get("intersection_rho_threshold", 0.05))
-    I_cap = np.flatnonzero(col_cov_min >= tau_cap)
-    if I_cap.size < 2:
-        k = min(max(5, rho_ref_np.size // 4), rho_ref_np.size)
-        I_cap = np.argsort(col_cov_min)[::-1][:k]
-        I_cap = np.sort(I_cap)
-    rho_cap = rho_ref_np[I_cap]
+    data_cfg = config.get("data", {})
+    rho_grid_mode = str(data_cfg.get("rho_grid_mode", "uniform")).lower()
+    if rho_grid_mode != "uniform":
+        raise ValueError(
+            f"This codebase is uniform-grid-only. Got data.rho_grid_mode={rho_grid_mode!r} (expected 'uniform')."
+        )
 
-    n_int = int(config["data"].get("rom_n_interior", 8))
-    rho_cap_min = float(rho_cap.min()) if rho_cap.size > 0 else float(rho_ref_np[1])
-    strategy = str(config.get("data", {}).get("rom_interior_strategy", "chebyshev")).lower()
+    edge_mode = str(data_cfg.get("edge_bc_mode", "use_last_observed")).lower()
 
-    if strategy == "none":
-        rho_int = np.array([], dtype=float)
-    elif n_int > 0:
-        if strategy == "chebyshev":
-            k_int = np.arange(n_int)
-            x = 0.5 * (1 - np.cos(np.pi * (k_int + 1) / (n_int + 1)))
-            rho_int = rho_cap_min * x
-        elif strategy == "uniform":
-            rho_int = np.linspace(0.0, rho_cap_min, n_int + 2)[1:-1]
-        elif strategy == "edge_refine":
-            # Monotone spacing in (0, rho_cap_min) that concentrates nodes near rho_cap_min
-            # (coarse near core, fine near the first observed radius).
-            power = float(config.get("data", {}).get("rom_edge_refine_power", 3.0))
-            power = max(1.0, power)
-            s = (np.arange(1, n_int + 1, dtype=float) / (n_int + 1))
-            rho_int = rho_cap_min * (1.0 - (1.0 - s) ** power)
-        else:
-            raise ValueError(f"Unknown data.rom_interior_strategy={strategy!r}")
-    else:
-        rho_int = np.array([], dtype=float)
-    edge_mode = str(config.get("data", {}).get("edge_bc_mode", "use_last_observed")).lower()
-    include_rho1 = edge_mode == "extrapolate_to_1"
+    # Uniform grid on [0, 1] for simulation/training.
+    # Default to the NPZ rho length if not specified.
+    n_uniform = int(data_cfg.get("uniform_n_rho", int(rho_ref_np.size)))
+    n_uniform = max(2, n_uniform)
+    rho_rom = np.linspace(0.0, 1.0, n_uniform, dtype=float)
 
-    parts = [np.array([0.0]), rho_int, rho_cap]
-    if include_rho1:
-        parts.append(np.array([1.0]))
+    # Use all interior points (exclude boundary index which is Dirichlet in the solver).
+    obs_idx = np.arange(max(rho_rom.size - 1, 1), dtype=np.int32)
+    rho_cap = rho_rom[obs_idx]
 
-    rho_rom = np.unique(np.sort(np.concatenate(parts)))
-    if rho_rom.size > 2:
-        rho_rom[1] = max(rho_rom[1], 1e-3)
-        rho_rom = np.unique(np.sort(rho_rom))
-
-    def find_obs_idx(rho_cap_vals, rho_rom_vals):
-        idxs = []
-        for r in rho_cap_vals:
-            idxs.append(int(np.argmin(np.abs(rho_rom_vals - r))))
-        if len(idxs) == 0:
-            return np.arange(min(5, rho_rom_vals.size), dtype=np.int32)
-        seen = set()
-        out = []
-        for j in idxs:
-            if j not in seen:
-                seen.add(j)
-                out.append(j)
-        return np.array(out, dtype=np.int32)
-
-    obs_idx = find_obs_idx(rho_cap, rho_rom)
-    if obs_idx.size == 0:
-        obs_idx = np.arange(min(5, rho_rom.size), dtype=np.int32)
-
-    # The solver always treats the last ROM node as a Dirichlet boundary value.
+    # The solver always treats the last node as a Dirichlet boundary value.
     # Therefore, we must ensure `obs_idx` never includes the boundary index.
     # IMPORTANT: do not use `np.clip(..., N-2)` here; clipping can introduce
     # duplicates (e.g. boundary_idx -> N-2), which silently double-weights a
@@ -316,10 +302,15 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         Te_edge_filled = np.empty((ts_Te_rom.shape[0],), dtype=float)
 
         if edge_mode == "use_last_observed":
-            raw = ts_Te_rom[:, edge_idx_ref].astype(float)
-            raw_m = (mask_rom[:, edge_idx_ref] > 0.5) & np.isfinite(raw)
+            # Robust: use the outermost OBSERVED point (mask==1) per time step.
+            # Do not assume the boundary node is observed.
             Te_edge_filled[:] = np.nan
-            Te_edge_filled[raw_m] = raw[raw_m]
+            for i in range(ts_Te_rom.shape[0]):
+                m = (mask_rom[i] > 0.5) & np.isfinite(ts_Te_rom[i])
+                if not np.any(m):
+                    continue
+                j1 = np.where(m)[0][-1]
+                Te_edge_filled[i] = float(ts_Te_rom[i, j1])
 
         elif edge_mode == "extrapolate_to_1":
             for i in range(ts_Te_rom.shape[0]):
@@ -398,7 +389,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         })
 
     if len(bundles_list) == 0:
-        raise RuntimeError("No bundles constructed (bundles_list empty) after ROM processing.")
+        raise RuntimeError("No bundles constructed (bundles_list empty) after grid processing.")
 
     t_len_list = [b["t_len"] for b in bundles_list]
     ts_t_stack = pad_time_to_max_strict([b["ts_t"] for b in bundles_list], t_len_list)

@@ -55,16 +55,25 @@ def main():
         print(f"FAIL: Te_edge peak-to-peak {Te_edge_ptp:.2f} < tol {args.ptp_tol}", file=sys.stderr)
         sys.exit(1)
 
-    # Compare to raw profile at edge_idx for sanity
-    Te_edge_from_data = np.array(b0["ts_Te"][: int(b0["t_len"]), edge_idx], dtype=float)
-    mask_edge = np.array(b0["mask"][: int(b0["t_len"]), edge_idx] > 0.5, dtype=bool)
-    if mask_edge.any():
-        data_vals = Te_edge_from_data[mask_edge]
-        print(
-            f"data edge node stats (masked): min={float(data_vals.min()):.2f} max={float(data_vals.max()):.2f} ptp={float(data_vals.ptp()):.2f}"
-        )
+    # Compare to outermost observed rho point per timestep (robust for sparse edge coverage)
+    ts_Te = np.array(b0["ts_Te"][: int(b0["t_len"])], dtype=float)
+    mask = np.array(b0["mask"][: int(b0["t_len"])], dtype=float)
+    Te_last_obs = np.full((ts_Te.shape[0],), np.nan, dtype=float)
+    for i in range(ts_Te.shape[0]):
+        m = (mask[i] > 0.5) & np.isfinite(ts_Te[i])
+        if not np.any(m):
+            continue
+        j1 = np.where(m)[0][-1]
+        Te_last_obs[i] = float(ts_Te[i, j1])
+
+    m_ok = np.isfinite(Te_last_obs) & np.isfinite(Te_edge)
+    if np.any(m_ok):
+        diff = Te_edge[m_ok] - Te_last_obs[m_ok]
+        mae = float(np.mean(np.abs(diff)))
+        mx = float(np.max(np.abs(diff)))
+        print(f"Te_edge vs last-observed: N={int(m_ok.sum())} MAE={mae:.3f} max|diff|={mx:.3f}")
     else:
-        print("data edge node stats (masked): no valid points")
+        print("Te_edge vs last-observed: no valid points")
 
     print("PASS")
 

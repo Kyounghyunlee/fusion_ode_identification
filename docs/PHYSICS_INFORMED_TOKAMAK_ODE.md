@@ -111,8 +111,9 @@ where $\mathbf{f}_{\text{known}}$ is a physics prior and $\mathbf{f}_{\text{resi
 
 4) Evolve a stiff transport ODE on $\boldsymbol{\rho}_{\text{rom}}$ using an **IMEX theta-method** (implicit diffusion, explicit sources/latent) with a neural residual source and a latent $z$ that modulates edge diffusivity via a sigmoid drop. **This branch is IMEX-only**; all Diffrax-based integration paths have been removed. Default IMEX settings: theta=0.7, substeps=5 per observation interval. State bounds (Te $\in$ [0, 5000] eV, z $\in$ [-10, 10]) are enforced via **smooth clamps** (softplus-based) to preserve nonzero gradients near saturation.
    - **Safe Core (Toroidal Geometry)**: The core volume element $V'[0]$ is clamped to a small finite value (derived from the first neighbor $V'[1]$) to avoid division by zero while preserving the toroidal geometry ($V' \propto \rho$) elsewhere. This avoids the need for a slab approximation ($V'=1$) and allows for physically consistent transport coefficients.
+   - **Performance optimizations**: Per-shot geometry arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) are precomputed once and reused across all IMEX substeps. Controls and edge BC are evaluated once at save points and linearly blended within intervals, eliminating per-substep interpolation overhead.
 
-5) Train with a robust composite loss: pseudo-Huber data term on **all interior masked radii** (weighted by per-column coverage for uniform supervision across the observed range), source magnitude penalty, weak-constraint model-error penalty, optional regime supervision on $z$, and small $z$ regularisation. Training now supervises all available data rather than a small intersection subset, improving convergence and data utilization.
+5) Train with a robust composite loss: pseudo-Huber data term on **all interior masked radii** with **inverse-coverage normalized weights** (each radius receives comparable total weight regardless of observation density, eliminating "coverage² punishment" of sparse radii), source magnitude penalty, weak-constraint model-error penalty, optional regime supervision on $z$, latent smoothness penalty (`lambda_z` penalizes mean squared Δz), and small $z^2$ regularization (`lambda_zreg`). Training now supervises all available data rather than a small intersection subset, improving convergence and data utilization.
 
 ### 2.2 Why This Grid Strategy?
 - If psi-based $\rho$ or $V'$ are missing, we fall back to linear-in-$R$ $\rho\in[0,1]$; for $V'$, we detect slab-like $V'$ and use $2\rho$ (cylindrical/toroidal approximation). Flags (`rho_fallback_used`, `psi_axis`, `psi_edge`) remain in packs for audit.
@@ -130,10 +131,10 @@ Experimental tokamak data is sparse, noisy, and occasionally corrupted (Thomson 
 
 ### Data sparsity and observability (all channels)
 
-- Profiles: `Te`, `ne` with masks on the Thomson grid; edge-biased coverage. The data loss uses **all interior masked radii** weighted by per-column coverage (columns observed in more shots receive higher weight).
+- Profiles: `Te`, `ne` with masks on the Thomson grid; edge-biased coverage. The data loss uses **all interior masked radii** with **inverse-coverage normalized weights**: `w_i = (1/coverage_i) / sum(1/coverage_j)`, ensuring each radius receives comparable total weight regardless of whether it is densely or sparsely observed. This eliminates the "coverage² punishment" effect where sparse radii were underweighted.
 - Controls: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` are dense 1D; z-scored and clipped. Note: `P_rad` is not used in the current training script.
 - Optional scalars: `W_tot`, `P_ohm`, `P_tot`, `H98`, `beta_n`, `B_t0`, `q95`, `li` included only when finite and aligned.
-- Geometry: equilibrium $\rho$, $V'$ when present; otherwise fallbacks as above.
+- Geometry: equilibrium $\rho$, $V'$ when present; otherwise fallbacks as above. Per-shot geometry factors (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) are precomputed once during data loading and passed through IMEX args to avoid recomputation in every diffusion solve.
 
 ### Expected vs. effective dimensions (current packs)
 

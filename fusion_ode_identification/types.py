@@ -51,8 +51,6 @@ class LossCfg(NamedTuple):
     lambda_z: float
     lambda_zreg: float
     throw_solver: bool
-    rtol: float
-    atol: float
 
 
 class IMEXConfig(NamedTuple):

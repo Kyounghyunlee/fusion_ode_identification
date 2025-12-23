@@ -38,6 +38,47 @@ class IMEXSolution(NamedTuple):
     message: str
 
 
+def solve_tridiagonal(a, b, c, d, eps: float = 1e-12):
+    """Solve a tridiagonal system Ax=d with Thomas algorithm.
+
+    A has subdiagonal a, diagonal b, superdiagonal c.
+    All arrays are shape (n,), with a[0]=0 and c[-1]=0.
+    """
+    a = jnp.asarray(a)
+    b = jnp.asarray(b)
+    c = jnp.asarray(c)
+    d = jnp.asarray(d)
+    n = b.shape[0]
+
+    b0 = b[0]
+    b0 = jnp.where(jnp.abs(b0) < eps, jnp.sign(b0) * eps + eps, b0)
+    c_prime0 = c[0] / b0
+    d_prime0 = d[0] / b0
+
+    def fwd(carry, i):
+        c_prev, d_prev = carry
+        denom = b[i] - a[i] * c_prev
+        denom = jnp.where(jnp.abs(denom) < eps, jnp.sign(denom) * eps + eps, denom)
+        c_i = c[i] / denom
+        d_i = (d[i] - a[i] * d_prev) / denom
+        return (c_i, d_i), (c_i, d_i)
+
+    (_, _), (cps, dps) = jax.lax.scan(fwd, (c_prime0, d_prime0), jnp.arange(1, n))
+    c_prime = jnp.concatenate([c_prime0[None], cps], axis=0)
+    d_prime = jnp.concatenate([d_prime0[None], dps], axis=0)
+
+    x = jnp.zeros_like(d)
+    x = x.at[n - 1].set(d_prime[n - 1])
+
+    def bwd(i, x_):
+        k = n - 2 - i
+        xk = d_prime[k] - c_prime[k] * x_[k + 1]
+        return x_.at[k].set(xk)
+
+    x = jax.lax.fori_loop(0, n - 1, bwd, x)
+    return x
+
+
 def build_diffusion_matrix_implicit(
     rho: Float[Array, "N"],  # type: ignore
     Vprime: Float[Array, "N"],  # type: ignore
@@ -130,6 +171,81 @@ def build_diffusion_matrix_implicit(
 
     A = jnp.diag(A_diag) + jnp.diag(A_lower[1:], k=-1) + jnp.diag(A_upper[:-1], k=1)
     return A, b_bc
+
+
+def build_diffusion_solve_tridiag_implicit(
+    rho: Float[Array, "N"],  # type: ignore
+    Vprime: Float[Array, "N"],  # type: ignore
+    chi: Float[Array, "N"],  # type: ignore
+    dt: float,
+    theta: float = 1.0,
+    dr: Optional[Float[Array, "N-1"]] = None,  # type: ignore
+    Vprime_face: Optional[Float[Array, "N-1"]] = None,  # type: ignore
+    Vprime_cell: Optional[Float[Array, "N-1"]] = None,  # type: ignore
+    denom: Optional[Float[Array, "N-1"]] = None,  # type: ignore
+):
+    """Return tridiagonal coefficients for (I - theta*dt*L) on the interior unknowns.
+
+    This is the implicit (stiff) operator used as F_impl in the IMEX split.
+    IMPORTANT: L must be linear in T. Therefore chi must not depend on T.
+    """
+    N = rho.size
+    assert Vprime.size == N and chi.size == N, "Grid size mismatch"
+    assert N >= 3, "Need at least 3 nodes (core + interior + boundary)"
+
+    Vprime = jnp.clip(Vprime, 1e-6, None)
+    if dr is None:
+        dr = jnp.diff(rho)
+    dr = jnp.asarray(dr)
+    dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
+
+    chi_face = 0.5 * (chi[:-1] + chi[1:])
+    if Vprime_face is None:
+        Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
+    Vprime_face = jnp.asarray(Vprime_face)
+    k_face = Vprime_face * chi_face / dr  # (N-1,)
+
+    if Vprime_cell is None:
+        Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
+    Vprime_cell = jnp.asarray(Vprime_cell)
+    if denom is None:
+        vol = Vprime_cell * dr
+        vol_floor = jnp.maximum(1e-4 * jnp.max(vol), 1e-10)
+        denom = jnp.maximum(vol, vol_floor)  # (N-1,)
+    denom = jnp.asarray(denom)
+    # Safety: re-apply floor even if denom was provided.
+    denom_floor = jnp.maximum(1e-4 * jnp.max(denom), 1e-10)
+    denom = jnp.maximum(denom, denom_floor)
+
+    lower_L = jnp.zeros((N - 1,))
+    diag_L = jnp.zeros((N - 1,))
+    upper_L = jnp.zeros((N - 1,))
+
+    # i=0 axis: flux_in=0
+    diag_L = diag_L.at[0].set(-k_face[0] / denom[0])
+    upper_L = upper_L.at[0].set(+k_face[0] / denom[0])
+
+    idx = jnp.arange(1, N - 2)
+    lower_L = lower_L.at[idx].set(+k_face[idx - 1] / denom[idx])
+    diag_L = diag_L.at[idx].set(-(k_face[idx - 1] + k_face[idx]) / denom[idx])
+    upper_L = upper_L.at[idx].set(+k_face[idx] / denom[idx])
+
+    i = N - 2
+    lower_L = lower_L.at[i].set(+k_face[i - 1] / denom[i])
+    diag_L = diag_L.at[i].set(-(k_face[i - 1] + k_face[i]) / denom[i])
+    # upper_L[i] stays 0 (boundary is not an unknown)
+
+    b_bc = jnp.zeros((N - 1,))
+    b_bc = b_bc.at[i].set(+k_face[i] / denom[i])
+
+    # Build solve matrix coefficients for (I - theta*dt*L)
+    a = -theta * dt * lower_L
+    b = 1.0 - theta * dt * diag_L
+    c = -theta * dt * upper_L
+    # enforce structure
+    a = a.at[0].set(0.0)
+    c = c.at[-1].set(0.0)
+    return a, b, c, b_bc
 
 
 def apply_diffusion_explicit(
@@ -253,10 +369,10 @@ class IMEXIntegrator(eqx.Module):
         Te_interior = Te_hat_interior * Te_scale
         Te_total = jnp.append(Te_interior, Te_edge_curr)
         
-        # Build implicit diffusion matrix
-        A_matrix, b_bc, chi_profile = model.build_diffusion_matrix_imex(
-            t, Te_total, z, args, dt, self.theta
-        )
+        # --- Clean IMEX split ---
+        # F_impl: linear stiff diffusion operator (implicit). Must NOT depend on T.
+        # F_expl: learned/source/control terms (explicit).
+        a, b, c, b_bc, chi_profile = model.build_diffusion_matrix_imex(t, z, args, dt, self.theta)
         
         # Compute explicit source
         S_explicit = model.compute_source_imex(t, Te_total, z, args)
@@ -271,12 +387,12 @@ class IMEXIntegrator(eqx.Module):
             D_explicit = jnp.zeros_like(Te_interior)
         
         # Build RHS for interior temperatures
-        # RHS = T^n + dt*[(1-theta)*D(T^n) + S(T^n)] + dt*theta*b_bc*T_edge(t^{n+1})
+        # (I - theta*dt*L)T^{n+1} = T^n + dt[(1-theta)*L(T^n) + F_expl(T^n, ...)] + dt*theta*b_bc*T_edge(t^{n+1})
         rhs = Te_interior + dt * ((1.0 - self.theta) * D_explicit + S_explicit)
         rhs = rhs + dt * self.theta * b_bc * Te_edge_next
         
-        # Solve linear system: A @ T^{n+1} = rhs
-        Te_interior_new = jnp.linalg.solve(A_matrix, rhs)
+        # Solve tridiagonal system for implicit diffusion update
+        Te_interior_new = solve_tridiagonal(a, b, c, rhs)
         Te_interior_new = smooth_clamp(Te_interior_new, 0.0, 5000.0)
         
         # Update latent variable (explicit)
@@ -296,8 +412,11 @@ class IMEXIntegrator(eqx.Module):
         y0: Float[Array, "n_state"],  # type: ignore
         saveat: Float[Array, "n_save"],  # type: ignore
         model,  # HybridField model
-        Te_edge_interp: Callable,
+        Te_edge_ts: jnp.ndarray,
+        ctrl_norm_ts: jnp.ndarray,
+        ne_ts: jnp.ndarray,
         args: tuple,
+        active_mask: Optional[jnp.ndarray] = None,
     ) -> IMEXSolution:
         """
         Integrate from t_span[0] to t_span[1], saving at specified times.
@@ -307,8 +426,10 @@ class IMEXIntegrator(eqx.Module):
             y0: Initial state
             saveat: Times to save solution
             model: HybridField model
-            Te_edge_interp: Interpolant for edge temperature T_edge(t)
-            args: Model arguments
+            Te_edge_ts: Edge temperature sampled at save points (same length as saveat)
+            ctrl_norm_ts: Normalized controls sampled at save points (same length as saveat)
+            ne_ts: Electron density sampled at save points (same length as saveat)
+            args: Model arguments (geometry, etc.)
         
         Returns:
             IMEXSolution with (ts, ys, success, num_steps, message)
@@ -324,33 +445,66 @@ class IMEXIntegrator(eqx.Module):
 
         substeps_i32 = jnp.asarray(self.substeps, dtype=jnp.int32)
 
-        def interval_scan(carry, t_next):
-            y_curr, t_curr = carry
-            dt = (t_next - t_curr) / substeps_i32
+        if active_mask is None:
+            active_mask = jnp.ones((saveat.shape[0] - 1,), dtype=jnp.bool_)
+        else:
+            active_mask = jnp.asarray(active_mask, dtype=jnp.bool_)
 
-            def one_substep(i, state):
-                y, t = state
-                t_new = t + dt
-                Te_edge_curr = Te_edge_interp(t)
-                Te_edge_next = Te_edge_interp(t_new)
-                y_new = self.step(t, y, dt, model, Te_edge_curr, Te_edge_next, args)
-                return (y_new, t_new)
+        Te_edge_ts = jnp.asarray(Te_edge_ts)
+        ctrl_norm_ts = jnp.asarray(ctrl_norm_ts)
+        ne_ts = jnp.asarray(ne_ts)
 
-            y_final, t_final = jax.lax.fori_loop(0, self.substeps, one_substep, (y_curr, t_curr))
-            return (y_final, t_final), y_final
+        def interval_scan(carry, xs):
+            t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv, active = xs
+            y_curr, t_curr, Te_edge_curr_iv, ctrl_curr_iv, ne_curr_iv = carry
+
+            def do_active(_):
+                dt = (t_next - t_curr) / substeps_i32
+
+                def one_substep(i, state):
+                    y, t = state
+                    t_new = t + dt
+
+                    # Linear blending within the interval avoids per-substep searchsorted interpolation.
+                    w0 = (i.astype(jnp.float64)) / (substeps_i32.astype(jnp.float64))
+                    w1 = ((i + 1).astype(jnp.float64)) / (substeps_i32.astype(jnp.float64))
+
+                    Te_edge_curr = (1.0 - w0) * Te_edge_curr_iv + w0 * Te_edge_next_iv
+                    Te_edge_next = (1.0 - w1) * Te_edge_curr_iv + w1 * Te_edge_next_iv
+                    ctrl_curr = (1.0 - w0) * ctrl_curr_iv + w0 * ctrl_next_iv
+                    ne_curr = (1.0 - w0) * ne_curr_iv + w0 * ne_next_iv
+
+                    # IMEX args for this substep: (rho, Vprime, control_norm, ne)
+                    args_step = (args[0], args[1], ctrl_curr, ne_curr) + args[2:]
+                    y_new = self.step(t, y, dt, model, Te_edge_curr, Te_edge_next, args_step)
+                    return (y_new, t_new)
+
+                y_final, _t_final = jax.lax.fori_loop(0, self.substeps, one_substep, (y_curr, t_curr))
+                # Keep carry structure identical to do_inactive.
+                return (y_final, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv), y_final
+
+            def do_inactive(_):
+                # Freeze dynamics in padded region: advance time but keep state.
+                return (y_curr, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv), y_curr
+
+            return jax.lax.cond(active, do_active, do_inactive, operand=None)
 
         # Initial state
         # We assume saveat[0] corresponds to y0
-        init_carry = (y0, saveat[0])
+        init_carry = (y0, saveat[0], Te_edge_ts[0], ctrl_norm_ts[0], ne_ts[0])
         
         # Scan over remaining save points
         # If saveat has length 1, this returns empty arrays, which is handled correctly
-        (y_end, t_end), ys_rest = jax.lax.scan(interval_scan, init_carry, saveat[1:])
+        (y_end, t_end, _Te_edge_end, _ctrl_end, _ne_end), ys_rest = jax.lax.scan(
+            interval_scan,
+            init_carry,
+            (saveat[1:], Te_edge_ts[1:], ctrl_norm_ts[1:], ne_ts[1:], active_mask),
+        )
         
         # Concatenate initial state with results
         ys = jnp.concatenate([y0[None, :], ys_rest], axis=0)
         
-        total_steps = jnp.asarray((saveat.shape[0] - 1) * int(self.substeps), dtype=jnp.int32)
+        total_steps = jnp.asarray(jnp.sum(active_mask).astype(jnp.int32) * int(self.substeps), dtype=jnp.int32)
         success = jnp.asarray(total_steps <= int(self.max_steps))
         success = jnp.logical_and(success, jnp.all(jnp.isfinite(ys)))
         return IMEXSolution(

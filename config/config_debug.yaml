@@ -2,10 +2,13 @@ data:
   data_dir: "data"
   # "all" will load all .npz files in data_dir
   shots: "all"
-  intersection_rho_threshold: 0.05
-  rom_n_interior: 16
-  rom_interior_strategy: "edge_refine"
-  rom_edge_refine_power: 3.0
+
+  # Uniform grid only
+  rho_grid_mode: "uniform"
+  # Optional. If omitted, uses the NPZ rho length.
+  # uniform_n_rho: 26
+
+  # BC
   edge_bc_mode: "use_last_observed"
 
 system:

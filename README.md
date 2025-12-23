@@ -80,11 +80,22 @@ training:
 	batch_size: 64
 	total_steps: 1000
 	learning_rate: 3.0e-4
+	ema_decay: 0.999  # Enable EMA for better generalization
+	lambda_z: 1.0e-4  # Latent smoothness penalty
+	imex:
+		theta: 0.7
+		substeps: 5
 model:
 	latent_gain: 1.0
 	source_scale: 3.0e5
 ```
 Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in `data_dir`.
+
+**Recent optimizations:**
+- Inverse-coverage weighting ensures all radii (dense or sparse) are supervised fairly.
+- Geometry precomputation (P1.2) eliminates per-substep recomputation overhead.
+- EMA validation tracking saves both raw and EMA best checkpoints independently.
+- Lambda_z smoothness penalty stabilizes latent trajectories.
 
 ## Connect to Compute Node
 

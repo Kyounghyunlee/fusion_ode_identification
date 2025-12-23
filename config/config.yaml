@@ -2,10 +2,13 @@ data:
   data_dir: "data"
   # "all" will load all .npz files in data_dir
   shots: "all"
-  intersection_rho_threshold: 0.05
-  rom_n_interior: 16
-  rom_interior_strategy: "edge_refine"
-  rom_edge_refine_power: 3.0
+
+  # Uniform grid only
+  rho_grid_mode: "uniform"
+  # Optional. If omitted, uses the NPZ rho length.
+  # uniform_n_rho: 26
+
+  # BC
   edge_bc_mode: "use_last_observed"
 
 system:
@@ -21,7 +24,7 @@ training:
 
   # Longer AdamW phase before L-BFGS
   warmup_steps: 5
-  total_steps: 200
+  total_steps: 100
   batch_size: 8
   grad_clip: 1.0e3
 
@@ -55,10 +58,10 @@ training:
   ema_decay: 0.999
 
   # Enable a short, safe L-BFGS finetune after AdamW
-  lbfgs_finetune: False
-  lbfgs_maxiter: 1
+  lbfgs_finetune: True  
+  lbfgs_maxiter: 5
   lbfgs_history: 1
-  lbfgs_batch_shots: 2
+  lbfgs_batch_shots: 8
   lbfgs_tol: 5.0e-5
 
 output:

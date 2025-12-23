@@ -187,6 +187,26 @@ class HybridField(eqx.Module):
         )(rho[:-1], Te_total[:-1], ne_vals[:-1])
         return S_nn
 
+    # -------- Fast (interp-free) helpers for IMEX --------
+
+    def compute_source_from_values(self, rho, Te_total, z, ne_vals, control_norm):
+        """Compute explicit NN source on interior nodes from already-sampled inputs."""
+        rho = _as64(rho)
+        ne_vals = jnp.clip(_as64(ne_vals), 1e17, 1e21)
+        control_norm = jnp.clip(_as64(control_norm), -10.0, 10.0)
+        S_nn = jax.vmap(
+            lambda r, T, n: self.nn(r, T / self.Te_scale, n / self.ne_scale, control_norm, z)
+        )(rho[:-1], Te_total[:-1], ne_vals[:-1])
+        return S_nn
+
+    def compute_divergence_from_values(self, rho, Vprime, Te_total, z):
+        """Compute conservative diffusion divergence on interior nodes."""
+        rho = _as64(rho)
+        Vprime = jnp.clip(_as64(Vprime), 1e-6, None)
+        chi = self._chi_profile(rho, z)
+        divergence, _vol, _dr = self._conservative_divergence(rho, Vprime, chi, Te_total)
+        return divergence
+
     def compute_rhs_components(self, t, y, args):
         (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
 
@@ -211,35 +231,69 @@ class HybridField(eqx.Module):
     
     # ========== IMEX Interface Methods ==========
     
-    def build_diffusion_matrix_imex(self, t, Te_total, z, args, dt, theta=1.0):
-        """
-        Build implicit diffusion matrix and boundary coupling for IMEX.
-        
+    def build_diffusion_matrix_imex(self, t, z, args, dt, theta=1.0):
+        """Build implicit diffusion solve coefficients for IMEX.
+
+        Clean split requirement: the implicit operator must be linear in T.
+        Therefore chi must not depend on T (only on rho and latent z).
+
         Returns:
-            A: (N-1, N-1) matrix for implicit solve
-            b_bc: (N-1,) boundary coupling vector
+            a,b,c: (N-1,) tridiagonal coefficients for (I - theta*dt*L)
+            b_bc: (N-1,) boundary coupling vector (multiplied by T_edge)
             chi: (N,) diffusivity profile
         """
-        from .imex_solver import build_diffusion_matrix_implicit
-        
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
+        from .imex_solver import build_diffusion_solve_tridiag_implicit
+
+        # Support both legacy args (with interpolants) and new fast args.
+        rho_vals = args[0]
+        Vprime_vals = args[1]
         rho = _as64(rho_vals)
         Vprime = jnp.clip(_as64(Vprime_vals), 1e-6, None)
         chi = self._chi_profile(rho, z)
-        
-        A, b_bc = build_diffusion_matrix_implicit(rho, Vprime, chi, dt, theta)
-        return A, b_bc, chi
+
+        # Optional precomputed geometry: args = (rho, Vprime, ctrl_norm, ne, dr, Vprime_face, Vprime_cell, denom)
+        if len(args) >= 8:
+            dr = args[4]
+            Vprime_face = args[5]
+            Vprime_cell = args[6]
+            denom = args[7]
+            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(
+                rho,
+                Vprime,
+                chi,
+                dt,
+                theta,
+                dr=dr,
+                Vprime_face=Vprime_face,
+                Vprime_cell=Vprime_cell,
+                denom=denom,
+            )
+        else:
+            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(rho, Vprime, chi, dt, theta)
+        return a, b, c, b_bc, chi
     
     def compute_source_imex(self, t, Te_total, z, args):
         """
         Compute explicit source term for IMEX (S_net on interior nodes).
         """
+        # New fast args: (rho, Vprime, control_norm, ne_vals)
+        if len(args) >= 4:
+            rho_vals = args[0]
+            control_norm = args[2]
+            ne_vals = args[3]
+            return self.compute_source_from_values(rho_vals, Te_total, z, ne_vals, control_norm)
         return self.compute_source(t, Te_total, z, args)
     
     def compute_latent_rhs_imex(self, t, z, args):
         """
         Compute dz/dt for explicit latent evolution in IMEX.
         """
+        # New fast args: (rho, Vprime, control_norm, ne_vals)
+        if len(args) >= 4:
+            control_norm = args[2]
+            control_norm = jnp.clip(_as64(control_norm), -10.0, 10.0)
+            return self.latent(z, control_norm)
+
         (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
         control_norm = self._control_norm(t, ctrl_interp, control_means, control_stds)
         return self.latent(z, control_norm)

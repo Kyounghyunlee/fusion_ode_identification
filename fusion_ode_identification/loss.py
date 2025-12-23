@@ -32,7 +32,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         loss_cfg: Loss configuration
         imex_cfg: IMEX solver configuration (theta, dt_base, etc.)
     """
-    t_len = bundle.t_len
+    t_len = jnp.asarray(bundle.t_len, dtype=jnp.int32)
     ts_t_full = bundle.ts_t
     ctrl_t_full = bundle.ctrl_t
     ctrl_vals_full = bundle.ctrl_vals
@@ -43,20 +43,26 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
 
     T_max = ts_t_full.shape[0]
     time_mask = (jnp.arange(T_max, dtype=jnp.int32) < t_len).astype(jnp.float64)
+    # Freeze integration after the valid time window so padded tail can't destabilize the solver.
+    active_mask = jnp.arange(T_max - 1, dtype=jnp.int32) < jnp.maximum(t_len - 1, 0)
 
+    # Evaluate controls at Te time grid once; solver uses cheap blending within intervals.
     ctrl_interp = LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
-    ne_interp = LinearInterpolation(ts=ts_t_full, ys=ne_vals_full)
-    Te_bc_interp = LinearInterpolation(ts=ts_t_full, ys=Te_edge_full)
+    ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
+    ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
+    ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
 
-    ode_args = (
-        bundle.rho_rom,
-        bundle.Vprime_rom,
-        ctrl_interp,
-        bundle.ctrl_means,
-        bundle.ctrl_stds,
-        ne_interp,
-        Te_bc_interp,
-    )
+    # Precompute static geometry factors once per shot (used by diffusion operator).
+    rho = bundle.rho_rom
+    Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)
+    dr = jnp.diff(rho)
+    dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
+    Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
+    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
+    denom_raw = Vprime_cell * dr
+    denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
+    denom = jnp.maximum(denom_raw, denom_floor)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
 
     z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
     y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
@@ -80,18 +86,37 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         y0=y0,
         saveat=ts_t_full,
         model=model,
-        Te_edge_interp=lambda t: Te_bc_interp.evaluate(t),
-        args=ode_args,
+        Te_edge_ts=Te_edge_full,
+        ctrl_norm_ts=ctrl_norm_ts,
+        ne_ts=ne_vals_full,
+        args=ode_args_geom,
+        active_mask=active_mask,
     )
 
     is_success = sol.success
+
+    # Geometry diagnostics (computed outside the solver for logging/debug).
+    rho_diag = bundle.rho_rom
+    Vprime_diag = jnp.clip(bundle.Vprime_rom, 0.0, None)
+    dr_diag = jnp.diff(rho_diag)
+    dr_floor = 1e-6 * jnp.max(dr_diag) + 1e-12
+    min_dr = jnp.min(dr_diag)
+    vprime_floor = 1e-6
+    min_Vprime = jnp.min(Vprime_diag)
+    Vprime_cell = 0.5 * (Vprime_diag[:-1] + Vprime_diag[1:])
+    denom_raw = Vprime_cell * dr_diag
+    denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
+    min_denom = jnp.min(denom_raw)
+    dr_floor_hit = (min_dr < dr_floor).astype(jnp.float64)
+    vprime_floor_hit = (min_Vprime < vprime_floor).astype(jnp.float64)
+    denom_floor_hit = (min_denom < denom_floor).astype(jnp.float64)
 
     def success_branch(_):
         ys = jnp.nan_to_num(sol.ys, nan=0.0, posinf=0.0, neginf=0.0)
         Te_hats = ys[:, :-1]
         zs = ys[:, -1]
 
-        Te_bc_ts = Te_bc_interp.evaluate(sol.ts)
+        Te_bc_ts = Te_edge_full
 
         def reconstruct(Te_hat_row, bc_val):
             Te_hat_row = smooth_clamp(Te_hat_row, 0.0, 5000.0 / model.Te_scale)
@@ -109,10 +134,15 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
 
         mask_use = mask_full[:, use_cols].astype(jnp.float64) * tm2
 
+        # Inverse-coverage weighting: each radius gets comparable total weight
+        # even when it is sparsely observed.
         col_cov = jnp.mean(mask_use, axis=0)  # (N-1,)
+        has_obs = col_cov > 0
+        inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
+        inv_sum = jnp.sum(inv)
         col_weight = jnp.where(
-            jnp.sum(col_cov) > 0,
-            col_cov / (jnp.sum(col_cov) + 1e-8),
+            inv_sum > 0,
+            inv / (inv_sum + 1e-8),
             jnp.ones_like(col_cov) / col_cov.size,
         )
         weight_grid = mask_use * col_weight[None, :]
@@ -130,10 +160,12 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         huber_delta = loss_cfg.huber_delta
         obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / wsum
 
-        def eval_source(ti, Te_row, zi):
-            return model.compute_source(ti, Te_row, zi, ode_args)
-
-        S_nn_vals = jax.vmap(eval_source)(sol.ts, Te_model, zs)
+        S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
+            Te_model,
+            zs,
+            ctrl_norm_ts,
+            ne_vals_full,
+        )
         lambda_src = loss_cfg.lambda_src
         src_delta = loss_cfg.src_delta
 
@@ -141,19 +173,24 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         src_penalty = lambda_src * jnp.sum(tm2 * pseudo_huber(S_nn_vals, src_delta)) / src_wsum
 
         # Physics diagnostics: mean magnitudes (time-masked for padded arrays)
-        def eval_divergence(ti, Te_row, zi):
-            return model.compute_divergence_only(ti, Te_row, zi, ode_args)
-
-        div_vals = jax.vmap(eval_divergence)(sol.ts, Te_model, zs)
+        div_vals = jax.vmap(lambda Te_row, zi: model.compute_divergence_from_values(bundle.rho_rom, bundle.Vprime_rom, Te_row, zi))(
+            Te_model,
+            zs,
+        )
         div_wsum = (jnp.sum(tm) * div_vals.shape[1]) + 1e-8
         mean_abs_div = jnp.sum(tm2 * jnp.abs(div_vals)) / div_wsum
         mean_abs_src = jnp.sum(tm2 * jnp.abs(S_nn_vals)) / src_wsum
         src_over_diff = mean_abs_src / (mean_abs_div + 1e-8)
 
         # z regularization
+        # - lambda_z: smoothness in time (encourage slowly-varying latent)
+        # - lambda_zreg: magnitude penalty (keep z bounded)
         z_reg = loss_cfg.lambda_zreg * (jnp.sum(tm * (zs**2)) / (jnp.sum(tm) + 1e-8))
+        dz = zs[1:] - zs[:-1]
+        tm_dz = tm[:-1]
+        z_smooth = loss_cfg.lambda_z * (jnp.sum(tm_dz * (dz**2)) / (jnp.sum(tm_dz) + 1e-8))
 
-        total_loss = obs_loss + src_penalty + z_reg
+        total_loss = obs_loss + src_penalty + z_reg + z_smooth
 
         diag = jnp.array(
             [
@@ -165,6 +202,12 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
                 mean_abs_div,
                 mean_abs_src,
                 src_over_diff,
+                min_dr,
+                min_Vprime,
+                min_denom,
+                dr_floor_hit,
+                vprime_floor_hit,
+                denom_floor_hit,
             ],
             dtype=jnp.float64,
         )
@@ -182,6 +225,12 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
                 jnp.array(0.0, dtype=jnp.float64),
                 jnp.array(0.0, dtype=jnp.float64),
                 jnp.array(0.0, dtype=jnp.float64),
+                min_dr,
+                min_Vprime,
+                min_denom,
+                dr_floor_hit,
+                vprime_floor_hit,
+                denom_floor_hit,
             ],
             dtype=jnp.float64,
         )
@@ -212,18 +261,20 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     mask_full = bundle.mask[:L]
 
     ctrl_interp = LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
-    ne_interp = LinearInterpolation(ts=ts_t_full, ys=ne_vals_full)
-    Te_bc_interp = LinearInterpolation(ts=ts_t_full, ys=Te_edge_full)
+    ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
+    ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
+    ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
 
-    ode_args = (
-        bundle.rho_rom,
-        bundle.Vprime_rom,
-        ctrl_interp,
-        bundle.ctrl_means,
-        bundle.ctrl_stds,
-        ne_interp,
-        Te_bc_interp,
-    )
+    rho = bundle.rho_rom
+    Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)
+    dr = jnp.diff(rho)
+    dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
+    Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
+    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
+    denom_raw = Vprime_cell * dr
+    denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
+    denom = jnp.maximum(denom_raw, denom_floor)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
 
     z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
     y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
@@ -247,8 +298,10 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
         y0=y0,
         saveat=ts_t_full,
         model=model,
-        Te_edge_interp=lambda t: Te_bc_interp.evaluate(t),
-        args=ode_args,
+        Te_edge_ts=Te_edge_full,
+        ctrl_norm_ts=ctrl_norm_ts,
+        ne_ts=ne_vals_full,
+        args=ode_args_geom,
     )
 
     use_cols = jnp.arange(ts_Te_full.shape[1] - 1, dtype=jnp.int32)
@@ -270,7 +323,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     Te_hats = ys[:, :-1]
     zs = ys[:, -1]
 
-    Te_bc_ts = Te_bc_interp.evaluate(sol.ts)
+    Te_bc_ts = Te_edge_full
 
     def reconstruct(Te_hat_row, bc_val):
         Te_hat_row = jnp.clip(Te_hat_row, 0.0, 5000.0 / model.Te_scale)
@@ -280,9 +333,12 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
 
     mask_obs = mask_full[:, use_cols].astype(jnp.float64)
     col_cov = jnp.mean(mask_obs, axis=0)
+    has_obs = col_cov > 0
+    inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
+    inv_sum = jnp.sum(inv)
     col_weight = jnp.where(
-        jnp.sum(col_cov) > 0,
-        col_cov / (jnp.sum(col_cov) + 1e-8),
+        inv_sum > 0,
+        inv / (inv_sum + 1e-8),
         jnp.ones_like(col_cov) / col_cov.size,
     )
     weight_grid = mask_obs * col_weight[None, :]
@@ -297,17 +353,21 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     huber_delta = loss_cfg.huber_delta
     obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / (jnp.sum(weight_grid) + 1e-8)
 
-    def eval_source(ti, Te_row, zi):
-        return model.compute_source(ti, Te_row, zi, ode_args)
-
-    S_nn_vals = jax.vmap(eval_source)(sol.ts, Te_model, zs)
+    S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
+        Te_model,
+        zs,
+        ctrl_norm_ts,
+        ne_vals_full,
+    )
     lambda_src = loss_cfg.lambda_src
     src_delta = loss_cfg.src_delta
     src_penalty = lambda_src * jnp.sum(pseudo_huber(S_nn_vals, src_delta)) / (S_nn_vals.size + 1e-8)
 
     z_reg = loss_cfg.lambda_zreg * jnp.mean(zs**2)
+    dz = zs[1:] - zs[:-1]
+    z_smooth = loss_cfg.lambda_z * jnp.mean(dz**2)
 
-    total_loss = obs_loss + src_penalty + z_reg
+    total_loss = obs_loss + src_penalty + z_reg + z_smooth
 
     return ShotEval(
         ok=jnp.array(1, dtype=jnp.int32),
