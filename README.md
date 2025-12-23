@@ -215,7 +215,7 @@ python train_tokamak_ode_hpc.py --config config/config.yaml
 
 ### Force GPU (HPC wrapper)
 
-We provide a wrapper that loads modules and exports CUDA/NCCL paths for the SDCC environment, then runs training.
+We provide a **canonical GPU wrapper** (`scripts/run_training_gpu.sh`) that loads modules, exports CUDA/NCCL paths, and enforces `JAX_ENABLE_X64=1` for the SDCC environment. This is the **only GPU entrypoint**; use it for training, debugging, and smoke checks.
 
 - Standard run:
 ```bash
@@ -227,6 +227,10 @@ tmux new -s train
 ./scripts/run_training_gpu.sh --config config/config.yaml
 # detach: Ctrl+b then d; reattach: tmux attach -t train
 ```
+- Run arbitrary Python scripts via `--python`:
+```bash
+./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_debug.yaml --shot 27567
+```
 
 ### What to expect in logs
 
@@ -234,44 +238,32 @@ The first step typically triggers a large JAX/XLA compile. The training script p
 
 ## Debugging (single-shot)
 
-There are two convenient options:
+### Quick debug-eval via training entrypoint
 
-### Option A: Standalone debug runner (recommended)
-
-Runs a single-shot forward solve using the configured checkpoint selection, then writes:
-- `out/debug_shot_<SHOT>.png` (Te traces + z(t) + BC + div/src diagnostics)
-- `out/debug_shot_<SHOT>.npz` (arrays used in the plot + diagnostics)
-
-```bash
-export PYTHONPATH="$PWD"
-python -c "from fusion_ode_identification.debug import run_debug_shot; run_debug_shot('config/config.yaml', 27567, out_dir='out', solver_throw=False)"
-ls -lh out/debug_shot_27567.png out/debug_shot_27567.npz
-```
-
-On SDCC/HPC GPU nodes, you can run the same command through the GPU wrapper (so you inherit the module loads + CUDA/NCCL library paths):
-
-```bash
-./scripts/run_training_gpu.sh --python -c "from fusion_ode_identification.debug import run_debug_shot; run_debug_shot('config/config.yaml', 27567, out_dir='out', solver_throw=False)"
-```
-
-### Option B: Debug-eval via the training entrypoint
-
-This loads the dataset, loads a checkpoint, runs evaluation for one shot, and writes PNG/NPZ into `out/`:
-
-```bash
-export PYTHONPATH="$PWD"
-python train_tokamak_ode_hpc.py --config config/config.yaml --debug_eval_only --debug_eval_shot 27567
-```
-
-On SDCC/HPC GPU nodes, the equivalent wrapper run is:
+This loads the dataset, loads a checkpoint (prefers `_best_ema.eqx` first, then `_best.eqx`, then `_finetuned.eqx` only if `training.lbfgs_finetune: true`), runs evaluation for one shot, and writes PNG/NPZ into `out/`:
 
 ```bash
 ./scripts/run_training_gpu.sh --config config/config.yaml --debug_eval_only --debug_eval_shot 27567
 ```
 
+### Smoke Checks (Sanity Tests)
+
+Run lightweight regression checks before/after training:
+
+```bash
+# BC regression check (edge Te peak-to-peak > threshold)
+./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_debug.yaml --shot 27567
+
+# Diffusion operator sanity (const profile → div≈0, BC coupling sign)
+./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config config/config_debug.yaml --shot 27567
+
+# Time padding strictness (survives float32 downcast)
+./scripts/run_training_gpu.sh --python scripts/smoke_time_padding_strict.py
+```
+
 ## Evaluate a Trained Model
 
-Generate evaluation plots and metrics for the saved checkpoint:
+Generate evaluation plots and metrics for the saved checkpoint (prefers `_best_ema.eqx` if available):
 ```bash
 python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
 ```

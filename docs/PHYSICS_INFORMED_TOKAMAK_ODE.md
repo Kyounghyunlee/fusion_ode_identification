@@ -109,10 +109,10 @@ where $\mathbf{f}_{\text{known}}$ is a physics prior and $\mathbf{f}_{\text{resi
   - `use_last_observed`: take the value at the outermost observed index (per time) when masked/finite.
   - `extrapolate_to_1`: use the last two observed points to linearly extrapolate to $\rho=1$ when possible.
 
-4) Evolve a stiff transport ODE on $\boldsymbol{\rho}_{\text{rom}}$ with a neural residual source and a latent $z$ that modulates edge diffusivity via a sigmoid drop.
+4) Evolve a stiff transport ODE on $\boldsymbol{\rho}_{\text{rom}}$ using an **IMEX theta-method** (implicit diffusion, explicit sources/latent) with a neural residual source and a latent $z$ that modulates edge diffusivity via a sigmoid drop. **This branch is IMEX-only**; all Diffrax-based integration paths have been removed. Default IMEX settings: theta=0.7, substeps=5 per observation interval. State bounds (Te $\in$ [0, 5000] eV, z $\in$ [-10, 10]) are enforced via **smooth clamps** (softplus-based) to preserve nonzero gradients near saturation.
    - **Safe Core (Toroidal Geometry)**: The core volume element $V'[0]$ is clamped to a small finite value (derived from the first neighbor $V'[1]$) to avoid division by zero while preserving the toroidal geometry ($V' \propto \rho$) elsewhere. This avoids the need for a slab approximation ($V'=1$) and allows for physically consistent transport coefficients.
 
-5) Train with a robust composite loss: pseudo-Huber data term on $\boldsymbol{\rho}_{\cap}$, source magnitude penalty, weak-constraint model-error penalty, optional regime supervision on $z$, and small $z$ regularisation. No manifold or latent subspace penalties remain.
+5) Train with a robust composite loss: pseudo-Huber data term on **all interior masked radii** (weighted by per-column coverage for uniform supervision across the observed range), source magnitude penalty, weak-constraint model-error penalty, optional regime supervision on $z$, and small $z$ regularisation. Training now supervises all available data rather than a small intersection subset, improving convergence and data utilization.
 
 ### 2.2 Why This Grid Strategy?
 - If psi-based $\rho$ or $V'$ are missing, we fall back to linear-in-$R$ $\rho\in[0,1]$; for $V'$, we detect slab-like $V'$ and use $2\rho$ (cylindrical/toroidal approximation). Flags (`rho_fallback_used`, `psi_axis`, `psi_edge`) remain in packs for audit.
@@ -120,15 +120,17 @@ where $\mathbf{f}_{\text{known}}$ is a physics prior and $\mathbf{f}_{\text{resi
 
 ### 2.3 Robustness to Experimental Artifacts and Sparse Observations
 
-Experimental tokamak data is sparse, noisy, and occasionally corrupted (Thomson dropouts, bad equilibria). The data term is applied only on the observed intersection grid $\boldsymbol{\rho}_{\cap}$ with masks $m_i(t)$ and per-column coverage weights $c_i$. Invalid points (NaNs/outliers) are removed before interpolation; the solver is free to coast through temporal gaps rather than fitting artifacts.
+Experimental tokamak data is sparse, noisy, and occasionally corrupted (Thomson dropouts, bad equilibria). The data term is applied to **all interior masked radii** with per-column coverage weights $c_i$ (normalized by total availability across shots) and temporal masks $m_i(t)$. Invalid points (NaNs/outliers) are removed before interpolation; the solver is free to coast through temporal gaps rather than fitting artifacts.
 
-**Why an intersection grid (and no latent subspace)?**
-- A pure mask on the full grid leaves interior nodes weakly constrained and harms identifiability. The common intersection $\boldsymbol{\rho}_{\cap}$ keeps only columns observed across shots, giving a well-conditioned data term.
-- We still evolve the full non-uniform ROM grid $\boldsymbol{\rho}_{\text{rom}}$ that contains $\boldsymbol{\rho}_{\cap}$ plus added interior nodes; unobserved nodes are regularised indirectly via diffusion and the source prior—no low-rank projector is used.
+**Why all-radii supervision (with coverage weights)?**
+- Previous versions supervised only a small intersection subset (`obs_idx`), leaving most interior nodes weakly constrained and harming convergence.
+- The current approach supervises **all available interior radii**, weighted by per-column coverage: columns observed in more shots get proportionally higher weight, ensuring uniform supervision across the radial extent without discarding sparse-but-useful observations.
+- Boundary nodes remain excluded from the data term (Dirichlet BC handled separately).
+- Unobserved nodes are regularised indirectly via diffusion coupling and the source magnitude penalty.
 
 ### Data sparsity and observability (all channels)
 
-- Profiles: `Te`, `ne` with masks on the Thomson grid; edge-biased coverage. The data loss uses only $\mathcal{I}_{\cap}$ with mask/coverage weights.
+- Profiles: `Te`, `ne` with masks on the Thomson grid; edge-biased coverage. The data loss uses **all interior masked radii** weighted by per-column coverage (columns observed in more shots receive higher weight).
 - Controls: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` are dense 1D; z-scored and clipped. Note: `P_rad` is not used in the current training script.
 - Optional scalars: `W_tot`, `P_ohm`, `P_tot`, `H98`, `beta_n`, `B_t0`, `q95`, `li` included only when finite and aligned.
 - Geometry: equilibrium $\rho$, $V'$ when present; otherwise fallbacks as above.

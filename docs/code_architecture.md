@@ -12,16 +12,16 @@
 	- `pmap`: Parallel map across multiple devices (GPUs). Each GPU gets a slice of the batch; gradients are averaged.
 	- Autodiff: reverse-mode differentiation (backprop) through regular code and through the fixed-step IMEX integrator.
 - **equinox (eqx)**: Minimal neural-net module system for JAX. Lets us define `HybridField`/`SourceNN`, split trainable parameters from static fields, and save/load checkpoints.
-- **IMEX integrator**: Custom fixed-step theta-method for implicit diffusion + explicit source/latent updates (see `fusion_ode_identification.imex_solver`).
+- **IMEX integrator**: Custom fixed-step theta-method (theta=0.7, substeps=5 by default) for implicit diffusion + explicit source/latent updates. This branch is **IMEX-only**; all Diffrax-based integration paths have been removed for simplicity and reverse-mode autodiff compatibility (see `fusion_ode_identification.imex_solver`).
 - **optax**: Optimizers (AdamW), gradient clipping, learning-rate schedules, EMA of weights.
 - **NumPy/xarray/zarr/fsspec**: Load and reshape data; zarr+xarray read S3-stored diagnostics; NumPy writes packs.
 - **Matplotlib**: Make evaluation plots.
 
 ## Model Architecture (training script)
-- `HybridField`: PDE-inspired RHS combining diffusion (chi profile), finite-volume divergence, and a learned source NN. Latent scalar `z` evolves via a low-order ODE (`LatentDynamics`).
+- `HybridField`: PDE-inspired RHS combining diffusion (chi profile), finite-volume divergence, and a learned source NN. Latent scalar `z` evolves via a low-order ODE (`LatentDynamics`). State bounds (Te ∈ [0, 5000], z ∈ [-10, 10]) are enforced via **smooth clamps** (softplus-based) rather than hard clips to avoid zero-gradient saturation.
 - `SourceNN`: small MLP taking `(rho, Te, ne, controls, z)`; final layer zero-initialized for stability, scaled by `source_scale`.
 - `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `fusion_ode_identification.data.load_data` and consumed by `train_tokamak_ode_hpc.py`.
-- Loss: weighted Huber data term, source magnitude regularizer, weak-constraint model error, regime supervision on `z`, latent regularization.
+- Loss: weighted Huber data term on **all interior masked radii** (weighted by per-column coverage), source magnitude regularizer, weak-constraint model error, regime supervision on `z`, latent regularization. Training now supervises all available radii, not just a small intersection subset.
 
 ## Parallelism and Performance (why GPU, what the terms mean)
 - **Why GPU helps now**: We have many shots and many rho points. We batch them so the GPU crunches large matrices instead of tiny loops. More arithmetic per batch → GPU wins.
@@ -29,10 +29,11 @@
 - **`vmap` (vectorize)**: Replaces Python loops over batch/shot with a single fused kernel. Used inside loss to evaluate multiple shots on one device.
 - **`pmap` (parallel map)**: Splits the batch across GPUs. Each GPU runs the same compiled code on its chunk. Gradients are averaged (all-reduce) so the update is as if it saw the whole batch.
 - **`jit` (just-in-time compile)**: First call traces the function (slow); the compiled version then runs fast. We JIT the training step so the ODE solve, loss, and optimizer are fused.
-- **IMEX on GPU**: fixed-step IMEX updates run inside JIT; diffusion is a small banded linear solve per step, source/latent are explicit. The first step includes a one-time warmup compile so the initial “quiet period” is clearly attributed to XLA compilation.
-- **EMA (exponential moving average)**: A smoothed copy of weights that often generalizes better. Optax updates it cheaply each step.
+- **IMEX on GPU**: fixed-step IMEX updates run inside JIT; diffusion is a small banded linear solve per step, source/latent are explicit. The first step includes a one-time warmup compile so the initial "quiet period" is clearly attributed to XLA compilation. Current defaults: theta=0.7, substeps=5 per observation interval.
+- **EMA (exponential moving average)**: A smoothed copy of weights that often generalizes better. Optax updates it cheaply each step. Checkpoint selection prefers `_best_ema.eqx` first.
 - **Gradient clipping**: Limit global gradient norm to avoid exploding updates.
-- **L-BFGS finetune**: After AdamW, an optional quasi-Newton refinement on a small batch to squeeze a bit more accuracy.
+- **L-BFGS finetune**: After AdamW, an optional quasi-Newton refinement on a small batch to squeeze a bit more accuracy. Only enabled via `training.lbfgs_finetune: true`.
+- **Diagnostics**: Training logs now include mean absolute diffusion `|diff|`, mean absolute source `|src|`, and their ratio `src/diff` alongside standard metrics.
 
 ## Autodiff and Backprop (what actually happens)
 - We run the model forward: solve the ODE for each shot → predicted temperatures + latent `z`.
@@ -82,14 +83,20 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 - First step may be slower (JIT compile); subsequent steps are fast.
 - Batch sizes must divide number of devices for `pmap`.
 - Watch memory: padded batches increase footprint; adjust batch size if OOM.
-- Ensure CUDA/JAX wheels match driver/toolkit; on SDCC/HPC use `scripts/run_training_gpu.sh`.
+- Ensure CUDA/JAX wheels match driver/toolkit; on SDCC/HPC use the canonical wrapper `scripts/run_training_gpu.sh` for all operations (training, debug, smoke checks).
+- Run smoke checks before/after training: `./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config <cfg> --shot <id>` and similar for time-padding and BC checks.
 
 ## Recent Optimization and Solver Fixes (stability + perf)
+- **IMEX-only branch:** All Diffrax and non-IMEX solver paths removed for simplicity. Implicit diffusion operator now exactly matches explicit discretization (conservative flux-form).
 - **Static IMEX/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so `LossCfg` and `IMEXConfig` are compile-time constants.
 - **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term.
-- **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends small positive eps steps, guaranteeing monotone `ts_t`/`ctrl_t` after padding.
-- **Numerical guards:** state clipping (`Te`, `z`, controls), diffusion denominator floors near the core, and "skip update on NaN/Inf grads".
-- **Checkpointing:** best-on-validation checkpoints are written, with optional EMA snapshots when `training.ema_decay > 0`.
+- **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends steps guaranteed to remain strictly increasing even after float32 downcast, using `max(eps, ulp64, ulp32)` at the last time value.
+- **Smooth clamps replace hard clips:** State bounds (Te, z) enforced via softplus-based smooth clamps to preserve nonzero gradients near saturation, reducing gradient-killing.
+- **All-radii supervision:** Training loss now supervises all interior masked radii (weighted by per-column coverage) rather than a small intersection subset, improving data utilization.
+- **Numerical guards:** diffusion denominator floors near the core, "skip update on NaN/Inf grads", and finiteness checks on solver success.
+- **Checkpointing:** best-on-validation checkpoints are written as `_best.eqx` and `_best_ema.eqx` when `training.ema_decay > 0`. Evaluation/debug prefer EMA first.
+- **X64 enforcement:** `JAX_ENABLE_X64=1` exported in the canonical GPU wrapper for consistent dtype behavior across training/eval/smoke checks.
+- **Smoke checks:** Lightweight sanity checks added: `scripts/smoke_diffusion_sanity.py` (const profile → div≈0, BC coupling sign), `scripts/smoke_time_padding_strict.py` (padding strictness under downcast), `scripts/check_bc.py` (edge BC sanity).
 
 ## References (package docs)
 - JAX: https://jax.readthedocs.io
