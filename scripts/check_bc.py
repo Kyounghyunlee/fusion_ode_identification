@@ -3,8 +3,17 @@
 """Quick BC regression check for a single shot."""
 
 import argparse
+import os
 import sys
 import numpy as np
+
+import jax
+
+jax.config.update("jax_enable_x64", True)
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from fusion_ode_identification.data import load_data
 

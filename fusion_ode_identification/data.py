@@ -50,7 +50,11 @@ def pad_time_to_max_strict(times_list, lens_list):
             eps = max(eps, 1e-9 * t_scale)
         if pad_len > 0:
             t_last = float(t_np[-1])
-            tail = t_last + eps * np.arange(1, pad_len + 1)
+            # Ensure the increment survives potential float64->float32 truncation when x64 is disabled.
+            ulp64 = np.finfo(np.float64).eps * max(1.0, abs(t_last))
+            ulp32 = np.finfo(np.float32).eps * max(1.0, abs(t_last))
+            step = max(float(eps), float(ulp64), float(ulp32))
+            tail = t_last + step * np.arange(1, pad_len + 1, dtype=np.float64)
             t_np = np.concatenate([t_np, tail], axis=0)
         padded.append(t_np)
     return jnp.array(np.stack(padded), dtype=jnp.float64)
@@ -237,6 +241,13 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             rho_int = rho_cap_min * x
         elif strategy == "uniform":
             rho_int = np.linspace(0.0, rho_cap_min, n_int + 2)[1:-1]
+        elif strategy == "edge_refine":
+            # Monotone spacing in (0, rho_cap_min) that concentrates nodes near rho_cap_min
+            # (coarse near core, fine near the first observed radius).
+            power = float(config.get("data", {}).get("rom_edge_refine_power", 3.0))
+            power = max(1.0, power)
+            s = (np.arange(1, n_int + 1, dtype=float) / (n_int + 1))
+            rho_int = rho_cap_min * (1.0 - (1.0 - s) ** power)
         else:
             raise ValueError(f"Unknown data.rom_interior_strategy={strategy!r}")
     else:
@@ -271,13 +282,23 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     if obs_idx.size == 0:
         obs_idx = np.arange(min(5, rho_rom.size), dtype=np.int32)
 
-    # Ensure observation indices never include the boundary column (last rho node),
-    # because the last node is treated as a Dirichlet BC in the model/solver.
-    # Keep obs_idx length fixed for JAX shape stability.
+    # The solver always treats the last ROM node as a Dirichlet boundary value.
+    # Therefore, we must ensure `obs_idx` never includes the boundary index.
+    # IMPORTANT: do not use `np.clip(..., N-2)` here; clipping can introduce
+    # duplicates (e.g. boundary_idx -> N-2), which silently double-weights a
+    # column in the loss.
     if rho_rom.size >= 2:
-        obs_idx = np.clip(obs_idx, 0, rho_rom.size - 2).astype(np.int32)
+        boundary_idx = int(rho_rom.size - 1)
+        obs_idx = obs_idx.astype(np.int32)
+        obs_idx = obs_idx[obs_idx != boundary_idx]
+        # Keep stable ordering and uniqueness.
+        seen = set()
+        obs_idx = np.array([j for j in obs_idx.tolist() if (j not in seen and not seen.add(j))], dtype=np.int32)
 
-    edge_idx_ref = int(obs_idx.max())
+    if obs_idx.size == 0:
+        obs_idx = np.arange(min(5, max(rho_rom.size - 1, 1)), dtype=np.int32)
+
+    edge_idx_ref = int(rho_rom.size - 1)
     rho_edge_ref = float(rho_rom[edge_idx_ref])
 
     bundles_list = []

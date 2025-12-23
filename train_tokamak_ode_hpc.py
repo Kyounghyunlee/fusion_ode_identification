@@ -20,8 +20,8 @@ import optax
 from fusion_ode_identification.data import load_data, log_data_scale
 from fusion_ode_identification.debug import build_loss_cfg as build_debug_loss_cfg, build_model_template, find_best_checkpoint, make_debug_plot_and_npz
 from fusion_ode_identification.model import HybridField, LatentDynamics, SourceNN
-from fusion_ode_identification.loss import eval_shot_trajectory, shot_loss
-from fusion_ode_identification.types import LossCfg
+from fusion_ode_identification.loss import eval_shot_trajectory_imex, shot_loss_imex
+from fusion_ode_identification.types import LossCfg, IMEXConfig
 
 jax.config.update("jax_enable_x64", True)
 
@@ -223,8 +223,24 @@ def main():
 
         print_model_and_rho_summary(model_loaded, rho_rom, rho_cap, obs_idx)
 
-        loss_cfg_debug, solver_name_debug = build_debug_loss_cfg(cfg_for_debug, solver_throw_override=args.debug_solver_throw)
-        ev = eval_shot_trajectory(model_loaded, bundle0, loss_cfg_debug, solver_name_debug)
+        loss_cfg_debug = build_debug_loss_cfg(cfg_for_debug, solver_throw_override=args.debug_solver_throw)
+        imex_dict_debug = cfg_for_debug.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg_debug = IMEXConfig(
+            theta=float(imex_dict_debug['theta']),
+            dt_base=float(imex_dict_debug['dt_base']),
+            max_steps=int(imex_dict_debug['max_steps']),
+            rtol=float(imex_dict_debug['rtol']),
+            atol=float(imex_dict_debug['atol']),
+            substeps=int(imex_dict_debug.get('substeps', 1)),
+        )
+        ev = eval_shot_trajectory_imex(model_loaded, bundle0, loss_cfg_debug, imex_cfg_debug)
 
         out_png = os.path.join(out_dir, f"debug_shot_{shot_id}.png")
         out_npz = os.path.join(out_dir, f"debug_shot_{shot_id}.npz")
@@ -252,7 +268,6 @@ def main():
         lambda_z=float(config["training"].get("lambda_z", 1e-4)),
         lambda_zreg=float(config["training"].get("lambda_zreg", 1e-4)),
         throw_solver=bool(config["training"].get("throw_solver", False)),
-        solver=str(config["training"].get("solver", "kvaerno5")),
         rtol=float(config["training"].get("rtol", 1e-3)),
         atol=float(config["training"].get("atol", 1e-3)),
     )
@@ -324,15 +339,15 @@ def main():
             return jnp.sqrt(ss)
 
         @functools.partial(jax.pmap, axis_name="devices", static_broadcasted_argnums=(3, 4))
-        def make_step(params, st, batch_bundles, loss_cfg, solver_name):
+        def make_step(params, st, batch_bundles, loss_cfg, imex_cfg):
             m = eqx.combine(params, model_static)
 
-            def loss_fn(m, bundles, cfg, solver_name):
-                losses, oks, diags = jax.vmap(lambda b: shot_loss(m, b, cfg, solver_name))(bundles)
+            def loss_fn(m, bundles, cfg, imex_cfg):
+                losses, oks, diags = jax.vmap(lambda b: shot_loss_imex(m, b, cfg, imex_cfg))(bundles)
                 ok_mean = jnp.mean(oks)
                 return jnp.mean(losses), (ok_mean, diags, oks)
 
-            (loss, (ok_rate, diags, oks)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(m, batch_bundles, loss_cfg, solver_name)
+            (loss, (ok_rate, diags, oks)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(m, batch_bundles, loss_cfg, imex_cfg)
 
             grad_norm_local = safe_global_norm(grads, dtype=GRAD_DTYPE)
             any_bad = jnp.logical_or(~tree_all_finite(grads), ~jnp.isfinite(grad_norm_local))
@@ -399,10 +414,10 @@ def main():
             raise ValueError("device_batch_size must be >= 1")
 
         @functools.partial(jax.jit, static_argnums=(2, 3))
-        def eval_loss_on_indices(params_single, idxs, loss_cfg, solver_name):
+        def eval_loss_on_indices(params_single, idxs, loss_cfg, imex_cfg):
             m = eqx.combine(params_single, model_static)
             b = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
-            losses, oks, diags = jax.vmap(lambda bb: shot_loss(m, bb, loss_cfg, solver_name))(b)
+            losses, oks, diags = jax.vmap(lambda bb: shot_loss_imex(m, bb, loss_cfg, imex_cfg))(b)
             return jnp.mean(losses), losses, jnp.mean(oks), oks, diags
 
         best_val_loss = float("inf")
@@ -410,7 +425,9 @@ def main():
 
         np_rng = np.random.default_rng(base_seed + 12345 * restart)
 
-        solver_name = str(loss_cfg_base["solver"]).lower()
+        solver_name = str(config.get("training", {}).get("solver", "imex")).lower()
+        if solver_name != "imex":
+            raise ValueError(f"This branch is IMEX-only, but training.solver={solver_name!r}")
         loss_cfg_step = LossCfg(
             huber_delta=loss_cfg_base["huber_delta"],
             lambda_src=loss_cfg_base["lambda_src"],
@@ -422,6 +439,23 @@ def main():
             throw_solver=loss_cfg_base["throw_solver"],
             rtol=loss_cfg_base["rtol"],
             atol=loss_cfg_base["atol"],
+        )
+        
+        imex_dict = config.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg = IMEXConfig(
+            theta=float(imex_dict['theta']),
+            dt_base=float(imex_dict['dt_base']),
+            max_steps=int(imex_dict['max_steps']),
+            rtol=float(imex_dict['rtol']),
+            atol=float(imex_dict['atol']),
+            substeps=int(imex_dict.get('substeps', 1)),
         )
 
         logging.info(f"[lr] lr(step0)={float(schedule(0)):.3e} lr(step_end)={float(schedule(total_steps - 1)):.3e}")
@@ -438,7 +472,7 @@ def main():
 
         _time_block(
             "make_step compile+run",
-            lambda: make_step(model_params, opt_state, warm_sharded, loss_cfg_step, solver_name),
+            lambda: make_step(model_params, opt_state, warm_sharded, loss_cfg_step, imex_cfg),
         )
         print("[compile] Warmup done. Starting loop.", flush=True)
         logging.info("[compile] Warmup done. Starting loop.")
@@ -464,7 +498,7 @@ def main():
             batch_bundle = jax.tree_util.tree_map(lambda x: x[batch_indices], all_bundles)
             sharded_bundle = jax.tree_util.tree_map(lambda x: x.reshape((n_devices, device_batch_size) + x.shape[1:]), batch_bundle)
 
-            loss, ok_rate, params, opt_state, grad_norm, upd_norm, grad_is_nan, diags, oks = make_step(model_params, opt_state, sharded_bundle, loss_cfg_step, solver_name)
+            loss, ok_rate, params, opt_state, grad_norm, upd_norm, grad_is_nan, diags, oks = make_step(model_params, opt_state, sharded_bundle, loss_cfg_step, imex_cfg)
             model_params = params
 
             if ema_params is not None and not bool(grad_is_nan[0]):
@@ -501,14 +535,24 @@ def main():
                 elapsed = time.time() - start_time
                 current_lr = float(schedule(step))
                 params0 = jax.tree_util.tree_map(lambda x: x[0], model_params)
-                val_mean, val_vec, val_ok, val_oks, val_diags = eval_loss_on_indices(params0, jnp.array(val_idx), loss_cfg_step, solver_name)
+                val_mean, val_vec, val_ok, val_oks, val_diags = eval_loss_on_indices(params0, jnp.array(val_idx), loss_cfg_step, imex_cfg)
                 val_mean_f = float(val_mean)
                 val_p90 = float(jnp.percentile(val_vec, 90.0))
                 val_max = float(jnp.max(val_vec))
                 val_mask = jnp.where(val_oks > 0.5, 1.0, 0.0)
                 mae_eV_val = float(jnp.sum(val_diags[:, 3] * val_mask) / (jnp.sum(val_mask) + 1e-8))
                 mae_pct_val = float(jnp.sum(val_diags[:, 4] * val_mask) / (jnp.sum(val_mask) + 1e-8))
-                logging.info(f"[restart {restart}] step {step}/{total_steps} train={loss_val:.6g} val={val_mean_f:.6g} val_p90={val_p90:.6g} val_max={val_max:.6g} ok={ok_rate_val:.3f} val_ok={float(val_ok):.3f} mae_eV={mae_eV_val:.3f} mae_pct={mae_pct_val:.3f} grad={grad_norm_val:.4e} upd={float(upd_norm[0]):.4e} lr={current_lr:.2e} nan={is_nan_val} elapsed={elapsed:.1f}s")
+                mean_abs_div = float(jnp.sum(val_diags[:, 5] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                mean_abs_src = float(jnp.sum(val_diags[:, 6] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                src_over_diff = float(jnp.sum(val_diags[:, 7] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                logging.info(
+                    f"[restart {restart}] step {step}/{total_steps} "
+                    f"train={loss_val:.6g} val={val_mean_f:.6g} val_p90={val_p90:.6g} val_max={val_max:.6g} "
+                    f"ok={ok_rate_val:.3f} val_ok={float(val_ok):.3f} "
+                    f"mae_eV={mae_eV_val:.3f} mae_pct={mae_pct_val:.3f} "
+                    f"|diff|={mean_abs_div:.3e} |src|={mean_abs_src:.3e} src/diff={src_over_diff:.3f} "
+                    f"grad={grad_norm_val:.4e} upd={float(upd_norm[0]):.4e} lr={current_lr:.2e} nan={is_nan_val} elapsed={elapsed:.1f}s"
+                )
 
             if ((step % log_every) == 0 or step == total_steps - 1):
                 if val_mean_f < best_val_loss:
@@ -600,10 +644,26 @@ def main():
 
         base_vars = extract_train_vars(model_best)
 
+        imex_dict_ft = config.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg_ft = IMEXConfig(
+            theta=float(imex_dict_ft['theta']),
+            dt_base=float(imex_dict_ft['dt_base']),
+            max_steps=int(imex_dict_ft['max_steps']),
+            rtol=float(imex_dict_ft['rtol']),
+            atol=float(imex_dict_ft['atol']),
+            substeps=int(imex_dict_ft.get('substeps', 1)),
+        )
+
         def objective(train_vars):
             m_full = set_train_vars(model_best, train_vars)
-            solver_name_ft = str(loss_cfg_base["solver"]).lower()
-            losses, oks, _ = jax.vmap(lambda b: shot_loss(m_full, b, loss_cfg_ft, solver_name_ft))(fixed_bundle)
+            losses, oks, _ = jax.vmap(lambda b: shot_loss_imex(m_full, b, loss_cfg_ft, imex_cfg_ft))(fixed_bundle)
             return jnp.mean(losses)
 
         maxiter = int(config.get("training", {}).get("lbfgs_maxiter", 50))

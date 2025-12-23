@@ -30,6 +30,9 @@ fi
 # Force CUDA backend to avoid ROCm/TPU probes
 export JAX_PLATFORMS=cuda
 
+# This branch expects x64 enabled for stability/strictness (time padding, operators).
+export JAX_ENABLE_X64=1
+
 run_with_filtered_stderr() {
 	# Filter a known-noisy rendezvous warning while preserving everything else.
 	"$@" 2> >(grep -vE 'external/xla/xla/service/rendezvous\.cc:(31|36)' >&2)

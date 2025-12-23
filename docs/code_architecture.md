@@ -10,9 +10,9 @@
 	- `jit`: Just-In-Time compile a Python function into a fast GPU kernel. First call traces, later calls are fast.
 	- `vmap`: Vectorize a function over a batch dimension (no Python loops). Think “apply over many shots/rows in one go.”
 	- `pmap`: Parallel map across multiple devices (GPUs). Each GPU gets a slice of the batch; gradients are averaged.
-	- Autodiff: reverse-mode differentiation (backprop) through regular code and even through the ODE solver (via diffrax).
+	- Autodiff: reverse-mode differentiation (backprop) through regular code and through the fixed-step IMEX integrator.
 - **equinox (eqx)**: Minimal neural-net module system for JAX. Lets us define `HybridField`/`SourceNN`, split trainable parameters from static fields, and save/load checkpoints.
-- **diffrax**: JAX-native ODE solvers. Runs inside JIT, supports adaptive timesteps and backprop through the solve.
+- **IMEX integrator**: Custom fixed-step theta-method for implicit diffusion + explicit source/latent updates (see `fusion_ode_identification.imex_solver`).
 - **optax**: Optimizers (AdamW), gradient clipping, learning-rate schedules, EMA of weights.
 - **NumPy/xarray/zarr/fsspec**: Load and reshape data; zarr+xarray read S3-stored diagnostics; NumPy writes packs.
 - **Matplotlib**: Make evaluation plots.
@@ -29,8 +29,7 @@
 - **`vmap` (vectorize)**: Replaces Python loops over batch/shot with a single fused kernel. Used inside loss to evaluate multiple shots on one device.
 - **`pmap` (parallel map)**: Splits the batch across GPUs. Each GPU runs the same compiled code on its chunk. Gradients are averaged (all-reduce) so the update is as if it saw the whole batch.
 - **`jit` (just-in-time compile)**: First call traces the function (slow); the compiled version then runs fast. We JIT the training step so the ODE solve, loss, and optimizer are fused.
-- **Adaptive ODE on GPU**: diffrax solvers (Kvaerno5 + PID controller) run inside JIT. Control flow is staged; math kernels still land on GPU. NaN guards keep the solver stable.
-- **Adaptive ODE on GPU**: diffrax solvers run inside JIT (`Kvaerno5` by default; optionally `Tsit5` or IMEX `KenCarp3`). The first step includes a one-time warmup compile so the initial “quiet period” is clearly attributed to XLA compilation.
+- **IMEX on GPU**: fixed-step IMEX updates run inside JIT; diffusion is a small banded linear solve per step, source/latent are explicit. The first step includes a one-time warmup compile so the initial “quiet period” is clearly attributed to XLA compilation.
 - **EMA (exponential moving average)**: A smoothed copy of weights that often generalizes better. Optax updates it cheaply each step.
 - **Gradient clipping**: Limit global gradient norm to avoid exploding updates.
 - **L-BFGS finetune**: After AdamW, an optional quasi-Newton refinement on a small batch to squeeze a bit more accuracy.
@@ -39,7 +38,7 @@
 - We run the model forward: solve the ODE for each shot → predicted temperatures + latent `z`.
 - Loss is computed (Huber data loss, model-error penalty, source/latent regs, regime supervision).
 - JAX records the operations; reverse-mode autodiff replays them backward to get gradients w.r.t. every parameter (MLP weights, chi params, latent params).
-- diffrax provides backprop through the ODE solve, so sensitivities account for solver steps.
+- The IMEX integrator is written in JAX (`lax.scan`/`fori_loop`), so sensitivities account for every fixed step.
 - Equinox “filters” params: only arrays marked as trainable get gradients/updates; static config stays untouched.
 - Gradient clipping caps the norm before the optimizer step.
 
@@ -71,7 +70,7 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 ## Data Flow
 - Packs (`*_torax_training.npz`) contain time bases (`t`, `t_ts`), profiles (Te, ne), masks, geometry (`rho`, `Vprime`), controls, regimes.
 - `fusion_ode_identification.data.load_data` loads packs, aligns per-shot time windows, builds an intersection observed set, builds a ROM grid, constructs edge boundary-condition traces, and stacks everything into a padded `ShotBundle`.
-- Training loop samples batches of `ShotBundle`s, runs `diffeqsolve` over each shot, computes losses, and updates parameters.
+- Training loop samples batches of `ShotBundle`s, runs the IMEX integrator over each shot, computes losses, and updates parameters.
 
 ## Why This Is Faster Than CPU (even for ODEs)
 - We aren’t integrating one tiny time series; we integrate many shots × many rho points per batch. That’s a lot of math to fuse.
@@ -86,15 +85,13 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 - Ensure CUDA/JAX wheels match driver/toolkit; on SDCC/HPC use `scripts/run_training_gpu.sh`.
 
 ## Recent Optimization and Solver Fixes (stability + perf)
-- **Static solver/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so the solver choice and `LossCfg` are compile-time constants.
-- **IMEX decomposition for KenCarp3:** `fusion_ode_identification.loss.shot_loss` uses `diffrax.MultiTerm` where the nonstiff term is (source + latent) and the stiff term is diffusion/divergence only.
+- **Static IMEX/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so `LossCfg` and `IMEXConfig` are compile-time constants.
 - **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term.
 - **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends small positive eps steps, guaranteeing monotone `ts_t`/`ctrl_t` after padding.
-- **Numerical guards:** state clipping (`Te`, `z`, controls), soft clipping on $dT/dt$ (`softclip(..., 1e4)`), diffusion denominator floors near the core, and “skip update on NaN/Inf grads”.
+- **Numerical guards:** state clipping (`Te`, `z`, controls), diffusion denominator floors near the core, and "skip update on NaN/Inf grads".
 - **Checkpointing:** best-on-validation checkpoints are written, with optional EMA snapshots when `training.ema_decay > 0`.
 
 ## References (package docs)
 - JAX: https://jax.readthedocs.io
 - Equinox: https://docs.kidger.site/equinox/
-- Diffrax: https://docs.kidger.site/diffrax/
 - Optax: https://optax.readthedocs.io

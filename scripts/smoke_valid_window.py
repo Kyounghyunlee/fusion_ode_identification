@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 # scripts/smoke_valid_window.py
+import os
+import sys
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import argparse
 import yaml
 import jax
 
 from fusion_ode_identification.data import load_data
-from fusion_ode_identification.debug import build_loss_cfg, build_model_template
-from fusion_ode_identification.loss import eval_shot_trajectory
+from fusion_ode_identification.debug import build_loss_cfg, build_imex_cfg, build_model_template
+from fusion_ode_identification.loss import eval_shot_trajectory_imex
 
 
 def main():
@@ -28,9 +35,10 @@ def main():
     seed = int(cfg.get("training", {}).get("seed", 0))
     key = jax.random.PRNGKey(seed)
     model = build_model_template(cfg, key)
-    loss_cfg, solver_name = build_loss_cfg(cfg, solver_throw_override=False)
+    loss_cfg = build_loss_cfg(cfg, solver_throw_override=False)
+    imex_cfg = build_imex_cfg(cfg)
 
-    ev = eval_shot_trajectory(model, bundle0, loss_cfg, solver_name)
+    ev = eval_shot_trajectory_imex(model, bundle0, loss_cfg, imex_cfg)
 
     L = int(bundle0.t_len)
     assert ev.ts_t.shape[0] == L, f"ts_t length mismatch: {ev.ts_t.shape[0]} vs {L}"

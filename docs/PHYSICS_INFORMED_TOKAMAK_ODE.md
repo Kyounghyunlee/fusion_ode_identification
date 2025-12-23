@@ -357,6 +357,14 @@ $$
 
 - `data.intersection_rho_threshold`: coverage threshold for the observed intersection.
 - `data.rom_n_interior`, `data.rom_interior_strategy`: interior node count/placement.
+  - `rom_interior_strategy: "chebyshev"`: clusters interior nodes near both ends of $(0, \rho_{\min})$.
+  - `rom_interior_strategy: "uniform"`: uniform interior spacing in $(0, \rho_{\min})$.
+  - `rom_interior_strategy: "edge_refine"`: one-sided clustering toward $\rho_{\min}$ (coarse core, fine near first observed radius).
+    - Tune with `data.rom_edge_refine_power` (larger => more clustering near the data region).
+
+Note on IMEX timestep knobs:
+- The current IMEX implementation uses a fixed number of substeps per measurement interval for reverse-mode autodiff compatibility.
+- As a result, `training.imex.dt_base` is currently not used; the per-substep timestep is computed as $(t_{k+1}-t_k)/\text{substeps}$.
 - `data.min_rho_coverage`: optional global prune before intersection (rarely needed now).
 - `loss.huber_delta`, `loss.model_error_delta`, `training.lambda_src`, `training.lambda_w`, `training.lambda_z`.
 - `model.latent_gain`, `model.chi_*`: latent-edge coupling and diffusivity envelope.
@@ -373,9 +381,8 @@ $$
 
 ## 10. Numerical Stability
 
-- Solver: `Kvaerno5` with PID control by default (`rtol=atol=1e-3` by default), with an optional IMEX `KenCarp3` path. The solver evaluates on `SaveAt(ts=...)` and is capped at `MAX_SOLVER_STEPS=50000` in code.
+- Solver: IMEX theta-method (implicit diffusion + explicit source/latent) with a fixed number of substeps per observation interval. Key knobs: `training.imex.theta`, `training.imex.dt_base`, `training.imex.substeps`.
 - Training integrates over the padded time grid and masks all losses using `t_len` (valid-window mask). Debug/eval integrates only over the valid window.
-- Derivative clipping on $dT/dt$ to $10^4$ (soft clipping).
 - Non-uniform FVM widths to avoid negative cells on stretched grids; Neumann at the axis enforced via zero left flux.
 - **Safe Core**: The core volume element $V'[0]$ is clamped to avoid division by zero, preserving toroidal geometry elsewhere.
 
@@ -441,7 +448,7 @@ These scalars provide context for shot conditions but are not directly modeled; 
 
 - **Optimisers:** Adam/AdamW as defaults; LAMB for very large batches; Lion when memory is tight.
 - **Schedules:** warmup $\rightarrow$ cosine decay or exponential; keep physics weights modest early, raise $\lambda_w$ and $\lambda_{\text{src}}$ gradually.
-- **Gradient control:** clip grads and keep derivative clipping at $10^4$ on $d\mathbf{T}/dt$ for solver stability.
+- **Gradient control:** clip grads; IMEX stability is handled by the implicit diffusion solve and conservative time stepping.
 - **Restarts:** run multi-seed jobs and keep best checkpoints; divergence often resolves by restarting with a lower LR or slightly smaller physics weights.
 - **Diagnostics:** track $|\boldsymbol{\rho}_{\text{rom}}|$, $|\boldsymbol{\rho}_{\cap}|$, loss components, $z(t)$ traces, and one-shot overlays $T_{\text{model}}(t,\boldsymbol{\rho}_{\cap})$ vs. data.
 - **Architecture levers:** widen the source MLP or adjust pedestal sharpness only after stabilising training; keep the source output layer zero-initialised to avoid large initial residuals.
@@ -515,26 +522,14 @@ On our non-uniform ROM grid $\boldsymbol{\rho}_{\text{rom}}$:
 
 **Note:** $V'(\rho)$ affects metric scaling but is not the main stiffness driver; the $(\Delta\rho)^{-2}$ factor dominates.
 
-### 15.2 Current Solver (Kvaerno5 + Adaptive Stepping)
+### 15.2 Current Solver (IMEX Theta-Method)
 
-- **Solver:** We use `Kvaerno5`, a stiff, high-order implicit Runge–Kutta method with adaptive step size via PID control (Diffrax [3]).
-- **Adaptivity:** The controller adjusts $\Delta t$ to keep local truncation error near a target tolerance:
-  $$
-  \Delta t_{k+1} = \Delta t_k\,\left(\frac{\mathrm{tol}}{\mathrm{err}_k}\right)^{1/(p+1)}\cdot \text{(PI corrections)},
-  $$
-  where $p$ is the method order and $\mathrm{err}_k$ is the estimated error at step $k$.
-- **Why not explicit?** Explicit methods require $\Delta t \lesssim 2/|\lambda_{\max}|$ for stability. With $|\lambda_{\max}| \sim 10^3$–$10^5$ (typical for our grid), explicit methods would need $\Delta t \sim 10^{-5}$–$10^{-6}$ seconds, making training impractically slow. Stiff solvers remain stable at much larger $\Delta t$ by treating fast modes implicitly.
-- **Evaluation grid:** We save solutions at Thomson time stamps via `SaveAt(ts=...)`. The final integration time is the last valid profile (dynamic end time); padded time points are masked in the loss.
-- **Safety limits:** `rtol=atol=1e-3`, initial `dt0=1e-4`, max steps `MAX_SOLVER_STEPS=50000`; derivatives are softly clipped at $10^4$ for additional stability.
+- **Solver:** We use a custom IMEX theta-method: diffusion is treated implicitly via a small banded linear solve each step; source/latent updates are explicit.
+- **Time grid:** We step on the (padded) Thomson time stamps and apply a valid-window mask via `t_len` in the loss.
+- **Stability:** The implicit diffusion solve removes the CFL restriction from stiff diffusion modes, so we avoid extremely small adaptive steps.
+- **Determinism:** Fixed work per batch (number of steps is set by `training.imex.substeps` and the time grid), which makes GPU throughput more predictable.
 
-**Trade-offs of the current approach:**
-- ✓ Simple to implement; fully compatible with JAX autodiff,
-- ✓ No need to manually construct Jacobians or linear systems,
-- ✗ Solver adaptivity can cause wall-clock variance across shots/batches,
-- ✗ Backpropagation through adaptive steps can be noisy and memory-heavy for long horizons,
-- ✗ Still pays a "stiffness tax": solver must internally resolve fast modes even if we don't care about them.
-
-### 15.3 Alternative: TORAX-Style Implicit Time-Stepping (IMEX)
+### 15.3 Relation to TORAX-Style Implicit Time-Stepping
 
 **How TORAX handles stiffness [4].** TORAX is a differentiable tokamak transport simulator in JAX that solves coupled 1D PDEs (electron/ion heat, particles, current) with:
 1. **Finite-volume spatial discretization** (similar to ours),
@@ -546,7 +541,7 @@ On our non-uniform ROM grid $\boldsymbol{\rho}_{\text{rom}}$:
 **Key difference:** TORAX treats diffusion as an implicit linear system per timestep, not as an ODE fed to a black-box solver. This transforms stiffness from a "tiny timestep" problem to a "solve a banded linear system" problem.
 
 **IMEX (Implicit-Explicit) for our ROM:**
-Instead of integrating $\dot{\mathbf{T}} = \mathbf{D}(\mathbf{T}) + \mathbf{S}_{\text{net}}$ with Kvaerno5, we could use:
+Instead of integrating $\dot{\mathbf{T}} = \mathbf{D}(\mathbf{T}) + \mathbf{S}_{\text{net}}$ with a black-box stiff ODE solver, we use:
 $$
 \frac{\mathbf{T}^{n+1} - \mathbf{T}^n}{\Delta t} = \underbrace{\mathbf{D}(\mathbf{T}^{n+1})}_{\text{implicit (stiff diffusion)}} + \underbrace{\mathbf{S}_{\text{net}}(\mathbf{T}^n)}_{\text{explicit (mild source)}},
 $$
@@ -568,29 +563,30 @@ where $\mathbf{L}$ is the diffusion stencil operator (tridiagonal/banded for 1D 
 - **Preserves physics separation:** Diffusion is still "known structure," $S_{\text{net}}$ is still "residual learning."
 
 **Challenges:**
-- More complex to implement than "plug into Diffrax,"
 - Requires constructing/solving linear systems (though JAX has good sparse solvers and tridiagonal solvers),
 - If $\chi(z)$ makes $\mathbf{D}$ highly nonlinear, may need Newton iterations (but this is standard in TORAX),
 - Need custom VJP for efficient backpropagation (implicit differentiation).
 
 ### 15.4 Comparison: ROM+Diffrax vs. ROM+IMEX vs. TORAX Native
 
-| Aspect | **ROM + Diffrax (current)** | **ROM + IMEX (upgrade)** | **TORAX Native** |
+Note: the Diffrax/Kvaerno5 path was used historically and has been removed on the IMEX-only branch; this table is retained for context.
+
+| Aspect | **ROM + Diffrax (legacy)** | **ROM + IMEX (current)** | **TORAX Native** |
 |--------|----------------------------|-------------------------|------------------|
 | **Integration method** | Stiff RK (Kvaerno5) adaptive | Implicit $\theta$-method, fixed/adaptive $\Delta t$ | Implicit $\theta$-method + Newton/optimizer |
 | **Stiffness handling** | Automatic via stiff RK | Linear solve per step | Linear solve + nonlinear iterations |
 | **Timestep control** | PID adaptive (can vary wildly) | User-controlled or adaptive (more predictable) | Adaptive with backtracking |
 | **Compute per batch** | Variable (solver-dependent) | Fixed (# steps × linear solve cost) | Fixed (# steps × nonlinear solve cost) |
 | **Gradient quality** | Noisy (adaptive path changes) | Cleaner (implicit diff) | Cleanest (built-in adjoint) |
-| **Complexity** | Minimal (call `diffeqsolve`) | Moderate (construct system, solve, VJP) | High (full simulator stack) |
+| **Complexity** | Minimal (call `diffeqsolve`, legacy) | Moderate (construct system, solve, VJP) | High (full simulator stack) |
 | **Physics scope** | 1 channel ($T_e$) + latent $z$ | 1 channel ($T_e$) + latent $z$ | Multi-channel (Te, Ti, ne, current) |
 | **Data fit objective** | Intersection grid + robust loss (ours) | Intersection grid + robust loss (ours) | Requires data assimilation layer |
 | **Interpretability** | High (explicit $\chi$, $S_{\text{net}}$) | High (same as left) | High (modular closures, but less residual freedom) |
 | **Best for** | Quick prototyping; simple ROMs | Production training; control-oriented ROMs | High-fidelity forward simulation; multi-physics coupling |
 
 **Recommendation:**
-- **Current approach** (Diffrax) is fine for initial development and small-scale experiments.
-- **IMEX upgrade** is the sweet spot for production training: retains our ROM design, handles stiffness properly, improves gradient stability, and keeps training time predictable.
+- **Legacy approach** (Diffrax) was useful for early prototyping, but is removed on this branch.
+- **IMEX (current)** is the sweet spot for training: retains our ROM design, handles stiffness properly, improves gradient stability, and keeps training time predictable.
 - **TORAX native** is best if you need multi-channel physics or want to leverage TORAX's existing closures/sources, but requires heavier refactoring and a different data assimilation strategy.
 
 ### 15.5 Future Work: Grid and Solver Co-Design

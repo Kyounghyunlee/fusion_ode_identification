@@ -15,9 +15,10 @@ import numpy as np
 import yaml
 
 from .data import load_data
-from .loss import eval_shot_trajectory
+from .loss import eval_shot_trajectory_imex
+from .interp import LinearInterpolation
 from .model import HybridField, LatentDynamics, SourceNN
-from .types import LossCfg
+from .types import LossCfg, IMEXConfig
 
 jax.config.update("jax_enable_x64", True)
 
@@ -36,14 +37,37 @@ def find_best_checkpoint(cfg) -> str:
     raw = cfg["output"]["model_name"]
     safe = sanitize_name(raw)
 
-    candidates = [
-        os.path.join(model_dir, f"{raw}_finetuned.eqx"),
-        os.path.join(model_dir, f"{safe}_finetuned.eqx"),
+    use_finetuned = bool(cfg.get("training", {}).get("lbfgs_finetune", False))
+
+    best_ema = [
         os.path.join(model_dir, f"{raw}_best_ema.eqx"),
         os.path.join(model_dir, f"{safe}_best_ema.eqx"),
+    ]
+    best = [
         os.path.join(model_dir, f"{raw}_best.eqx"),
         os.path.join(model_dir, f"{safe}_best.eqx"),
     ]
+    finetuned = [
+        os.path.join(model_dir, f"{raw}_finetuned.eqx"),
+        os.path.join(model_dir, f"{safe}_finetuned.eqx"),
+    ]
+
+    candidates = best_ema + best + (finetuned if use_finetuned else [])
+
+    existing = []
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                mtime = os.path.getmtime(p)
+            except Exception:
+                mtime = float("nan")
+            existing.append((p, mtime))
+    if len(existing) > 0:
+        existing_sorted = sorted(existing, key=lambda x: x[1], reverse=True)
+        print("[debug] Existing candidate checkpoints (newest first):")
+        for p, mtime in existing_sorted:
+            print(f"  - {p} (mtime={mtime:.0f})")
+
     for p in candidates:
         if os.path.exists(p):
             print(f"[debug] Using checkpoint: {p}")
@@ -51,7 +75,7 @@ def find_best_checkpoint(cfg) -> str:
     raise FileNotFoundError(f"No checkpoint found. Tried: {candidates}")
 
 
-def build_loss_cfg(cfg, solver_throw_override: bool = False) -> Tuple[LossCfg, str]:
+def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
     lcb = {
         "huber_delta": float(cfg["training"].get("huber_delta", 5.0)),
         "lambda_src": float(cfg["training"].get("lambda_src", 1e-4)),
@@ -79,8 +103,29 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> Tuple[LossCfg, s
         rtol=lcb["rtol"],
         atol=lcb["atol"],
     )
-    solver_name = str(cfg["training"].get("solver", "kvaerno5")).lower()
-    return loss_cfg, solver_name
+    return loss_cfg
+
+
+def build_imex_cfg(cfg) -> IMEXConfig:
+    imex_dict = cfg.get("training", {}).get(
+        "imex",
+        {
+            "theta": 1.0,
+            "dt_base": 0.001,
+            "max_steps": 50000,
+            "rtol": 1.0e-4,
+            "atol": 1.0e-6,
+            "substeps": 1,
+        },
+    )
+    return IMEXConfig(
+        theta=float(imex_dict["theta"]),
+        dt_base=float(imex_dict["dt_base"]),
+        max_steps=int(imex_dict["max_steps"]),
+        rtol=float(imex_dict["rtol"]),
+        atol=float(imex_dict["atol"]),
+        substeps=int(imex_dict.get("substeps", 1)),
+    )
 
 
 def build_model_template(cfg, key) -> HybridField:
@@ -217,8 +262,9 @@ def run_debug_shot(config_path: str, shot_id: int, ckpt_path: str = None, out_di
     template = build_model_template(cfg, key)
     model_loaded = eqx.tree_deserialise_leaves(ckpt_path, template)
 
-    loss_cfg, solver_name = build_loss_cfg(cfg, solver_throw_override=solver_throw)
-    ev = eval_shot_trajectory(model_loaded, bundle0, loss_cfg, solver_name)
+    loss_cfg = build_loss_cfg(cfg, solver_throw_override=solver_throw)
+    imex_cfg = build_imex_cfg(cfg)
+    ev = eval_shot_trajectory_imex(model_loaded, bundle0, loss_cfg, imex_cfg)
 
     # Build ode_args matching eval_shot_trajectory (valid window only)
     L = int(np.array(bundle0.t_len))
@@ -229,10 +275,9 @@ def run_debug_shot(config_path: str, shot_id: int, ckpt_path: str = None, out_di
     ne_vals_full = bundle0.ne_vals[:L]
     Te_edge_full = bundle0.Te_edge[:L]
 
-    import diffrax
-    ctrl_interp = diffrax.LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
-    ne_interp = diffrax.LinearInterpolation(ts=ts_t_full, ys=ne_vals_full)
-    Te_bc_interp = diffrax.LinearInterpolation(ts=ts_t_full, ys=Te_edge_full)
+    ctrl_interp = LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
+    ne_interp = LinearInterpolation(ts=ts_t_full, ys=ne_vals_full)
+    Te_bc_interp = LinearInterpolation(ts=ts_t_full, ys=Te_edge_full)
     ode_args = (
         bundle0.rho_rom,
         bundle0.Vprime_rom,

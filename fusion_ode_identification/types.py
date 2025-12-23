@@ -53,3 +53,13 @@ class LossCfg(NamedTuple):
     throw_solver: bool
     rtol: float
     atol: float
+
+
+class IMEXConfig(NamedTuple):
+    """IMEX solver configuration."""
+    theta: float
+    dt_base: float
+    max_steps: int
+    rtol: float
+    atol: float
+    substeps: int

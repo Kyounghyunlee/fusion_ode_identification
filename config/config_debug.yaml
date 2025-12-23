@@ -4,7 +4,8 @@ data:
   shots: "all"
   intersection_rho_threshold: 0.05
   rom_n_interior: 16
-  rom_interior_strategy: "chebyshev"
+  rom_interior_strategy: "edge_refine"
+  rom_edge_refine_power: 3.0
   edge_bc_mode: "use_last_observed"
 
 system:
@@ -37,15 +38,24 @@ training:
   lambda_zreg: 1.0e-5
 
   # ODE solver configuration
-  solver: "kencarp3"   # alternatives: kvaerno5, tsit5
+  solver: "imex"   # IMEX-only branch
   rtol: 1.0e-3
   atol: 1.0e-3
+
+  # IMEX-specific configuration
+  imex:
+    theta: 0.7
+    dt_base: 0.001
+    substeps: 5
+    max_steps: 50000
+    rtol: 1.0e-4
+    atol: 1.0e-6
 
   # Optional EMA (0 disables)
   ema_decay: 0.999
 
   # Enable a short, safe L-BFGS finetune after AdamW
-  lbfgs_finetune: true
+  lbfgs_finetune: false
   lbfgs_maxiter: 2
   lbfgs_history: 1
   lbfgs_batch_shots: 2

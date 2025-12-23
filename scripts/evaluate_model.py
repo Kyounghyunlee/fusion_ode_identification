@@ -10,10 +10,16 @@ Evaluation Script for Physics-Consistent Manifold Model
 Loads a trained model and generates comparison plots (Model vs Observation).
 """
 
+import sys
+
 import os
 import json
 import argparse
 from typing import List, NamedTuple
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 import yaml
 import jax
@@ -23,12 +29,21 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import equinox as eqx
-import diffrax
+
+
+def _sanitize_name(name: str) -> str:
+    import re
+
+    name = name.strip()
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    return name
 
 from fusion_ode_identification.model import HybridField, SourceNN, LatentDynamics
 from fusion_ode_identification.data import load_data
-from fusion_ode_identification.types import ShotBundle
-from fusion_ode_identification.loss import MAX_SOLVER_STEPS
+from fusion_ode_identification.types import ShotBundle, IMEXConfig
+from fusion_ode_identification.imex_solver import IMEXIntegrator
+from fusion_ode_identification.interp import LinearInterpolation
 
 jax.config.update("jax_enable_x64", True)
 
@@ -128,6 +143,11 @@ def load_model(model_path, config):
 
 
 def masked_mse_weighted(pred, obs, mask):
+    # Exclude Dirichlet boundary node (last column) to match training loss.
+    if pred.shape[-1] >= 2:
+        pred = pred[:, :-1]
+        obs = obs[:, :-1]
+        mask = mask[:, :-1]
     mask = mask.astype(jnp.float64)
     col_weight = jnp.mean(mask, axis=0)
     col_weight = jnp.where(
@@ -140,9 +160,9 @@ def masked_mse_weighted(pred, obs, mask):
     return float(jnp.sum(weight_grid * resid) / (jnp.sum(weight_grid) + 1e-8))
 
 def _build_ode_args(bundle: EvalBundle):
-    ctrl_interp = diffrax.LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
-    ne_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.ne_vals)
-    Te_bc_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.Te_edge)
+    ctrl_interp = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+    ne_interp = LinearInterpolation(ts=bundle.ts_t, ys=bundle.ne_vals)
+    Te_bc_interp = LinearInterpolation(ts=bundle.ts_t, ys=bundle.Te_edge)
     return (
         bundle.rho,
         bundle.Vprime,
@@ -154,28 +174,29 @@ def _build_ode_args(bundle: EvalBundle):
     )
 
 
-def run_inference(model, bundle: EvalBundle):
+def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     t0, t1 = float(bundle.ts_t[0]), float(bundle.ts_t[-1])
 
     ode_args = _build_ode_args(bundle)
+    Te_bc_interp = ode_args[-1]
 
     y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.array([bundle.z0], dtype=jnp.float64)])
 
-    solver = diffrax.Kvaerno5()
-    controller = diffrax.PIDController(rtol=1e-3, atol=1e-3)
-    saveat = diffrax.SaveAt(ts=bundle.ts_t)
+    integrator = IMEXIntegrator(
+        theta=imex_cfg.theta,
+        dt_base=imex_cfg.dt_base,
+        max_steps=imex_cfg.max_steps,
+        rtol=imex_cfg.rtol,
+        atol=imex_cfg.atol,
+        substeps=getattr(imex_cfg, "substeps", 1),
+    )
 
-    sol = diffrax.diffeqsolve(
-        diffrax.ODETerm(model),
-        solver,
-        t0,
-        t1,
+    sol = integrator.integrate(
+        t_span=(t0, t1),
         y0=y0,
-        dt0=1e-4,
-        stepsize_controller=controller,
-        saveat=saveat,
-        max_steps=MAX_SOLVER_STEPS,
-        throw=False,
+        saveat=bundle.ts_t,
+        model=model,
+        Te_edge_interp=lambda t: Te_bc_interp.evaluate(t),
         args=ode_args,
     )
 
@@ -183,7 +204,7 @@ def run_inference(model, bundle: EvalBundle):
     Te_hats = ys_clean[:, :-1]
     zs = ys_clean[:, -1]
 
-    Te_bc_ts = ode_args[-1].evaluate(bundle.ts_t)
+    Te_bc_ts = Te_bc_interp.evaluate(bundle.ts_t)
 
     def reconstruct(Te_hat_row, bc_val):
         return jnp.append(Te_hat_row, bc_val / model.Te_scale) * model.Te_scale
@@ -308,12 +329,27 @@ def main():
     
     model_dir = os.path.join(base_save_dir, model_id)
     log_dir = os.path.join(base_log_dir, model_id)
-    
-    model_path = os.path.join(model_dir, f"{config['output']['model_name']}_best.eqx")
-    
-    if not os.path.exists(model_path):
-        print(f"Model not found at {model_path}. Run training first.")
+
+    raw = config["output"]["model_name"]
+    safe = _sanitize_name(raw)
+    candidates = [
+        os.path.join(model_dir, f"{raw}_best_ema.eqx"),
+        os.path.join(model_dir, f"{safe}_best_ema.eqx"),
+        os.path.join(model_dir, f"{raw}_best.eqx"),
+        os.path.join(model_dir, f"{safe}_best.eqx"),
+    ]
+
+    model_path = None
+    for p in candidates:
+        if os.path.exists(p):
+            model_path = p
+            break
+
+    if model_path is None:
+        print(f"Model not found. Tried: {candidates}. Run training first.")
         return
+
+    print(f"Using checkpoint: {model_path}")
 
     print("Loading Data...")
     stacked_bundles, rho_rom, _, _ = load_data(config)
@@ -326,6 +362,30 @@ def main():
     
     print("Loading Model...")
     model = load_model(model_path, config)
+
+    solver_name = str(config.get("training", {}).get("solver", "imex")).lower()
+    if solver_name != "imex":
+        raise ValueError(f"This branch is IMEX-only, but training.solver={solver_name!r}")
+
+    imex_dict = config.get("training", {}).get(
+        "imex",
+        {
+            "theta": 1.0,
+            "dt_base": 0.001,
+            "max_steps": 50000,
+            "rtol": 1.0e-4,
+            "atol": 1.0e-6,
+            "substeps": 1,
+        },
+    )
+    imex_cfg = IMEXConfig(
+        theta=float(imex_dict["theta"]),
+        dt_base=float(imex_dict["dt_base"]),
+        max_steps=int(imex_dict["max_steps"]),
+        rtol=float(imex_dict["rtol"]),
+        atol=float(imex_dict["atol"]),
+        substeps=int(imex_dict.get("substeps", 1)),
+    )
     
     eval_dir = os.path.join(log_dir, "evaluation")
     plots_dir = os.path.join(eval_dir, "plots")
@@ -344,7 +404,7 @@ def main():
     
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
-        Te_model, zs = run_inference(model, bundle)
+        Te_model, zs = run_inference(model, bundle, imex_cfg)
 
         # Calculate weighted MSE (mask + per-column coverage)
         mse = masked_mse_weighted(Te_model, bundle.ts_Te, bundle.mask)

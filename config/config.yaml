@@ -4,7 +4,8 @@ data:
   shots: "all"
   intersection_rho_threshold: 0.05
   rom_n_interior: 16
-  rom_interior_strategy: "chebyshev"
+  rom_interior_strategy: "edge_refine"
+  rom_edge_refine_power: 3.0
   edge_bc_mode: "use_last_observed"
 
 system:
@@ -20,12 +21,12 @@ training:
 
   # Longer AdamW phase before L-BFGS
   warmup_steps: 5
-  total_steps: 5
-  batch_size: 5
+  total_steps: 200
+  batch_size: 8
   grad_clip: 1.0e3
 
   # logging
-  log_every: 1
+  log_every: 10
 
   # loss weights (explicit)
   huber_delta: 10.0
@@ -37,9 +38,18 @@ training:
   lambda_zreg: 1.0e-5
 
   # ODE solver configuration
-  solver: "kencarp3"   # alternatives: kvaerno5, tsit5
+  solver: "imex"   # alternatives: kvaerno5, tsit5, kencarp3, imex
   rtol: 1.0e-3
   atol: 1.0e-3
+
+  # IMEX-specific configuration (only used if solver=="imex")
+  imex:
+    theta: 0.7         # Less dissipative than 1.0, still stable for stiff diffusion
+    dt_base: 0.001     # Base timestep (seconds)
+    substeps: 5        # More substeps -> healthier sensitivities than one big implicit step
+    max_steps: 50000   # Maximum number of steps
+    rtol: 1.0e-4       # Relative tolerance (for future adaptive stepping)
+    atol: 1.0e-6       # Absolute tolerance
 
   # Optional EMA (0 disables)
   ema_decay: 0.999
