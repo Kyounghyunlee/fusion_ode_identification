@@ -688,9 +688,26 @@ def main():
             logging.warning(f"[lbfgs] Could not evaluate baseline val loss for best checkpoint ({best_path}): {e}")
             val_mean_best_f = float("inf")
 
-        # Choose finetune shots from TRAIN ONLY, preferring the hardest ones.
+        # Choose finetune shots from TRAIN ONLY.
+        # Default behavior: pick the hardest k (deterministic).
+        # Optional behavior: resample/shuffle the k shots each L-BFGS "epoch".
         k = int(config.get("training", {}).get("lbfgs_batch_shots", 1))
         k = max(1, min(k, int(train_idx_lbfgs.size)))
+        lbfgs_epochs = int(config.get("training", {}).get("lbfgs_epochs", 1))
+        lbfgs_epochs = max(1, lbfgs_epochs)
+        lbfgs_resample = bool(config.get("training", {}).get("lbfgs_resample_shots_each_epoch", False))
+        lbfgs_maxiter_total = int(config.get("training", {}).get("lbfgs_maxiter", 50))
+        lbfgs_maxiter_per_epoch = config.get("training", {}).get("lbfgs_maxiter_per_epoch", None)
+        if lbfgs_maxiter_per_epoch is None:
+            lbfgs_maxiter_per_epoch_i = lbfgs_maxiter_total
+        else:
+            lbfgs_maxiter_per_epoch_i = int(lbfgs_maxiter_per_epoch)
+        lbfgs_maxiter_per_epoch_i = max(1, lbfgs_maxiter_per_epoch_i)
+
+        # Candidate pool for (optional) resampling.
+        # We try to exclude shots that failed evaluation (oks ~ 0), but fall back to all train shots.
+        cand_idx = np.array(train_idx_lbfgs)
+        cand_losses = None
         try:
             _train_mean, train_losses, _train_ok, train_oks, _train_diags = eval_loss_on_indices(
                 params_best, jnp.array(train_idx_lbfgs), loss_cfg_step, imex_cfg
@@ -704,15 +721,28 @@ def main():
             else:
                 cand_idx = np.array(train_idx_lbfgs)
                 cand_losses = train_losses_np
-            hard_order = np.argsort(-cand_losses)
-            hard_idx = cand_idx[hard_order[:k]]
-            idxs = jnp.array(hard_idx)
-            logging.info(f"[lbfgs] Finetune shots (hardest train-only): {hard_idx.tolist()}")
         except Exception as e:
-            logging.warning(f"[lbfgs] Could not rank hardest train shots; falling back to first-k train shots. Reason: {e}")
-            idxs = jnp.array(np.array(train_idx_lbfgs)[:k])
+            logging.warning(f"[lbfgs] Could not score train shots for selection; falling back to all train shots. Reason: {e}")
 
-        fixed_bundle = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
+        def _select_fixed_shots() -> np.ndarray:
+            if (cand_losses is not None) and (cand_losses.size == cand_idx.size):
+                hard_order = np.argsort(-cand_losses)
+                return cand_idx[hard_order[:k]]
+            return cand_idx[:k]
+
+        if not lbfgs_resample:
+            hard_idx = _select_fixed_shots()
+            logging.info(f"[lbfgs] Finetune shots (fixed): {hard_idx.tolist()}")
+
+        if lbfgs_resample and lbfgs_epochs > 1:
+            logging.info(
+                f"[lbfgs] Resampling enabled: epochs={lbfgs_epochs}, k={k}, maxiter/epoch={lbfgs_maxiter_per_epoch_i} "
+                f"(note: stochastic shot selection; each epoch is deterministic within its solver run)"
+            )
+        elif lbfgs_resample:
+            logging.info(
+                f"[lbfgs] Resampling enabled: epochs={lbfgs_epochs}, k={k}, maxiter/epoch={lbfgs_maxiter_per_epoch_i}"
+            )
 
         lcb = dict(loss_cfg_base)
         loss_cfg_ft = LossCfg(
@@ -746,22 +776,39 @@ def main():
             substeps=int(imex_dict_ft.get('substeps', 1)),
         )
 
-        def objective(train_vars):
-            m_full = eqx.combine(train_vars, static_ft)
-            losses, oks, _ = jax.vmap(lambda b: shot_loss_imex(m_full, b, loss_cfg_ft, imex_cfg_ft))(fixed_bundle)
-            return jnp.mean(losses)
-
-        maxiter = int(config.get("training", {}).get("lbfgs_maxiter", 50))
         history = int(config.get("training", {}).get("lbfgs_history", 10))
         tol = float(config.get("training", {}).get("lbfgs_tol", 1e-6))
-        solver = LBFGS(fun=objective, maxiter=maxiter, tol=tol, history_size=history)
 
-        logging.info(f"[lbfgs] Starting finetune on {k} shot(s): maxiter={maxiter}, history={history}, tol={tol}")
-        vars_opt, state = solver.run(base_vars)
-        loss_ft = float(state.value)
-        logging.info(f"[lbfgs] Finetune complete. loss={loss_ft:.6g}, iters={int(state.iter_num)}")
+        vars_cur = base_vars
+        last_state = None
+        for epoch in range(lbfgs_epochs):
+            if lbfgs_resample:
+                pool = np.array(cand_idx, copy=True)
+                rng_lbfgs.shuffle(pool)
+                sel = pool[:k]
+            else:
+                sel = hard_idx
 
-        model_ft = eqx.combine(vars_opt, static_ft)
+            idxs = jnp.array(sel)
+            fixed_bundle = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
+
+            def objective(train_vars):
+                m_full = eqx.combine(train_vars, static_ft)
+                losses, oks, _ = jax.vmap(lambda b: shot_loss_imex(m_full, b, loss_cfg_ft, imex_cfg_ft))(fixed_bundle)
+                return jnp.mean(losses)
+
+            solver = LBFGS(fun=objective, maxiter=lbfgs_maxiter_per_epoch_i, tol=tol, history_size=history)
+            logging.info(
+                f"[lbfgs] Epoch {epoch + 1}/{lbfgs_epochs} on {k} shot(s): {sel.tolist()} "
+                f"maxiter={lbfgs_maxiter_per_epoch_i}, history={history}, tol={tol}"
+            )
+            vars_cur, last_state = solver.run(vars_cur)
+
+        loss_ft = float(last_state.value) if last_state is not None else float("nan")
+        iters_ft = int(last_state.iter_num) if last_state is not None else -1
+        logging.info(f"[lbfgs] Finetune complete. loss={loss_ft:.6g}, iters={iters_ft}")
+
+        model_ft = eqx.combine(vars_cur, static_ft)
         save_path_ft = os.path.join(model_dir, f"{config['output']['model_name']}_finetuned.eqx")
         eqx.tree_serialise_leaves(save_path_ft, model_ft)
         logging.info(f"[lbfgs] Saved finetuned model: {save_path_ft}")

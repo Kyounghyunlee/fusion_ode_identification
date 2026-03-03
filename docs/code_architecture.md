@@ -2,8 +2,45 @@
 
 ## Big Picture
 - Goal: learn a reduced plasma transport dynamics model (1D heat equation + latent source) from many discharges ("shots").
-- Pipeline: download → pack build (NetCDF → NPZ) → train JAX model → evaluate.
+- Pipeline: **download → pack build (NetCDF → NPZ) → train JAX model → evaluate → debug/validate**.
 - Design themes: physics-structured model, JAX for autodiff + accelerator execution, data-parallel training for throughput.
+
+## Workflow Overview
+
+The complete development workflow consists of these stages:
+
+1. **Data Acquisition** (`preprocessing/download_data.py`)
+   - Download raw NetCDF files from S3 storage for specified shot numbers
+   - Fetches equilibrium, Thomson scattering, summary diagnostics, gas injection data
+   - Usage: `python preprocessing/download_data.py --shots 27567 27568 --overwrite`
+
+2. **Pack Building** (`preprocessing/build_training_pack.py`)
+   - Convert NetCDF diagnostics into TORAX-ready NPZ training packs
+   - Extracts flux coordinates (rho), geometry (V'), profiles (Te, ne), controls (Ip, P_nbi, etc.)
+   - Handles equilibrium fallbacks (slab/toroidal geometry when EFIT unavailable)
+   - Usage: `python preprocessing/build_training_pack.py --shots 27567 27568` or `--discover` for auto-discovery
+   - Outputs: `data/<shot>_torax_training.npz` containing time-aligned arrays
+
+3. **Training** (`train_tokamak_ode_hpc.py`)
+   - Main entrypoint via canonical wrapper: `./scripts/run_training_gpu.sh --config config/config.yaml`
+   - Loads all packs, constructs intersection grid + ROM grid, trains physics-informed ODE model
+   - Multi-GPU via `pmap`, EMA tracking, validation splits, checkpoint selection
+   - Saves: `models/<model_id>/{_best.eqx, _best_ema.eqx, _finetuned.eqx}`, logs to `logs/<model_id>/`
+
+4. **Evaluation** (`scripts/evaluate_model.py`)
+   - Loads best checkpoint (prefers EMA), runs full-trajectory predictions on test shots
+   - Generates plots, metrics (MAE, MSE, latent trajectories), JSON reports
+   - Usage: `python scripts/evaluate_model.py --config config/config.yaml --model-id <id> --data-check`
+   - Outputs: `logs/<model_id>/evaluation/` with PNG plots and metrics.json
+
+5. **Debug/Validation** (multiple scripts)
+   - **Quick debug-eval**: `./scripts/run_training_gpu.sh --config config.yaml --debug_eval_only --debug_eval_shot 27567`
+   - **Smoke checks**: Lightweight regression tests before/after training:
+     - `check_bc.py`: Edge BC sanity (peak-to-peak threshold, coupling sign)
+     - `smoke_diffusion_sanity.py`: Const profile → div≈0, BC coupling correctness
+     - `smoke_time_padding_strict.py`: Padding strictness under float32 downcast
+   - **Inspect data**: `scripts/inspect_data.py` for pack contents summary
+   - All run via: `./scripts/run_training_gpu.sh --python scripts/<name>.py --config <cfg> --shot <id>`
 
 ## Core Packages and What They Do (plain language)
 - **JAX**: NumPy-like arrays that can be *compiled* for GPU/TPU. It gives:
@@ -69,9 +106,46 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 - All-reduce once per step is cheap relative to compute; most time is spent in fused kernels.
 
 ## Data Flow
-- Packs (`*_torax_training.npz`) contain time bases (`t`, `t_ts`), profiles (Te, ne), masks, geometry (`rho`, `Vprime`), controls, regimes.
-- `fusion_ode_identification.data.load_data` loads packs, aligns per-shot time windows, builds an intersection observed set, builds a ROM grid, constructs edge boundary-condition traces, and stacks everything into a padded `ShotBundle`.
-- Training loop samples batches of `ShotBundle`s, runs the IMEX integrator over each shot, computes losses, and updates parameters.
+
+### Pack Structure
+Packs (`*_torax_training.npz`) contain:
+- **Time bases**: `t_ts` (Thomson timestamps), `t` (control/summary grid)
+- **Profiles**: `Te` (electron temperature), `ne` (electron density), `Te_mask` (validity masks)
+- **Geometry**: `rho` (flux coordinate), `Vprime` (volume derivative $V'(\rho)$), fallback flags
+- **Controls**: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` (all 1D time series, z-scored)
+- **Optional scalars**: `W_tot`, `P_ohm`, `H98`, `beta_n`, `B_t0`, `q95`, `li` (when available)
+- **Regimes** (optional): binary L/H-mode labels for latent supervision
+
+### Data Loading Pipeline (`fusion_ode_identification.data.load_data`)
+
+**Important: This codebase uses uniform grids only** (`data.rho_grid_mode: "uniform"`). All spatial operations are on a uniform `linspace(0, 1, N)` grid.
+
+1. **Load and validate packs**: Read all `*_torax_training.npz`, check for NaNs, enforce rho monotonicity
+2. **Construct uniform ROM grid** $\boldsymbol{\rho}_{\text{rom}}$:
+   - Simple uniform grid: `rho_rom = linspace(0, 1, N)` where $N$ = `uniform_n_rho` (defaults to NPZ rho length)
+   - If NPZ rho is not uniform, profiles are interpolated onto the uniform grid with a warning
+   - Typical size: $N \approx 26$ (configurable via `data.uniform_n_rho`)
+3. **Define observed indices**: 
+   - Use **all interior points** (exclude last boundary node): `obs_idx = arange(0, N-1)`
+   - The last node (`rho_rom[-1] = 1.0`) is reserved for Dirichlet BC in the solver
+   - No intersection thresholding or coverage-based selection; all interior radii are supervised
+4. **Regrid profiles/masks**: 
+   - Interpolate Te, ne, masks from raw Thomson grid (or NPZ grid if non-uniform) to uniform `rho_rom`
+   - Per time slice: use only finite, masked points; constant extrapolation at boundaries
+   - Handle time gaps via forward-fill, then backward-fill initial missing rows
+5. **Edge BC construction**: 
+   - `use_last_observed` (default): At each time, take Te at outermost observed index when masked/finite
+   - `extrapolate_to_1`: Linearly extrapolate from last two observed points to $\rho=1$
+   - Time-interpolate to fill gaps; fallback to 50 eV if undefined
+6. **Geometry precomputation**: Compute per-shot FVM arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) once; passed to IMEX solver to avoid per-substep recomputation
+7. **Padding and stacking**: Pad time arrays to max length (strictly increasing via `pad_time_to_max_strict`), stack into batched `ShotBundle` with `t_len` mask
+
+### Training Loop
+- Sample mini-batches of `ShotBundle`s (size $B$), shard across $D$ devices ($B/D$ per GPU)
+- Run IMEX integrator over padded time grid (masked by `t_len`) for each shot
+- Compute composite loss: data term (all interior masked radii with inverse-coverage weights), source penalty, latent smoothness, optional regime supervision
+- Backprop via implicit differentiation (custom VJP for IMEX), update parameters via AdamW + gradient clipping
+- Track both raw and EMA parameters; validate at log intervals; save `_best.eqx` and `_best_ema.eqx` independently
 
 ## Why This Is Faster Than CPU (even for ODEs)
 - We aren’t integrating one tiny time series; we integrate many shots × many rho points per batch. That’s a lot of math to fuse.
@@ -79,12 +153,50 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 - `vmap` + `pmap` keep GPUs fed with large dense ops; CPU would run many small loops instead.
 - All-reduce once per step is cheap relative to the compute; GPUs stay busy most of the time.
 
+## Checkpoint Selection and Model Loading
+
+### Checkpoint Hierarchy (priority order)
+When loading a trained model, the following precedence is used:
+
+1. **`_best_ema.eqx`**: EMA-smoothed parameters at best validation loss (preferred for inference/deployment)
+2. **`_best.eqx`**: Raw parameters at best validation loss (training checkpoint)
+3. **`_finetuned.eqx`**: L-BFGS fine-tuned model (only when `training.lbfgs_finetune: true`)
+
+Rationale: EMA parameters often generalize better due to noise averaging; raw checkpoints are retained for ablation studies.
+
+### Debug Workflow (Single-Shot Inspection)
+
+**Quick debug-eval via training entrypoint:**
+```bash
+./scripts/run_training_gpu.sh --config config/config.yaml \
+  --debug_eval_only \
+  --debug_eval_shot 27567 \
+  [--debug_ckpt path/to/model.eqx] \
+  [--debug_solver_throw]  # Force solver errors to surface
+```
+
+This:
+- Loads the dataset and best checkpoint (or specified `--debug_ckpt`)
+- Runs IMEX integration for one shot
+- Writes `out/debug_shot_<id>.{png,npz}` with predictions vs. data, latent trajectory, diagnostics
+- Useful for: inspecting edge BC behavior, latent regime transitions, solver convergence
+
+**Dedicated debug script** (`scripts/debug_shot.py`):
+- More detailed plotting (per-radius traces, diffusion/source decomposition)
+- Usage: `./scripts/run_training_gpu.sh --python scripts/debug_shot.py --config <cfg> --shot <id>`
+
 ## Practical Notes for New GPU Users
-- First step may be slower (JIT compile); subsequent steps are fast.
-- Batch sizes must divide number of devices for `pmap`.
-- Watch memory: padded batches increase footprint; adjust batch size if OOM.
-- Ensure CUDA/JAX wheels match driver/toolkit; on SDCC/HPC use the canonical wrapper `scripts/run_training_gpu.sh` for all operations (training, debug, smoke checks).
-- Run smoke checks before/after training: `./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config <cfg> --shot <id>` and similar for time-padding and BC checks.
+- **First step warmup**: JIT compilation takes 10-60s; subsequent steps are fast. Training script prints "[timing] warmup & first step" to clarify.
+- **Batch sizing**: Global batch size $B$ must be divisible by number of devices $D$ for `pmap`. Each GPU processes $B/D$ shots.
+- **Memory management**: Padded batches increase footprint. If OOM, reduce `training.batch_size` or `data.rom_n_interior`.
+- **CUDA environment**: Always use the canonical wrapper `./scripts/run_training_gpu.sh` on SDCC/HPC; it loads modules, sets `JAX_ENABLE_X64=1`, exports CUDA/NCCL paths.
+- **Smoke checks**: Run lightweight regression tests before/after training:
+  ```bash
+  ./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config <cfg> --shot <id>
+  ./scripts/run_training_gpu.sh --python scripts/check_bc.py --config <cfg> --shot <id>
+  ./scripts/run_training_gpu.sh --python scripts/smoke_time_padding_strict.py
+  ```
+- **Multi-GPU allocation**: If running `--debug_one_shot` on a multi-GPU node, training script auto-reduces device count to `min(n_devices, n_shots)` to avoid batch-sizing failures.
 
 ## Recent Optimization and Solver Fixes (stability + perf)
 - **IMEX-only branch:** All Diffrax and non-IMEX solver paths removed for simplicity. Implicit diffusion operator now exactly matches explicit discretization (conservative flux-form).

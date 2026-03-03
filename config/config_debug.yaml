@@ -60,6 +60,9 @@ training:
   # Enable a short, safe L-BFGS finetune after AdamW
   lbfgs_finetune: false
   lbfgs_maxiter: 2
+  lbfgs_epochs: 1
+  lbfgs_resample_shots_each_epoch: false
+  # lbfgs_maxiter_per_epoch: 1
   lbfgs_history: 1
   lbfgs_batch_shots: 2
   lbfgs_tol: 5.0e-5

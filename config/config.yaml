@@ -24,12 +24,12 @@ training:
 
   # Longer AdamW phase before L-BFGS
   warmup_steps: 5
-  total_steps: 100
+  total_steps: 5000
   batch_size: 8
   grad_clip: 1.0e3
 
   # logging
-  log_every: 10
+  log_every: 50
 
   # loss weights (explicit)
   huber_delta: 10.0
@@ -58,8 +58,17 @@ training:
   ema_decay: 0.999
 
   # Enable a short, safe L-BFGS finetune after AdamW
-  lbfgs_finetune: True  
-  lbfgs_maxiter: 5
+  lbfgs_finetune: False  
+  lbfgs_maxiter: 20
+  # If >1, run multiple LBFGS "epochs" sequentially.
+  # Use with lbfgs_resample_shots_each_epoch to reshuffle the k shots each epoch.
+  lbfgs_epochs: 10
+  # When true, resample/shuffle the k finetune shots each LBFGS epoch.
+  # Note: stochastic shot selection can be noisier than a fixed batch.
+  lbfgs_resample_shots_each_epoch: false
+  # Optional. If set, each epoch runs this many LBFGS iterations.
+  # If omitted, lbfgs_maxiter is used for each epoch.
+  # lbfgs_maxiter_per_epoch: 10
   lbfgs_history: 1
   lbfgs_batch_shots: 8
   lbfgs_tol: 5.0e-5

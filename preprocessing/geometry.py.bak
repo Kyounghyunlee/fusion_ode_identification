@@ -135,8 +135,8 @@ def extract_geom_params(eq: xr.Dataset, itime: Optional[int] = None) -> Dict[str
         delta = float((R_lcfs[i_top] - R_axis) / a_minor) if np.isfinite(a_minor) and a_minor > 0 else float("nan") # Triangularity
     except Exception:
         a_minor = float("nan")
-        kappa = float("nan")
-        delta = float("nan")
+            kappa = float("nan")
+            delta = float("nan")
 
     return {
         "R_major": R_axis,
