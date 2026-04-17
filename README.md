@@ -2,12 +2,11 @@
 
 ## Development Workflow
 
-To work on the files directly on the SDCC cluster from your local machine (if configured) or to access the storage:
+Connect to sdcc (if configured):
 
 ```bash
-sdcc-mount
-code ~/mnt/sdcc      # edits ITER files directly
-sdcc-umount
+ssh iter-login
+ssh sdcc
 ```
 
 ## HPC Environment Setup (GPU)
@@ -51,11 +50,16 @@ source venv/bin/activate
 ```bash
 python preprocessing/download_data.py --shots 27567 27568 --overwrite
 ```
+By default this now downloads the compact `d_alpha.nc` sidecar needed by the
+training pipeline. If you also want the full visible spectrometer dump
+(`spectrometer_visible.nc`, including BES channels), request it explicitly with
+`--groups spectrometer_visible`.
+
 2) Build TORAX training packs (.npz):
 ```bash
-python preprocessing/build_training_pack.py --shots 27567 27568
+python -m preprocessing.build_training_pack --shots 27567 27568
 # or discover any shot folders already under data/
-python preprocessing/build_training_pack.py --discover
+python -m preprocessing.build_training_pack --discover
 ```
 3) Inspect packs (optional):
 ```bash
@@ -69,19 +73,20 @@ Edit [config/config.yaml](config/config.yaml) to set data paths, shots, and outp
 data:
 	data_dir: "data"
 	shots: [27567, 27568]
-	intersection_rho_threshold: 0.05
-	rom_n_interior: 16
+	rho_grid_mode: "uniform"
+	edge_bc_mode: "use_last_observed"
 output:
 	model_id: "production_run_v1"
 	save_dir: "models"
 	log_dir: "logs"
-	model_name: "physics_manifold_model"
+	model_name: "tokamak ode model"
 training:
-	batch_size: 64
-	total_steps: 1000
-	learning_rate: 3.0e-4
+	batch_size: 8
+	total_steps: 5000
+	learning_rate: 2.0e-4
 	ema_decay: 0.999  # Enable EMA for better generalization
 	lambda_z: 1.0e-4  # Latent smoothness penalty
+	lambda_regime: 1.0e-3  # L/H supervision from D-alpha-assisted labels
 	imex:
 		theta: 0.7
 		substeps: 5
@@ -96,6 +101,7 @@ Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in
 - Geometry precomputation (P1.2) eliminates per-substep recomputation overhead.
 - EMA validation tracking saves both raw and EMA best checkpoints independently.
 - Lambda_z smoothness penalty stabilizes latent trajectories.
+- D-alpha is preserved explicitly in the packs and now drives the regime label heuristic used for latent supervision.
 
 ## Connect to Compute Node
 
@@ -163,15 +169,18 @@ free -h
 
 Once on the compute node:
 ```bash
-# Standard training run
+# Short foreground run
 ./scripts/run_training_gpu.sh --config config/config.yaml
 
-# Or with tmux (recommended for long runs)
-tmux new -s train
+# Recommended long-run workflow
+tmux new -s tokamak_resume
 ./scripts/run_training_gpu.sh --config config/config.yaml
 # Detach: Ctrl+b then d
-# Reattach later: tmux attach -t train
+# List sessions: tmux ls
+# Reattach later: tmux attach -t tokamak_resume
 ```
+
+For long runs, prefer `tmux` over a VS Code or SSH-attached foreground shell. A detached tmux session persists on the compute node across disconnects; a foreground shell may not.
 
 ### Step 6: Return to Login Node
 
@@ -234,9 +243,11 @@ We provide a **canonical GPU wrapper** (`scripts/run_training_gpu.sh`) that load
 ```
 - With tmux (recommended):
 ```bash
-tmux new -s train
+tmux new -s tokamak_resume
 ./scripts/run_training_gpu.sh --config config/config.yaml
-# detach: Ctrl+b then d; reattach: tmux attach -t train
+# detach: Ctrl+b then d
+# list sessions: tmux ls
+# reattach: tmux attach -t tokamak_resume
 ```
 - Run arbitrary Python scripts via `--python`:
 ```bash
@@ -246,6 +257,32 @@ tmux new -s train
 ### What to expect in logs
 
 The first step typically triggers a large JAX/XLA compile. The training script prints a warmup/compile timing line before the main loop so a “quiet period” is clearly identified as compile time.
+
+For resumed runs, the log also prints the loaded checkpoint, the baseline best losses, and the effective step offset before compile starts.
+
+### Resume from the latest best checkpoint
+
+If a long run stops after saving checkpoints, resume from the latest preferred checkpoint (`_best_ema.eqx` first, then `_best.eqx`) and keep the LR/logging step count continuous:
+
+```bash
+resume_step=$(grep 'New GLOBAL best (val, EMA)' logs/production_run_v1/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
+if [[ -z "$resume_step" ]]; then
+	resume_step=$(grep 'New GLOBAL best (val)' logs/production_run_v1/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
+fi
+
+tmux new -s tokamak_resume
+./scripts/run_training_gpu.sh --config config/config.yaml --resume_latest_best --resume_step_offset "${resume_step:-0}"
+```
+
+To resume from a specific checkpoint instead of the preferred latest best:
+
+```bash
+./scripts/run_training_gpu.sh --config config/config.yaml --resume_ckpt "models/production_run_v1/tokamak ode model_best.eqx" --resume_step_offset 1400
+```
+
+Notes:
+- Resume mode restores model weights, initializes the saved best baselines, and continues with a single restart.
+- `--resume_step_offset` is recommended so the learning-rate schedule and step logging continue from the original run instead of restarting at step 0.
 
 ## Debugging (single-shot)
 
@@ -275,6 +312,12 @@ Run lightweight regression checks before/after training:
 ## Evaluate a Trained Model
 
 Generate evaluation plots and metrics for the saved checkpoint (prefers `_best_ema.eqx` if available):
+```bash
+./scripts/run_training_gpu.sh --python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
+```
+
+If you already loaded the modules and activated the venv manually, direct Python evaluation also works:
+
 ```bash
 python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
 ```

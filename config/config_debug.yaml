@@ -39,6 +39,7 @@ training:
   model_error_delta: 20.0
   lambda_z: 1.0e-4
   lambda_zreg: 1.0e-5
+  lambda_regime: 1.0e-3
 
   # ODE solver configuration
   solver: "imex"   # IMEX-only branch
@@ -68,7 +69,7 @@ training:
   lbfgs_tol: 5.0e-5
 
 output:
-  model_id: "production_run_v1"
+  model_id: "production_run_debug"
   save_dir: "models"
   log_dir: "logs"
   model_name: "tokamak ode model"

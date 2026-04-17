@@ -122,6 +122,7 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
         "model_error_delta": float(cfg["training"].get("model_error_delta", 10.0)),
         "lambda_z": float(cfg["training"].get("lambda_z", 1e-4)),
         "lambda_zreg": float(cfg["training"].get("lambda_zreg", 1e-4)),
+        "lambda_regime": float(cfg["training"].get("lambda_regime", 0.0)),
         "throw_solver": bool(cfg["training"].get("throw_solver", False)),
     }
     if solver_throw_override:
@@ -135,6 +136,7 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
         model_error_delta=lcb["model_error_delta"],
         lambda_z=lcb["lambda_z"],
         lambda_zreg=lcb["lambda_zreg"],
+        lambda_regime=lcb["lambda_regime"],
         throw_solver=lcb["throw_solver"],
     )
     return loss_cfg

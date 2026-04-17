@@ -8,9 +8,10 @@ download_data.py. For each shot, we:
 4) Save data/<shot>_torax_training.npz with arrays and geometry.
 
 Usage:
-  python -m scripts.build_training_pack --shots 30420 30421 30422
-  python -m scripts.build_training_pack --shot 30421
-  python -m scripts.build_training_pack --discover
+    python -m preprocessing.build_training_pack --shots 30420 30421 30422
+    python -m preprocessing.build_training_pack --shot 30421
+    python -m preprocessing.build_training_pack --discover
+    python preprocessing/build_training_pack.py --discover
 """
 
 # preprocessing/build_training_pack.py
@@ -20,18 +21,31 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import xarray as xr  # Loads NetCDF files
 
-from .geometry import (
-    choose_itime,
-    compute_rho_scalars,
-    extract_geom_params,
-    rho_from_RZ,
-    volume_derivatives,
-)
+if __package__ in (None, ""):
+    _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    from preprocessing.geometry import (
+        choose_itime,
+        compute_rho_scalars,
+        extract_geom_params,
+        rho_from_RZ,
+        volume_derivatives,
+    )
+else:
+    from .geometry import (
+        choose_itime,
+        compute_rho_scalars,
+        extract_geom_params,
+        rho_from_RZ,
+        volume_derivatives,
+    )
 
 def find_shots_in_data(root: str = "data") -> List[int]:
     shots: List[int] = []
@@ -69,6 +83,154 @@ def interp_fill_1d(t: np.ndarray, arr: np.ndarray) -> np.ndarray:
     out[: idx[0]] = out[idx[0]]
     out[idx[-1] + 1 :] = out[idx[-1]]
     return out
+
+
+def sort_unique_series(t: np.ndarray, arr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    t = np.asarray(t, dtype=float)
+    arr = np.asarray(arr, dtype=float)
+    order = np.argsort(t)
+    t = t[order]
+    arr = arr[order]
+    if t.size > 1:
+        keep = np.concatenate([[True], np.diff(t) > 0])
+        t = t[keep]
+        arr = arr[keep]
+    return t, arr
+
+
+def find_first_existing(paths: List[str]) -> Optional[str]:
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def extract_dalpha_arrays(ds: xr.Dataset) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return D-alpha time, channel matrix, channel names, and aggregate signal."""
+    dalpha_da = get_var(ds, ["D_alpha", "filter_spectrometer_dalpha_voltage", "d_alpha", "D_alpha_sum"])
+    if dalpha_da is None:
+        raise KeyError("Could not find D-alpha variable")
+
+    time_dim = next((dim for dim in dalpha_da.dims if "time" in dim.lower()), None)
+    if time_dim is None:
+        time_dim = dalpha_da.dims[-1]
+
+    other_dims = [dim for dim in dalpha_da.dims if dim != time_dim]
+    time_vals = ds.coords[time_dim].values if time_dim in ds.coords else np.arange(dalpha_da.sizes[time_dim], dtype=float)
+
+    if len(other_dims) == 0:
+        channel_vals = np.asarray(dalpha_da.transpose(time_dim).values, dtype=float)[None, :]
+        channel_names = np.array([str(dalpha_da.attrs.get("uda_name", dalpha_da.name or "D_alpha"))], dtype="U64")
+    elif len(other_dims) == 1:
+        channel_dim = other_dims[0]
+        channel_vals = np.asarray(dalpha_da.transpose(channel_dim, time_dim).values, dtype=float)
+        if channel_dim in ds.coords:
+            channel_names = np.asarray(ds.coords[channel_dim].values).astype("U64")
+        else:
+            channel_names = np.array([f"{dalpha_da.name or 'D_alpha'}_{i:02d}" for i in range(channel_vals.shape[0])], dtype="U64")
+    else:
+        stacked = dalpha_da.stack(dalpha_channel=other_dims).transpose("dalpha_channel", time_dim)
+        channel_vals = np.asarray(stacked.values, dtype=float)
+        channel_names = np.asarray([str(v) for v in stacked.coords["dalpha_channel"].values], dtype="U64")
+
+    order = np.argsort(time_vals)
+    time_vals = np.asarray(time_vals, dtype=float)[order]
+    channel_vals = channel_vals[:, order]
+    if time_vals.size > 1:
+        keep = np.concatenate([[True], np.diff(time_vals) > 0])
+        time_vals = time_vals[keep]
+        channel_vals = channel_vals[:, keep]
+
+    if "D_alpha_sum" in ds:
+        dalpha_sum = np.asarray(ds["D_alpha_sum"].transpose(time_dim).values, dtype=float)[order]
+        if time_vals.size > 1:
+            dalpha_sum = dalpha_sum[keep]
+    else:
+        dalpha_sum = np.nansum(channel_vals, axis=0)
+
+    return time_vals, channel_vals, channel_names, dalpha_sum
+
+
+def interp_channels_to_time(t_src: np.ndarray, values_c_t: np.ndarray, t_dst: np.ndarray) -> np.ndarray:
+    """Interpolate channel-by-time signals onto a target time base."""
+    out = np.zeros((t_dst.size, values_c_t.shape[0]), dtype=float)
+    for idx, row in enumerate(values_c_t):
+        valid = np.isfinite(t_src) & np.isfinite(row)
+        if np.count_nonzero(valid) == 0:
+            continue
+        src_t = t_src[valid]
+        src_v = row[valid]
+        out[:, idx] = np.interp(t_dst, src_t, src_v, left=src_v[0], right=src_v[-1])
+    return out
+
+
+def estimate_regime_labels(
+    t: np.ndarray,
+    nebar: np.ndarray,
+    P_nbi: np.ndarray,
+    D_alpha: np.ndarray,
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """Estimate L/H transition timing using D-alpha drop plus actuator rises."""
+    regime = np.zeros_like(t, dtype=np.int8)
+    score = np.zeros_like(t, dtype=float)
+    if t.size < 5:
+        return regime, score, float("nan")
+
+    def _smooth(x: np.ndarray, k: int) -> np.ndarray:
+        if x.size < 3:
+            return x
+        k = min(k, x.size)
+        if k <= 1:
+            return x
+        filt = np.ones(k, dtype=float) / float(k)
+        return np.convolve(x, filt, mode="same")
+
+    def _norm(x: np.ndarray) -> Optional[np.ndarray]:
+        if not np.any(np.isfinite(x)):
+            return None
+        x_filled = interp_fill_1d(t, x)
+        span = float(np.nanmax(x_filled) - np.nanmin(x_filled))
+        if span < 1e-9:
+            return None
+        return (x_filled - np.nanmin(x_filled)) / (span + 1e-6)
+
+    score_terms = []
+
+    d_alpha_norm = _norm(D_alpha)
+    if d_alpha_norm is not None:
+        d_alpha_s = _smooth(d_alpha_norm, 101)
+        score_terms.append(1.2 * np.maximum(-np.gradient(d_alpha_s, t), 0.0))
+
+    ne_norm = _norm(nebar)
+    if ne_norm is not None:
+        ne_s = _smooth(ne_norm, 31)
+        score_terms.append(0.7 * np.maximum(np.gradient(ne_s, t), 0.0))
+
+    pnbi_norm = _norm(P_nbi)
+    if pnbi_norm is not None:
+        pnbi_s = _smooth(pnbi_norm, 31)
+        score_terms.append(0.3 * np.maximum(np.gradient(pnbi_s, t), 0.0))
+
+    if not score_terms:
+        return regime, score, float("nan")
+
+    score = np.sum(score_terms, axis=0)
+    pad = max(10, score.size // 20)
+    if score.size > 2 * pad:
+        score[:pad] = 0.0
+        score[-pad:] = 0.0
+
+    trans_idx = int(np.argmax(score))
+    if not np.isfinite(score[trans_idx]) or score[trans_idx] <= 0.0:
+        return regime, score, float("nan")
+
+    regime[:] = 1
+    width = max(2, regime.size // 20)
+    lo = max(0, trans_idx - width)
+    hi = min(regime.size, trans_idx + width + 1)
+    regime[lo:hi] = 2
+    regime[hi:] = 3
+    return regime, score, float(t[trans_idx])
 
 
 def infer_ts_radial_coordinate(ts: xr.Dataset) -> Optional[str]: 
@@ -214,7 +376,7 @@ def sanity_report(path: str) -> Tuple[str, Tuple[int, bool, float, float]]:
         if key in d:
             report.append("  " + _fmt_1d(key, d[key]))
 
-    for extra in ["P_rad", "W_tot", "P_ohm", "P_tot", "H98", "q95", "li", "beta_n", "B_t0"]:
+    for extra in ["P_rad", "W_tot", "P_ohm", "P_tot", "H98", "q95", "li", "beta_n", "B_t0", "D_alpha", "regime_score", "transition_time"]:
         if extra in d:
             report.append("  " + _fmt_1d(extra, d[extra]))
 
@@ -251,7 +413,7 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
 
     fallback_meta = {"rho_fallback_method": "psi", "rho_r_min": float("nan"), "rho_r_max": float("nan")}
 
-    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray:
+    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray: # Rho fallback function
         # Simple linear normalisation of R when psi is unusable
         r_candidates = ("major_radius", "R", "R_grid", "Rcoord", "R_grid_1d")
         r_vals = None
@@ -321,7 +483,7 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
         if rho_coord_name is not None and rho_coord_name in ts.coords:
             rho_ts = ts.coords[rho_coord_name].values
 
-            def to_time_samples(da: xr.DataArray) -> np.ndarray:
+            def to_time_samples(da: xr.DataArray) -> np.ndarray: # Convert DataArray to 2D time-by-sample array, aligning time dimension if present. If no time dimension, replicate across time samples.
                 dims = list(da.dims)
                 if "time" in dims:
                     dims_no_time = [d for d in dims if d != "time"]
@@ -448,11 +610,15 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
 
     # Particle Sources (Optional)
     gas_path = os.path.join(shot_dir, "gas_injection.nc")
+    dalpha_path = os.path.join(shot_dir, "d_alpha.nc")
     spec_path = os.path.join(shot_dir, "spectrometer_visible.nc")
-    
+
     S_gas = np.zeros_like(t)
     S_rec = np.zeros_like(t)
     S_nbi = np.zeros_like(t)
+    D_alpha = np.zeros_like(t)
+    D_alpha_channels = np.zeros((t.size, 0), dtype=float)
+    D_alpha_channel_names = np.array([], dtype="U64")
 
     # 1. Gas Puffing (S_gas)
     if os.path.exists(gas_path):
@@ -461,42 +627,36 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
             total_inj = get_var(gas_ds, ["total_injected", "flow_rate_total"])
             if total_inj is not None:
                 t_gas = gas_ds["time"].values
+                gas_vals = total_inj.values
+                t_gas, gas_vals = sort_unique_series(t_gas, gas_vals)
                 # Compute rate: d(count)/dt if cumulative, else use flow rate directly
                 # Check units or name. "total_injected" sounds cumulative.
                 # "flow_rate_total" sounds like rate.
                 # Assuming cumulative for "total_injected" based on previous context.
                 if "total_injected" in gas_ds:
-                    rate_gas = np.gradient(total_inj.values, t_gas)
+                    rate_gas = np.gradient(interp_fill_1d(t_gas, gas_vals), t_gas)
                 else:
-                    rate_gas = total_inj.values
+                    rate_gas = interp_fill_1d(t_gas, gas_vals)
+                rate_gas = np.nan_to_num(rate_gas, nan=0.0, posinf=0.0, neginf=0.0)
                 
                 # Interpolate to summary time
                 S_gas = np.interp(t, t_gas, rate_gas, left=0.0, right=0.0)
-                S_gas = np.maximum(S_gas, 0.0)
+                S_gas = np.maximum(np.nan_to_num(S_gas, nan=0.0, posinf=0.0, neginf=0.0), 0.0)
         except Exception as e:
             print(f"  !! Failed to load gas injection for shot {shot}: {e}")
 
-    # 2. Recycling (S_rec) - D_alpha proxy
-    if os.path.exists(spec_path):
+    # 2. Recycling (S_rec) and raw D-alpha signal
+    dalpha_source_path = find_first_existing([dalpha_path, spec_path])
+    if dalpha_source_path is not None:
         try:
-            spec_ds = xr.load_dataset(spec_path)
-            # Try to find D_alpha
-            dalpha = get_var(spec_ds, ["filter_spectrometer_dalpha_voltage", "d_alpha", "D_alpha"])
-            if dalpha is not None:
-                # Sum over channels if multiple exist
-                if "dalpha_channel" in dalpha.dims:
-                    dalpha_sum = dalpha.sum(dim="dalpha_channel")
-                elif "channel" in dalpha.dims:
-                    dalpha_sum = dalpha.sum(dim="channel")
-                else:
-                    dalpha_sum = dalpha
-                
-                t_spec = spec_ds["time"].values
-                # Interpolate to summary time
-                S_rec_raw = np.interp(t, t_spec, dalpha_sum.values, left=0.0, right=0.0)
-                S_rec = np.maximum(S_rec_raw, 0.0)
+            dalpha_ds = xr.load_dataset(dalpha_source_path)
+            t_dalpha, dalpha_channels_native, D_alpha_channel_names, _dalpha_sum_native = extract_dalpha_arrays(dalpha_ds)
+            D_alpha_channels = interp_channels_to_time(t_dalpha, dalpha_channels_native, t)
+            D_alpha = np.sum(D_alpha_channels, axis=1)
+            D_alpha = interp_fill_1d(t, D_alpha)
+            S_rec = np.maximum(D_alpha, 0.0)
         except Exception as e:
-            print(f"  !! Failed to load spectrometer for shot {shot}: {e}")
+            print(f"  !! Failed to load D-alpha for shot {shot}: {e}")
 
     # 3. NBI Fueling (S_nbi)
     # Approx: P_nbi [W] / (E_beam [eV] * e)
@@ -510,29 +670,7 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
 
     # Simple regime labelling on summary grid (t_summary)
     # 0 = unknown, 1 = L-mode, 2 = transition, 3 = H-mode
-    regime = np.zeros_like(t_summary, dtype=np.int8)
-
-    # crude heuristic: look at nebar and P_NBI threshold & derivative
-    if nebar_da is not None and P_nbi_da is not None:
-        def _smooth(x: np.ndarray, k: int = 5) -> np.ndarray:
-            if k <= 1:
-                return x
-            k = min(k, x.size)
-            filt = np.ones(k) / k
-            return np.convolve(x, filt, mode="same")
-
-        ne_norm = (nebar - np.nanmin(nebar)) / (np.nanmax(nebar) - np.nanmin(nebar) + 1e-6)
-        P_nbi_norm = (P_nbi - np.nanmin(P_nbi)) / (np.nanmax(P_nbi) - np.nanmin(P_nbi) + 1e-6)
-        ne_s = _smooth(ne_norm)
-        pnbi_s = _smooth(P_nbi_norm)
-        d_ne = np.gradient(ne_s, t_summary)
-        d_pnbi = np.gradient(pnbi_s, t_summary)
-        score = np.abs(d_ne) + 0.3 * np.abs(d_pnbi)
-        trans_idx = int(np.argmax(score))
-        regime[trans_idx] = 2
-        w = max(2, regime.size // 20)
-        regime[: max(0, trans_idx - w)] = 1
-        regime[min(regime.size - 1, trans_idx + w) :] = 3
+    regime, regime_score, transition_time = estimate_regime_labels(t_summary, nebar, P_nbi, D_alpha)
 
     # Coverage diagnostics
     Te_mask_col_cov = Te_mask.mean(axis=0).astype(np.float32)
@@ -570,12 +708,17 @@ def build_one_shot(shot: int, data_root: str = "data", Nrho: int = 65) -> str:
         P_rad=P_rad,
         P_nbi_raw=P_nbi_raw,
         P_rad_raw=P_rad_raw,
+        D_alpha=D_alpha,
+        D_alpha_channels=D_alpha_channels,
+        D_alpha_channel_names=D_alpha_channel_names,
         S_gas=S_gas,
         S_rec=S_rec,
         S_nbi=S_nbi,
         Vprime=Vprime_torax,
         regime=regime,
-        schema_version=2,
+        regime_score=regime_score,
+        transition_time=transition_time,
+        schema_version=3,
         psi_axis=psi_axis_val,
         psi_edge=psi_edge_val,
         rho_fallback_used=rho_fallback_used,

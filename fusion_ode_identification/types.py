@@ -50,6 +50,7 @@ class LossCfg(NamedTuple):
     model_error_delta: float
     lambda_z: float
     lambda_zreg: float
+    lambda_regime: float
     throw_solver: bool
 
 

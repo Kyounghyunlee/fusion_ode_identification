@@ -195,7 +195,7 @@ def load_model(model_path, config):
     return eqx.tree_deserialise_leaves(model_path, model)
 
 
-def masked_mse_weighted(pred, obs, mask):
+def masked_error_metrics_weighted(pred, obs, mask):
     # Exclude Dirichlet boundary node (last column) to match training loss.
     if pred.shape[-1] >= 2:
         pred = pred[:, :-1]
@@ -213,7 +213,13 @@ def masked_mse_weighted(pred, obs, mask):
     )
     weight_grid = mask * col_weight
     resid = (pred - obs) ** 2
-    return float(jnp.sum(weight_grid * resid) / (jnp.sum(weight_grid) + 1e-8))
+    abs_resid = jnp.sqrt(resid)
+    denom = jnp.maximum(jnp.abs(obs), 50.0)
+    wsum = jnp.sum(weight_grid) + 1e-8
+    mse = jnp.sum(weight_grid * resid) / wsum
+    mae_eV = jnp.sum(weight_grid * abs_resid) / wsum
+    mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / wsum
+    return float(mse), float(mae_eV), float(mae_pct)
 
 def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     t0, t1 = float(bundle.ts_t[0]), float(bundle.ts_t[-1])
@@ -481,15 +487,19 @@ def main():
     }
     
     total_mse = 0.0
+    total_mae_eV = 0.0
+    total_mae_pct = 0.0
     
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle, imex_cfg)
 
-        # Calculate weighted MSE (mask + per-column coverage)
-        mse = masked_mse_weighted(Te_model, bundle.ts_Te, bundle.mask)
-        print(f"  MSE: {mse:.4f}")
+        # Match the training-time weighting so offline evaluation is comparable.
+        mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
+        print(f"  MSE: {mse:.4f} | MAE: {mae_eV:.2f} eV | MAE%: {mae_pct:.2f}")
         total_mse += mse
+        total_mae_eV += mae_eV
+        total_mae_pct += mae_pct
         
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
@@ -500,6 +510,8 @@ def main():
         
         metrics = {
             "mse": mse,
+            "mae_eV": mae_eV,
+            "mae_pct": mae_pct,
             "z_stats": {"min": z_min, "max": z_max, "std": z_std},
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
@@ -514,7 +526,9 @@ def main():
         plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
     report["overall_metrics"] = {
-        "mean_mse": total_mse / len(eval_bundles)
+        "mean_mse": total_mse / len(eval_bundles),
+        "mean_mae_eV": total_mae_eV / len(eval_bundles),
+        "mean_mae_pct": total_mae_pct / len(eval_bundles),
     }
     
     # Save Report

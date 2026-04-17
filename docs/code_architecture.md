@@ -11,14 +11,15 @@ The complete development workflow consists of these stages:
 
 1. **Data Acquisition** (`preprocessing/download_data.py`)
    - Download raw NetCDF files from S3 storage for specified shot numbers
-   - Fetches equilibrium, Thomson scattering, summary diagnostics, gas injection data
+   - Fetches equilibrium, Thomson scattering, summary diagnostics, gas injection data, and a compact `d_alpha.nc` sidecar for the visible spectrometer D-alpha channels
+   - The full `spectrometer_visible.nc` file is still available as an explicit optional target, but it is no longer required for pack building
    - Usage: `python preprocessing/download_data.py --shots 27567 27568 --overwrite`
 
 2. **Pack Building** (`preprocessing/build_training_pack.py`)
    - Convert NetCDF diagnostics into TORAX-ready NPZ training packs
-   - Extracts flux coordinates (rho), geometry (V'), profiles (Te, ne), controls (Ip, P_nbi, etc.)
+   - Extracts flux coordinates (rho), geometry (V'), profiles (Te, ne), controls (Ip, P_nbi, etc.), and explicit D-alpha arrays/labels
    - Handles equilibrium fallbacks (slab/toroidal geometry when EFIT unavailable)
-   - Usage: `python preprocessing/build_training_pack.py --shots 27567 27568` or `--discover` for auto-discovery
+   - Usage: `python -m preprocessing.build_training_pack --shots 27567 27568` or `--discover` for auto-discovery
    - Outputs: `data/<shot>_torax_training.npz` containing time-aligned arrays
 
 3. **Training** (`train_tokamak_ode_hpc.py`)

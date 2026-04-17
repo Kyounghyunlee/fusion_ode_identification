@@ -18,7 +18,7 @@ import numpy as np
 import optax
 
 from fusion_ode_identification.data import load_data, log_data_scale
-from fusion_ode_identification.debug import build_loss_cfg as build_debug_loss_cfg, build_model_template, find_best_checkpoint, make_debug_plot_and_npz
+from fusion_ode_identification.debug import build_loss_cfg as build_debug_loss_cfg, build_model_template, find_best_checkpoint, make_debug_plot_and_npz, sanitize_name
 from fusion_ode_identification.model import HybridField, LatentDynamics, SourceNN
 from fusion_ode_identification.loss import eval_shot_trajectory_imex, shot_loss_imex
 from fusion_ode_identification.types import LossCfg, IMEXConfig
@@ -100,6 +100,9 @@ def main():
     parser.add_argument("--throw", action="store_true", help="Force solver throw=True for debug")
     parser.add_argument("--lbfgs_finetune", action="store_true", help="Run optional single-device L-BFGS finetune after AdamW")
     parser.add_argument("--lbfgs_smoke", action="store_true", help="Quick L-BFGS smoke test: small batch and few iterations")
+    parser.add_argument("--resume_ckpt", type=str, default=None, help="Resume training from a specific checkpoint path")
+    parser.add_argument("--resume_latest_best", action="store_true", help="Resume training from the latest preferred best checkpoint for this model_id")
+    parser.add_argument("--resume_step_offset", type=int, default=0, help="Logical step offset to use for LR schedule and logging when resuming")
     args = parser.parse_args()
 
     # Configure logging early (before any logging.* calls) so INFO shows up.
@@ -114,6 +117,11 @@ def main():
 
     config = load_config(args.config)
 
+    if args.resume_ckpt and args.resume_latest_best:
+        raise ValueError("Use either --resume_ckpt or --resume_latest_best, not both.")
+    if int(args.resume_step_offset) < 0:
+        raise ValueError(f"--resume_step_offset must be >= 0, got {args.resume_step_offset}")
+
     if args.debug_one_shot is not None:
         config.setdefault("data", {})
         config["data"]["shots"] = [int(args.debug_one_shot)]
@@ -125,6 +133,11 @@ def main():
     tr = config.setdefault("training", {})
     ts = int(tr.get("total_steps", 1000))
     ws = int(tr.get("warmup_steps", 0))
+    if (args.resume_ckpt or args.resume_latest_best) and int(tr.get("num_restarts", 1)) != 1:
+        logging.warning(
+            f"[resume] Overriding training.num_restarts={int(tr.get('num_restarts', 1))} -> 1 for resumed training."
+        )
+        tr["num_restarts"] = 1
     if ts <= 0:
         raise ValueError(f"training.total_steps must be > 0, got {ts}")
     if ws < 0:
@@ -142,6 +155,17 @@ def main():
 
     out_dir = "out"
     os.makedirs(out_dir, exist_ok=True)
+
+    resume_ckpt_path = None
+    if args.resume_ckpt is not None:
+        resume_ckpt_path = os.path.abspath(args.resume_ckpt)
+    elif args.resume_latest_best:
+        resume_ckpt_path = find_best_checkpoint(config)
+    if resume_ckpt_path is not None and not os.path.exists(resume_ckpt_path):
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_ckpt_path}")
+    if resume_ckpt_path is not None:
+        logging.info(f"[resume] Will initialize model from checkpoint: {resume_ckpt_path}")
+        logging.info(f"[resume] Using step offset={int(args.resume_step_offset)} for LR schedule and logging.")
 
     log_every = int(config["training"].get("log_every", 50))
 
@@ -291,10 +315,13 @@ def main():
         model_error_delta=float(config["training"].get("model_error_delta", 10.0)),
         lambda_z=float(config["training"].get("lambda_z", 1e-4)),
         lambda_zreg=float(config["training"].get("lambda_zreg", 1e-4)),
+        lambda_regime=float(config["training"].get("lambda_regime", 0.0)),
         throw_solver=bool(config["training"].get("throw_solver", False)),
     )
 
     for restart in range(int(config["training"]["num_restarts"])):
+        resume_this_restart = resume_ckpt_path is not None and restart == 0
+        step_offset = int(args.resume_step_offset) if resume_this_restart else 0
         key = jax.random.PRNGKey(base_seed)
         key = jax.random.fold_in(key, restart)
         key_nn, key_mu = jax.random.split(key)
@@ -313,10 +340,18 @@ def main():
             divergence_clip=divergence_clip,
         )
 
+        if resume_this_restart:
+            model = eqx.tree_deserialise_leaves(resume_ckpt_path, model)
+            logging.info(f"[resume] Loaded model weights from: {resume_ckpt_path}")
+
         print_model_and_rho_summary(model, rho_rom, rho_cap, obs_idx)
 
         total_steps = int(config["training"]["total_steps"])
-        schedule = build_lr_schedule(config)
+        schedule_base = build_lr_schedule(config)
+        if step_offset > 0:
+            schedule = lambda step, _base=schedule_base, _offset=step_offset: _base(step + _offset)
+        else:
+            schedule = schedule_base
         opt_name = str(config["training"]["optimizer"]).lower()
         if not hasattr(optax, opt_name):
             raise ValueError(f"Unknown optax optimizer: {opt_name}")
@@ -460,6 +495,7 @@ def main():
             model_error_delta=loss_cfg_base["model_error_delta"],
             lambda_z=loss_cfg_base["lambda_z"],
             lambda_zreg=loss_cfg_base["lambda_zreg"],
+            lambda_regime=loss_cfg_base["lambda_regime"],
             throw_solver=loss_cfg_base["throw_solver"],
         )
         
@@ -480,7 +516,58 @@ def main():
             substeps=int(imex_dict.get('substeps', 1)),
         )
 
-        logging.info(f"[lr] lr(step0)={float(schedule(0)):.3e} lr(step_end)={float(schedule(total_steps - 1)):.3e}")
+        def first_existing(paths):
+            for p in paths:
+                if os.path.exists(p):
+                    return p
+            return None
+
+        def eval_checkpoint_mean(path: str) -> float:
+            ckpt_model = eqx.tree_deserialise_leaves(path, model)
+            ckpt_params, _ = eqx.partition(ckpt_model, eqx.is_inexact_array)
+            val_mean_ckpt, _, _, _, _ = eval_loss_on_indices(ckpt_params, jnp.array(val_idx), loss_cfg_step, imex_cfg)
+            return float(val_mean_ckpt)
+
+        raw_name = config["output"]["model_name"]
+        safe_name = sanitize_name(raw_name)
+        best_candidates = [
+            os.path.join(model_dir, f"{raw_name}_best.eqx"),
+            os.path.join(model_dir, f"{safe_name}_best.eqx"),
+        ]
+        best_ema_candidates = [
+            os.path.join(model_dir, f"{raw_name}_best_ema.eqx"),
+            os.path.join(model_dir, f"{safe_name}_best_ema.eqx"),
+        ]
+
+        if resume_this_restart:
+            baseline_raw_path = first_existing(best_candidates) or resume_ckpt_path
+            baseline_ema_path = first_existing(best_ema_candidates) or resume_ckpt_path
+
+            if baseline_raw_path is not None:
+                global_best_val_loss = eval_checkpoint_mean(baseline_raw_path)
+                best_val_loss = global_best_val_loss
+                global_best_step = step_offset
+                best_val_step = step_offset
+                logging.info(
+                    f"[resume] Initialized raw best baseline from {baseline_raw_path}: "
+                    f"val_loss={global_best_val_loss:.6g} step={global_best_step}"
+                )
+
+            if baseline_ema_path is not None:
+                global_best_val_loss_ema = eval_checkpoint_mean(baseline_ema_path)
+                best_val_loss_ema = global_best_val_loss_ema
+                global_best_step_ema = step_offset
+                best_val_step_ema = step_offset
+                logging.info(
+                    f"[resume] Initialized EMA best baseline from {baseline_ema_path}: "
+                    f"val_loss={global_best_val_loss_ema:.6g} step={global_best_step_ema}"
+                )
+
+        effective_total_steps = total_steps + step_offset
+        logging.info(
+            f"[lr] lr(step0)={float(schedule(0)):.3e} lr(step_end)={float(schedule(total_steps - 1)):.3e} "
+            f"step_offset={step_offset} effective_total_steps={effective_total_steps}"
+        )
 
         # ---- One-time warmup to make the first compile visible ----
         print("[compile] Warming up (first pmap compile)...", flush=True)
@@ -555,6 +642,7 @@ def main():
 
             if (step % log_every) == 0 or step == total_steps - 1:
                 elapsed = time.time() - start_time
+                effective_step = step + step_offset
                 current_lr = float(schedule(step))
                 params0 = jax.tree_util.tree_map(lambda x: x[0], model_params)
                 val_mean_raw, val_vec, val_ok, val_oks, val_diags = eval_loss_on_indices(
@@ -578,7 +666,7 @@ def main():
                 mean_abs_src = float(jnp.sum(val_diags[:, 6] * val_mask) / (jnp.sum(val_mask) + 1e-8))
                 src_over_diff = float(jnp.sum(val_diags[:, 7] * val_mask) / (jnp.sum(val_mask) + 1e-8))
                 logging.info(
-                    f"[restart {restart}] step {step}/{total_steps} "
+                    f"[restart {restart}] step {effective_step}/{effective_total_steps} "
                     f"train={loss_val:.6g} val_raw={val_mean_f:.6g} val_ema={val_mean_ema_f:.6g} "
                     f"val_p90={val_p90:.6g} val_max={val_max:.6g} "
                     f"ok={ok_rate_val:.3f} val_ok_raw={float(val_ok):.3f} "
@@ -588,19 +676,20 @@ def main():
                 )
 
             if ((step % log_every) == 0 or step == total_steps - 1):
+                effective_step = step + step_offset
                 # Track per-restart best for logging, but only overwrite the on-disk "best" checkpoint
                 # when the GLOBAL best (across all restarts) improves.
                 if val_mean_f < best_val_loss:
                     best_val_loss = val_mean_f
-                    best_val_step = restart * total_steps + step
+                    best_val_step = effective_step
 
                 if ema_params is not None and val_mean_ema_f < best_val_loss_ema:
                     best_val_loss_ema = val_mean_ema_f
-                    best_val_step_ema = restart * total_steps + step
+                    best_val_step_ema = effective_step
 
                 if val_mean_f < global_best_val_loss:
                     global_best_val_loss = val_mean_f
-                    global_best_step = restart * total_steps + step
+                    global_best_step = effective_step
                     params_save = jax.tree_util.tree_map(lambda x: x[0], model_params)
                     model_save = eqx.combine(params_save, model_static)
                     save_path = os.path.join(model_dir, f"{config['output']['model_name']}_best.eqx")
@@ -611,7 +700,7 @@ def main():
 
                 if ema_params is not None and val_mean_ema_f < global_best_val_loss_ema:
                     global_best_val_loss_ema = val_mean_ema_f
-                    global_best_step_ema = restart * total_steps + step
+                    global_best_step_ema = effective_step
                     ema_params_save = jax.tree_util.tree_map(lambda x: x[0], ema_params)
                     ema_model_save = eqx.combine(ema_params_save, model_static)
                     ema_path = os.path.join(model_dir, f"{config['output']['model_name']}_best_ema.eqx")
@@ -753,6 +842,7 @@ def main():
             model_error_delta=lcb["model_error_delta"],
             lambda_z=lcb["lambda_z"],
             lambda_zreg=lcb["lambda_zreg"],
+            lambda_regime=lcb["lambda_regime"],
             throw_solver=lcb["throw_solver"],
         )
 

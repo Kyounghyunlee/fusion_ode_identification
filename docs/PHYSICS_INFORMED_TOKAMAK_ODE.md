@@ -149,6 +149,71 @@ These arrays are passed to the IMEX solver to avoid per-substep recomputation.
 #### Step 8: Initial condition and controls
 - IC: first valid $T_e$ profile on $\boldsymbol{\rho}_{\mathrm{rom}}$; fallback synthetic $T(\rho)=100(1-\rho^2)+10$ eV if missing.
 - Controls: z-scored and clipped signals (`P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi`) interpolated onto the profile time grid.
+  `S_rec` is the D-alpha-derived recycling proxy; the raw/interpolated D-alpha signal is saved in the pack separately as `D_alpha` for mode-labeling and diagnostic analysis.
+
+**What `D_alpha` stores in the pack:**
+- Source: extracted from `d_alpha.nc` when present, otherwise from `spectrometer_visible.nc`.
+- Physical meaning: a visible-spectrometer D-alpha emission trace, i.e. a line-integrated optical proxy for recycling/edge-neutral activity rather than a transport state variable.
+- Representation in the pack:
+  - `D_alpha`: 1D summed D-alpha time series on the summary/control grid `t`.
+  - `D_alpha_channels`: 2D array with shape `(n_t, n_{\text{channels}})` containing the per-channel traces on the same time grid.
+  - `D_alpha_channel_names`: string labels for the channel axis.
+- Units: inherited from the underlying diagnostic and therefore best treated as relative amplitude/voltage-like units, not as an absolute particle source.
+
+**How the model uses `D_alpha`:**
+1. It is converted into `S_rec=\max(D_\alpha,0)`, and `S_rec` is the quantity that actually enters the control vector seen by the source network.
+2. It is used offline during pack building to help construct the heuristic `regime` labels and `regime_score` that mark L-mode, transition, and H-mode periods.
+3. The raw `D_alpha` trace is retained for diagnostics and later analysis, but the ODE does not evolve `D_alpha` as part of the model state.
+
+**Mathematical role of `D_alpha` in this ROM:**
+For a single shot, the pack stores per-channel traces $D_{\alpha,c}(t)$ and the summed signal
+$$
+D_\alpha(t)=\sum_{c=1}^{C} D_{\alpha,c}(t).
+$$
+So `D_alpha` is a scalar-valued function of time for each shot, not a single constant scalar for the whole discharge.
+
+Within the learned source term, the model does **not** use raw `D_alpha` directly. Instead it uses the clipped recycling proxy
+$$
+S_{\mathrm{rec}}(t)=\max\big(D_\alpha(t),0\big),
+$$
+and the control vector is therefore
+$$
+\mathbf{u}(t)=\big[P_{\mathrm{nbi}}(t),\ I_p(t),\ \bar n_e(t),\ S_{\mathrm{gas}}(t),\ S_{\mathrm{rec}}(t),\ S_{\mathrm{nbi}}(t)\big].
+$$
+In other words, `D_alpha` influences the learned source term only through `S_rec`.
+
+For regime labelling, the builder forms a smoothed transition score
+$$
+s(t)=
+1.2\,\max\!\big(-\partial_t \widetilde D_\alpha(t),0\big)
++0.7\,\max\!\big(\partial_t \widetilde{\bar n}_e(t),0\big)
++0.3\,\max\!\big(\partial_t \widetilde P_{\mathrm{nbi}}(t),0\big),
+$$
+where tildes denote normalized and smoothed signals. The estimated transition time is then
+$$
+t_{LH}=t_{\operatorname*{arg\,max}_t s(t)}.
+$$
+The resulting heuristic regime code is piecewise assigned as
+$$
+q(t)=
+\begin{cases}
+1, & t<t_{LH}-\Delta t_{\mathrm{trans}}, \\
+2, & |t-t_{LH}|\leq \Delta t_{\mathrm{trans}}, \\
+3, & t>t_{LH}+\Delta t_{\mathrm{trans}},
+\end{cases}
+$$
+with `1 = L-mode`, `2 = transition`, and `3 = H-mode`.
+
+**Plasma-physics interpretation:**
+The measured D-alpha brightness is a line-integrated edge/SOL optical signal,
+$$
+I_{D_\alpha}(t) \propto \int_{\mathrm{LOS}} \epsilon_{D_\alpha}(\mathbf{x},t)\,dl,
+$$
+with emissivity roughly driven by excitation and recombination of deuterium neutrals. A useful schematic form is
+$$
+\epsilon_{D_\alpha} \sim n_e n_0\langle\sigma v\rangle_{\mathrm{exc}} + \epsilon_{\mathrm{recomb}}.
+$$
+In L-mode, stronger edge transport and recycling often produce a relatively elevated D-alpha level. At the L-to-H transition, an edge transport barrier forms, particle transport to the wall/divertor is reduced, and the recycling light often drops sharply. That empirical “D-alpha drop” is why a negative slope of $D_\alpha(t)$ is commonly used as a transition marker. In H-mode, however, ELMs and divertor dynamics can still produce bursts on top of the lower baseline, so `D_alpha` should be treated as a useful proxy rather than a perfect confinement-state observable.
 
 ---
 
@@ -439,7 +504,7 @@ $$
 +
 \lambda_z\mathcal{L}_{z\text{-smooth}}
 +
-\lambda_{z\text{-sup}}\mathcal{L}_{z\text{-regime}}
+\lambda_{\text{regime}}\mathcal{L}_{z\text{-regime}}
 +
 \lambda_{z\text{reg}}\mathcal{L}_{z\text{-reg}}.
 $$
@@ -483,10 +548,16 @@ with $f_k$ the RHS at step $k$. Disabled by default unless `training.lambda_w>0`
   $$
   \mathcal{L}_{z\text{-smooth}}=\frac{1}{K-1}\sum_{k=1}^{K-1}(z_{k+1}-z_k)^2.
   $$
-- Optional regime supervision:
+- Optional regime supervision (now driven by the D-alpha-assisted `regime` labels in the pack):
+  If $q_k\in\{0,1,2,3\}$ denotes the packed regime code at time index $k$, the implementation uses
   $$
-  \mathcal{L}_{z\text{-regime}}=\frac{1}{K}\sum_{k=1}^{K}\left(\sigma(z_k)-r_k\right)^2,\qquad r_k\in\{0,1\}.
+  m_k^{\mathrm{reg}}=\mathbf{1}[q_k\in\{1,3\}],\qquad r_k=\mathbf{1}[q_k=3],
   $$
+  so that only confident L-mode and H-mode windows supervise the latent state, while transition and unknown windows are masked out.
+  $$
+  \mathcal{L}_{z\text{-regime}}=\frac{1}{K}\sum_{k=1}^{K}\operatorname{BCEWithLogits}(g\,z_k,r_k),\qquad r_k\in\{0,1\},
+  $$
+  where $g$ is the latent gain and $r_k=1$ denotes H-mode while $r_k=0$ denotes L-mode.
 - Magnitude:
   $$
   \mathcal{L}_{z\text{-reg}}=\mathbb{E}[z^2].
@@ -604,7 +675,7 @@ $$
 - `training.lambda_w`
 - `training.lambda_z`
 - `training.lambda_zreg`
-- `training.lambda_zsup` (if regime labels exist)
+- `training.lambda_regime` (if regime labels exist)
 
 ### 11.3 IMEX
 - `training.imex.theta` (default 0.7)
@@ -627,6 +698,7 @@ $$
 
 ### 12.2 Actuators and control inputs
 - `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` (dense 1D signals; z-scored + clipped; interpolated).
+- `D_alpha`, `D_alpha_channels`, `D_alpha_channel_names` are stored as auxiliary diagnostic traces on the summary grid. Raw `D_alpha` is not part of `CONTROL_NAMES`; it is used to derive `S_rec` and to build regime labels for latent supervision.
 - `P_rad` not used in current training script.
 
 ### 12.3 Geometry

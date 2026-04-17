@@ -190,7 +190,13 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         tm_dz = tm[:-1]
         z_smooth = loss_cfg.lambda_z * (jnp.sum(tm_dz * (dz**2)) / (jnp.sum(tm_dz) + 1e-8))
 
-        total_loss = obs_loss + src_penalty + z_reg + z_smooth
+        regime_mask = bundle.regime_mask.astype(jnp.float64) * tm
+        regime_target = jnp.where(bundle.regime_ts > 2.0, 1.0, 0.0)
+        regime_logits = model.latent_gain * zs
+        regime_bce = jnp.maximum(regime_logits, 0.0) - regime_logits * regime_target + jnp.log1p(jnp.exp(-jnp.abs(regime_logits)))
+        regime_penalty = loss_cfg.lambda_regime * (jnp.sum(regime_mask * regime_bce) / (jnp.sum(regime_mask) + 1e-8))
+
+        total_loss = obs_loss + src_penalty + z_reg + z_smooth + regime_penalty
 
         diag = jnp.array(
             [

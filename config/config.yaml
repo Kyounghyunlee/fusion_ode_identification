@@ -39,6 +39,7 @@ training:
   model_error_delta: 20.0
   lambda_z: 1.0e-4
   lambda_zreg: 1.0e-5
+  lambda_regime: 1.0e-3
 
   # ODE solver configuration
   solver: "imex"   # alternatives: kvaerno5, tsit5, kencarp3, imex
