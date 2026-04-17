@@ -10,10 +10,16 @@ Evaluation Script for Physics-Consistent Manifold Model
 Loads a trained model and generates comparison plots (Model vs Observation).
 """
 
+import sys
+
 import os
 import json
 import argparse
 from typing import List, NamedTuple
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 import yaml
 import jax
@@ -23,12 +29,74 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import equinox as eqx
-import diffrax
+
+
+def _existing_with_mtime(paths: List[str]):
+    out = []
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                out.append((p, float(os.path.getmtime(p))))
+            except Exception:
+                out.append((p, float("nan")))
+    return out
+
+
+def _select_checkpoint_by_preference(
+    preference: List[str],
+    best_ema: List[str],
+    best: List[str],
+    finetuned: List[str],
+) -> str:
+    pref = [str(x).strip().lower() for x in preference if str(x).strip()]
+    if not pref:
+        pref = ["best_ema", "best", "finetuned", "newest"]
+
+    groups = {
+        "best_ema": best_ema,
+        "best": best,
+        "finetuned": finetuned,
+    }
+
+    all_candidates = best_ema + best + finetuned
+    existing_all = _existing_with_mtime(all_candidates)
+    if existing_all:
+        existing_sorted = sorted(existing_all, key=lambda x: x[1], reverse=True)
+        print("[eval] Existing candidate checkpoints (newest first):")
+        for p, mtime in existing_sorted:
+            print(f"  - {p} (mtime={mtime:.0f})")
+
+    for token in pref:
+        if token in groups:
+            for p in groups[token]:
+                if os.path.exists(p):
+                    print(f"[eval] Selected checkpoint by preference ({token}): {p}")
+                    return p
+        elif token == "newest":
+            if not existing_all:
+                continue
+            selected = sorted(existing_all, key=lambda x: x[1], reverse=True)[0][0]
+            print(f"[eval] Selected checkpoint by fallback (newest): {selected}")
+            return selected
+        else:
+            raise ValueError(f"Unknown checkpoint preference token: {token!r}")
+
+    raise FileNotFoundError(f"No checkpoint found. Tried: {all_candidates}")
+
+
+def _sanitize_name(name: str) -> str:
+    import re
+
+    name = name.strip()
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
+    return name
 
 from fusion_ode_identification.model import HybridField, SourceNN, LatentDynamics
 from fusion_ode_identification.data import load_data
-from fusion_ode_identification.types import ShotBundle
-from fusion_ode_identification.loss import MAX_SOLVER_STEPS
+from fusion_ode_identification.types import ShotBundle, IMEXConfig
+from fusion_ode_identification.imex_solver import IMEXIntegrator
+from fusion_ode_identification.interp import LinearInterpolation
 
 jax.config.update("jax_enable_x64", True)
 
@@ -127,63 +195,79 @@ def load_model(model_path, config):
     return eqx.tree_deserialise_leaves(model_path, model)
 
 
-def masked_mse_weighted(pred, obs, mask):
+def masked_error_metrics_weighted(pred, obs, mask):
+    # Exclude Dirichlet boundary node (last column) to match training loss.
+    if pred.shape[-1] >= 2:
+        pred = pred[:, :-1]
+        obs = obs[:, :-1]
+        mask = mask[:, :-1]
     mask = mask.astype(jnp.float64)
-    col_weight = jnp.mean(mask, axis=0)
+    col_cov = jnp.mean(mask, axis=0)
+    has_obs = col_cov > 0
+    inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
+    inv_sum = jnp.sum(inv)
     col_weight = jnp.where(
-        jnp.sum(col_weight) > 0,
-        col_weight / (jnp.sum(col_weight) + 1e-8),
-        jnp.ones_like(col_weight) / col_weight.size,
+        inv_sum > 0,
+        inv / (inv_sum + 1e-8),
+        jnp.ones_like(col_cov) / col_cov.size,
     )
     weight_grid = mask * col_weight
     resid = (pred - obs) ** 2
-    return float(jnp.sum(weight_grid * resid) / (jnp.sum(weight_grid) + 1e-8))
+    abs_resid = jnp.sqrt(resid)
+    denom = jnp.maximum(jnp.abs(obs), 50.0)
+    wsum = jnp.sum(weight_grid) + 1e-8
+    mse = jnp.sum(weight_grid * resid) / wsum
+    mae_eV = jnp.sum(weight_grid * abs_resid) / wsum
+    mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / wsum
+    return float(mse), float(mae_eV), float(mae_pct)
 
-def _build_ode_args(bundle: EvalBundle):
-    ctrl_interp = diffrax.LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
-    ne_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.ne_vals)
-    Te_bc_interp = diffrax.LinearInterpolation(ts=bundle.ts_t, ys=bundle.Te_edge)
-    return (
-        bundle.rho,
-        bundle.Vprime,
-        ctrl_interp,
-        bundle.ctrl_means,
-        bundle.ctrl_stds,
-        ne_interp,
-        Te_bc_interp,
-    )
-
-
-def run_inference(model, bundle: EvalBundle):
+def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     t0, t1 = float(bundle.ts_t[0]), float(bundle.ts_t[-1])
 
-    ode_args = _build_ode_args(bundle)
+    # Evaluate controls at Te grid once; solver uses cheap blending across substeps.
+    ctrl_interp = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+    ctrl_vals_ts = ctrl_interp.evaluate(bundle.ts_t)
+    ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
+    ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
+
+    rho = bundle.rho
+    Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
+    dr = jnp.diff(rho)
+    dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
+    Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
+    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
+    denom_raw = Vprime_cell * dr
+    denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
+    denom = jnp.maximum(denom_raw, denom_floor)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
 
     y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.array([bundle.z0], dtype=jnp.float64)])
 
-    solver = diffrax.Kvaerno5()
-    controller = diffrax.PIDController(rtol=1e-3, atol=1e-3)
-    saveat = diffrax.SaveAt(ts=bundle.ts_t)
+    integrator = IMEXIntegrator(
+        theta=imex_cfg.theta,
+        dt_base=imex_cfg.dt_base,
+        max_steps=imex_cfg.max_steps,
+        rtol=imex_cfg.rtol,
+        atol=imex_cfg.atol,
+        substeps=getattr(imex_cfg, "substeps", 1),
+    )
 
-    sol = diffrax.diffeqsolve(
-        diffrax.ODETerm(model),
-        solver,
-        t0,
-        t1,
+    sol = integrator.integrate(
+        t_span=(t0, t1),
         y0=y0,
-        dt0=1e-4,
-        stepsize_controller=controller,
-        saveat=saveat,
-        max_steps=MAX_SOLVER_STEPS,
-        throw=False,
-        args=ode_args,
+        saveat=bundle.ts_t,
+        model=model,
+        Te_edge_ts=bundle.Te_edge,
+        ctrl_norm_ts=ctrl_norm_ts,
+        ne_ts=bundle.ne_vals,
+        args=ode_args_geom,
     )
 
     ys_clean = jnp.nan_to_num(sol.ys, nan=0.0, posinf=0.0, neginf=0.0)
     Te_hats = ys_clean[:, :-1]
     zs = ys_clean[:, -1]
 
-    Te_bc_ts = ode_args[-1].evaluate(bundle.ts_t)
+    Te_bc_ts = bundle.Te_edge
 
     def reconstruct(Te_hat_row, bc_val):
         return jnp.append(Te_hat_row, bc_val / model.Te_scale) * model.Te_scale
@@ -194,18 +278,20 @@ def run_inference(model, bundle: EvalBundle):
 def analyze_physics_components(model, bundle: EvalBundle, Te_model, zs):
     """Compute mean magnitudes for total tendency and NN source for quick diagnostics."""
 
-    ode_args = _build_ode_args(bundle)
+    ctrl_interp = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+    ctrl_vals_ts = ctrl_interp.evaluate(bundle.ts_t)
+    ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
+    ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
 
-    def total_tendency(t, Te_row, z_val):
-        return model.compute_physics_tendency(t, Te_row, z_val, ode_args)
+    div_vals = jax.vmap(
+        lambda Te_row, z_val: model.compute_divergence_from_values(bundle.rho, bundle.Vprime, Te_row, z_val)
+    )(Te_model, zs)
+    src_vals = jax.vmap(
+        lambda Te_row, z_val, cn, ne: model.compute_source_from_values(bundle.rho, Te_row, z_val, ne, cn)
+    )(Te_model, zs, ctrl_norm_ts, bundle.ne_vals)
 
-    def source_only(t, Te_row, z_val):
-        return model.compute_source(t, Te_row, z_val, ode_args)
-
-    f_vals = jax.vmap(total_tendency)(bundle.ts_t, Te_model, zs)
-    s_vals = jax.vmap(source_only)(bundle.ts_t, Te_model, zs)
-
-    return jnp.mean(jnp.abs(f_vals)), jnp.mean(jnp.abs(s_vals))
+    total = div_vals + src_vals
+    return jnp.mean(jnp.abs(total)), jnp.mean(jnp.abs(src_vals))
 
 def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, plots_dir):
     ts_np = np.asarray(ts)
@@ -300,19 +386,55 @@ def main():
     ap.add_argument("--data-check", action="store_true", help="Print mask coverage summary before eval")
     args = ap.parse_args()
 
-    config = load_config(args.config)
-    
-    model_id = args.model_id or config['output'].get('model_id', 'default_run')
-    base_save_dir = config['output']['save_dir']
-    base_log_dir = config['output'].get('log_dir', 'logs')
-    
+    config_cli = load_config(args.config)
+
+    model_id = args.model_id or config_cli["output"].get("model_id", "default_run")
+    base_log_dir = config_cli["output"].get("log_dir", "logs")
+    saved_cfg_path = os.path.join(base_log_dir, model_id, "config.yaml")
+
+    config = config_cli
+    if os.path.exists(saved_cfg_path):
+        try:
+            with open(saved_cfg_path, "r") as f:
+                config = yaml.safe_load(f)
+            print(f"[eval] Using saved training config: {saved_cfg_path}")
+        except Exception as e:
+            print(f"[eval] Could not load saved training config; using CLI config. Reason: {e}")
+
+    config.setdefault("output", {})
+    config["output"]["model_id"] = model_id
+
+    base_save_dir = config["output"]["save_dir"]
+    base_log_dir = config["output"].get("log_dir", "logs")
+
     model_dir = os.path.join(base_save_dir, model_id)
     log_dir = os.path.join(base_log_dir, model_id)
-    
-    model_path = os.path.join(model_dir, f"{config['output']['model_name']}_best.eqx")
-    
-    if not os.path.exists(model_path):
-        print(f"Model not found at {model_path}. Run training first.")
+
+    raw = config["output"]["model_name"]
+    safe = _sanitize_name(raw)
+    best_ema = [
+        os.path.join(model_dir, f"{raw}_best_ema.eqx"),
+        os.path.join(model_dir, f"{safe}_best_ema.eqx"),
+    ]
+    best = [
+        os.path.join(model_dir, f"{raw}_best.eqx"),
+        os.path.join(model_dir, f"{safe}_best.eqx"),
+    ]
+    finetuned = [
+        os.path.join(model_dir, f"{raw}_finetuned.eqx"),
+        os.path.join(model_dir, f"{safe}_finetuned.eqx"),
+    ]
+
+    # Preference order can be overridden via config.output.checkpoint_preference
+    # (comma-separated), but defaults to: best_ema,best,finetuned,newest
+    pref_str = config.get("output", {}).get("checkpoint_preference", "best_ema,best,finetuned,newest")
+    preference = [x.strip() for x in str(pref_str).split(",")]
+
+    candidates_all = best_ema + best + finetuned
+    try:
+        model_path = _select_checkpoint_by_preference(preference, best_ema=best_ema, best=best, finetuned=finetuned)
+    except FileNotFoundError:
+        print(f"Model not found. Tried: {candidates_all}. Run training first.")
         return
 
     print("Loading Data...")
@@ -326,6 +448,30 @@ def main():
     
     print("Loading Model...")
     model = load_model(model_path, config)
+
+    solver_name = str(config.get("training", {}).get("solver", "imex")).lower()
+    if solver_name != "imex":
+        raise ValueError(f"This branch is IMEX-only, but training.solver={solver_name!r}")
+
+    imex_dict = config.get("training", {}).get(
+        "imex",
+        {
+            "theta": 1.0,
+            "dt_base": 0.001,
+            "max_steps": 50000,
+            "rtol": 1.0e-4,
+            "atol": 1.0e-6,
+            "substeps": 1,
+        },
+    )
+    imex_cfg = IMEXConfig(
+        theta=float(imex_dict["theta"]),
+        dt_base=float(imex_dict["dt_base"]),
+        max_steps=int(imex_dict["max_steps"]),
+        rtol=float(imex_dict["rtol"]),
+        atol=float(imex_dict["atol"]),
+        substeps=int(imex_dict.get("substeps", 1)),
+    )
     
     eval_dir = os.path.join(log_dir, "evaluation")
     plots_dir = os.path.join(eval_dir, "plots")
@@ -341,15 +487,19 @@ def main():
     }
     
     total_mse = 0.0
+    total_mae_eV = 0.0
+    total_mae_pct = 0.0
     
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
-        Te_model, zs = run_inference(model, bundle)
+        Te_model, zs = run_inference(model, bundle, imex_cfg)
 
-        # Calculate weighted MSE (mask + per-column coverage)
-        mse = masked_mse_weighted(Te_model, bundle.ts_Te, bundle.mask)
-        print(f"  MSE: {mse:.4f}")
+        # Match the training-time weighting so offline evaluation is comparable.
+        mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
+        print(f"  MSE: {mse:.4f} | MAE: {mae_eV:.2f} eV | MAE%: {mae_pct:.2f}")
         total_mse += mse
+        total_mae_eV += mae_eV
+        total_mae_pct += mae_pct
         
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
@@ -360,6 +510,8 @@ def main():
         
         metrics = {
             "mse": mse,
+            "mae_eV": mae_eV,
+            "mae_pct": mae_pct,
             "z_stats": {"min": z_min, "max": z_max, "std": z_std},
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
@@ -374,7 +526,9 @@ def main():
         plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
     report["overall_metrics"] = {
-        "mean_mse": total_mse / len(eval_bundles)
+        "mean_mse": total_mse / len(eval_bundles),
+        "mean_mae_eV": total_mae_eV / len(eval_bundles),
+        "mean_mae_pct": total_mae_pct / len(eval_bundles),
     }
     
     # Save Report

@@ -4,8 +4,9 @@ and save them locally as NetCDF files, plus a quick summary plot.
 
 Workflow overview:
 - For each shot (from --shots, config.data.shots, or detected *_torax_training.npz), open the remote Zarr store via fsspec/s3.
-- For each requested group name, open that Zarr group as an xarray Dataset.
+- For each requested target, open the relevant Zarr group as an xarray Dataset.
 - Sanitize attributes so the Dataset is NetCDF-writable, then save to disk.
+- For D-alpha, extract a compact `d_alpha.nc` sidecar from the visible spectrometer group.
 - If a "summary" group exists, generate a small figure (Ip and <ne>). 
 
 Notes:
@@ -36,13 +37,25 @@ endpoint_url = "https://s3.echo.stfc.ac.uk"
 # REST API root for locating EFIT/IDA3 files
 API_ROOT = "https://mastapp.site/json"
 
-# Core groups required for the data-driven training path
-ESSENTIAL_GROUPS = [
+# Remote Zarr groups available in the Level-2 store.
+REMOTE_GROUPS = [
     "summary",
     "thomson_scattering",
     "equilibrium",
     "gas_injection",
     "spectrometer_visible",
+]
+
+# Download targets exposed to the CLI.
+DOWNLOAD_TARGETS = REMOTE_GROUPS + ["d_alpha"]
+
+# Default targets for the training pipeline.
+ESSENTIAL_GROUPS = [
+    "summary",
+    "thomson_scattering",
+    "equilibrium",
+    "gas_injection",
+    "d_alpha",
 ]
 
 # Root directory for all outputs (NetCDFs and plots)
@@ -224,6 +237,78 @@ def make_netcdf_safe(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+def extract_dalpha_dataset(ds: xr.Dataset) -> Optional[xr.Dataset]:
+    """Extract a compact D-alpha dataset from the visible spectrometer group."""
+    source_name = None
+    for candidate in ("D_alpha", "filter_spectrometer_dalpha_voltage", "d_alpha"):
+        if candidate in ds:
+            source_name = candidate
+            break
+    if source_name is None:
+        return None
+
+    dalpha = ds[source_name]
+    time_dim = next((dim for dim in dalpha.dims if "time" in dim.lower()), None)
+    if time_dim is None:
+        time_dim = dalpha.dims[-1]
+
+    other_dims = [dim for dim in dalpha.dims if dim != time_dim]
+    if len(other_dims) == 0:
+        time_coord = ds.coords[time_dim].values if time_dim in ds.coords else np.arange(dalpha.size, dtype=float)
+        channel_dim = "dalpha_channel"
+        channel_names = np.array([str(dalpha.attrs.get("uda_name", source_name))], dtype="U64")
+        dalpha_values = np.asarray(dalpha.transpose(time_dim).values, dtype=np.float64)[None, :]
+    else:
+        if len(other_dims) == 1:
+            channel_dim = other_dims[0]
+            dalpha = dalpha.transpose(channel_dim, time_dim)
+            dalpha_values = np.asarray(dalpha.values, dtype=np.float64)
+            if channel_dim in ds.coords:
+                channel_names = np.asarray(ds.coords[channel_dim].values).astype("U64")
+            else:
+                channel_names = np.array([f"{source_name}_{i:02d}" for i in range(dalpha_values.shape[0])], dtype="U64")
+        else:
+            channel_dim = "dalpha_channel"
+            dalpha = dalpha.stack({channel_dim: other_dims}).transpose(channel_dim, time_dim)
+            dalpha_values = np.asarray(dalpha.values, dtype=np.float64)
+            channel_names = np.asarray([str(v) for v in dalpha.coords[channel_dim].values], dtype="U64")
+        time_coord = ds.coords[time_dim].values if time_dim in ds.coords else np.arange(dalpha_values.shape[1], dtype=float)
+
+    out = xr.Dataset(
+        data_vars={
+            "D_alpha": ((channel_dim, "time"), dalpha_values),
+            "D_alpha_sum": (("time",), np.nansum(dalpha_values, axis=0)),
+        },
+        coords={
+            channel_dim: channel_names,
+            "time": np.asarray(time_coord, dtype=float),
+        },
+        attrs={
+            "description": "Extracted D-alpha channels from the visible spectrometer diagnostic",
+            "source_group": str(ds.attrs.get("name", "spectrometer_visible")),
+            "source_variable": source_name,
+        },
+    )
+    out["D_alpha"].attrs = {
+        "description": str(dalpha.attrs.get("description", "D-alpha voltage channels")),
+        "units": str(dalpha.attrs.get("units", ds.attrs.get("units", ""))),
+        "label": str(dalpha.attrs.get("label", ds.attrs.get("label", ""))),
+    }
+    out["D_alpha_sum"].attrs = {
+        "description": "Sum of all available D-alpha channels",
+        "units": str(dalpha.attrs.get("units", ds.attrs.get("units", ""))),
+    }
+    return out
+
+
+def save_dalpha_dataset(ds: xr.Dataset, shot: int, overwrite: bool, out_root: str) -> Optional[str]:
+    dalpha_ds = extract_dalpha_dataset(ds)
+    if dalpha_ds is None:
+        print("   ⚠️  No D-alpha variable found in visible spectrometer group")
+        return None
+    return save_dataset(dalpha_ds, shot, "d_alpha", overwrite=overwrite, out_root=out_root)
+
+
 def save_dataset(ds: xr.Dataset, shot: int, group: str, overwrite: bool, out_root: str) -> str:
     """Write a Dataset to NetCDF; optionally skip if file already exists."""
     out_dir = os.path.join(out_root, str(shot))
@@ -282,7 +367,7 @@ if __name__ == "__main__":
         "--groups",
         type=str,
         nargs="+",
-        choices=ESSENTIAL_GROUPS,
+        choices=DOWNLOAD_TARGETS,
         help="Groups to download (default: essential groups)",
     )
     ap.add_argument("--out-root", type=str, default=OUT_ROOT, help="Output root directory (default: data or config.data_dir)")
@@ -326,11 +411,41 @@ if __name__ == "__main__":
             continue
 
         ds_summary = None
+        ds_cache = {}
+
+        def get_dataset(group_name: str):
+            if group_name in ds_cache:
+                return ds_cache[group_name]
+            ds_opened = open_group_as_dataset(store, group_name, max_retries, retry_delay)
+            if ds_opened is not None:
+                ds_cache[group_name] = ds_opened
+            return ds_opened
 
         # Attempt to open and save each group for this shot
         for group in groups:
             print(f" - Trying group: {group}")
             existing_path = os.path.join(out_root, str(shot), f"{group}.nc")
+
+            if group == "d_alpha":
+                if not overwrite and os.path.exists(existing_path):
+                    print(f"   ⏭️  {existing_path} exists, skipping download")
+                    continue
+
+                local_visible = os.path.join(out_root, str(shot), "spectrometer_visible.nc")
+                if not overwrite and os.path.exists(local_visible):
+                    try:
+                        with xr.open_dataset(local_visible) as local_ds:
+                            save_dalpha_dataset(local_ds, shot, overwrite=True, out_root=out_root)
+                        continue
+                    except Exception as exc:  # pylint: disable=broad-except
+                        print(f"   ⚠️  Failed to extract D-alpha from cached spectrometer file: {exc}")
+
+                ds_visible = get_dataset("spectrometer_visible")
+                if ds_visible is None:
+                    continue
+                save_dalpha_dataset(ds_visible, shot, overwrite=True, out_root=out_root)
+                continue
+
             if not overwrite and os.path.exists(existing_path):
                 print(f"   ⏭️  {existing_path} exists, skipping download")
                 if make_plots and group == "summary":
@@ -340,26 +455,16 @@ if __name__ == "__main__":
                         print(f"   ⚠️  Failed to reopen cached summary for plotting: {exc}")
                 continue
 
-            ds = open_group_as_dataset(store, group, max_retries, retry_delay)
+            ds = get_dataset(group)
             if ds is None:
                 continue
             if len(ds.data_vars) == 0:
                 print(f"   ⚠️  Group '{group}' empty; skipping")
-                try:
-                    ds.close()
-                except Exception:
-                    pass
                 continue
 
-            try:
-                save_dataset(ds, shot, group, overwrite=overwrite, out_root=out_root)
-                if group == "summary":
-                    ds_summary = ds
-            finally:
-                try:
-                    ds.close()
-                except Exception:
-                    pass
+            save_dataset(ds, shot, group, overwrite=overwrite, out_root=out_root)
+            if group == "summary":
+                ds_summary = ds
 
         # Optionally create a quick-look plot if summary is available
         if make_plots and ds_summary is not None:
@@ -386,3 +491,9 @@ if __name__ == "__main__":
                         print("   ⚠️  EFIT file downloaded but could not be parsed into equilibrium.nc")
             except Exception as exc:  # pylint: disable=broad-except
                 print(f"   ⚠️  EFIT REST download failed: {exc}")
+
+        for ds_cached in ds_cache.values():
+            try:
+                ds_cached.close()
+            except Exception:
+                pass

@@ -3,7 +3,7 @@
 
 import os
 import re
-from typing import Tuple
+from typing import Tuple, Sequence, List
 
 import equinox as eqx
 import jax
@@ -15,9 +15,10 @@ import numpy as np
 import yaml
 
 from .data import load_data
-from .loss import eval_shot_trajectory
+from .loss import eval_shot_trajectory_imex
+from .interp import LinearInterpolation
 from .model import HybridField, LatentDynamics, SourceNN
-from .types import LossCfg
+from .types import LossCfg, IMEXConfig
 
 jax.config.update("jax_enable_x64", True)
 
@@ -29,6 +30,59 @@ def sanitize_name(name: str) -> str:
     return name
 
 
+def _existing_with_mtime(paths: Sequence[str]):
+    out = []
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                out.append((p, float(os.path.getmtime(p))))
+            except Exception:
+                out.append((p, float("nan")))
+    return out
+
+
+def _select_checkpoint_by_preference(
+    preference: Sequence[str],
+    best_ema: Sequence[str],
+    best: Sequence[str],
+    finetuned: Sequence[str],
+) -> str:
+    pref = [str(x).strip().lower() for x in preference if str(x).strip()]
+    if len(pref) == 0:
+        pref = ["best_ema", "best", "finetuned", "newest"]
+
+    groups = {
+        "best_ema": list(best_ema),
+        "best": list(best),
+        "finetuned": list(finetuned),
+    }
+
+    all_candidates: List[str] = list(best_ema) + list(best) + list(finetuned)
+    existing_all = _existing_with_mtime(all_candidates)
+    if existing_all:
+        existing_sorted = sorted(existing_all, key=lambda x: x[1], reverse=True)
+        print("[debug] Existing candidate checkpoints (newest first):")
+        for p, mtime in existing_sorted:
+            print(f"  - {p} (mtime={mtime:.0f})")
+
+    for token in pref:
+        if token in groups:
+            for p in groups[token]:
+                if os.path.exists(p):
+                    print(f"[debug] Selected checkpoint by preference ({token}): {p}")
+                    return p
+        elif token == "newest":
+            if not existing_all:
+                continue
+            selected = sorted(existing_all, key=lambda x: x[1], reverse=True)[0][0]
+            print(f"[debug] Selected checkpoint by fallback (newest): {selected}")
+            return selected
+        else:
+            raise ValueError(f"Unknown checkpoint preference token: {token!r}")
+
+    raise FileNotFoundError(f"No checkpoint found. Tried: {all_candidates}")
+
+
 def find_best_checkpoint(cfg) -> str:
     model_id = cfg["output"]["model_id"]
     save_dir = cfg["output"]["save_dir"]
@@ -36,22 +90,30 @@ def find_best_checkpoint(cfg) -> str:
     raw = cfg["output"]["model_name"]
     safe = sanitize_name(raw)
 
-    candidates = [
+    finetuned = [
         os.path.join(model_dir, f"{raw}_finetuned.eqx"),
         os.path.join(model_dir, f"{safe}_finetuned.eqx"),
-        os.path.join(model_dir, f"{raw}_best_ema.eqx"),
-        os.path.join(model_dir, f"{safe}_best_ema.eqx"),
+    ]
+    best = [
         os.path.join(model_dir, f"{raw}_best.eqx"),
         os.path.join(model_dir, f"{safe}_best.eqx"),
     ]
-    for p in candidates:
-        if os.path.exists(p):
-            print(f"[debug] Using checkpoint: {p}")
-            return p
-    raise FileNotFoundError(f"No checkpoint found. Tried: {candidates}")
+    best_ema = [
+        os.path.join(model_dir, f"{raw}_best_ema.eqx"),
+        os.path.join(model_dir, f"{safe}_best_ema.eqx"),
+    ]
+
+    pref_str = (
+        cfg.get("output", {}).get("checkpoint_preference")
+        or cfg.get("debug", {}).get("checkpoint_preference")
+        or "best_ema,best,finetuned,newest"
+    )
+    preference = [x.strip() for x in str(pref_str).split(",")]
+
+    return _select_checkpoint_by_preference(preference, best_ema=best_ema, best=best, finetuned=finetuned)
 
 
-def build_loss_cfg(cfg, solver_throw_override: bool = False) -> Tuple[LossCfg, str]:
+def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
     lcb = {
         "huber_delta": float(cfg["training"].get("huber_delta", 5.0)),
         "lambda_src": float(cfg["training"].get("lambda_src", 1e-4)),
@@ -60,9 +122,8 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> Tuple[LossCfg, s
         "model_error_delta": float(cfg["training"].get("model_error_delta", 10.0)),
         "lambda_z": float(cfg["training"].get("lambda_z", 1e-4)),
         "lambda_zreg": float(cfg["training"].get("lambda_zreg", 1e-4)),
+        "lambda_regime": float(cfg["training"].get("lambda_regime", 0.0)),
         "throw_solver": bool(cfg["training"].get("throw_solver", False)),
-        "rtol": float(cfg["training"].get("rtol", 1e-3)),
-        "atol": float(cfg["training"].get("atol", 1e-3)),
     }
     if solver_throw_override:
         lcb["throw_solver"] = True
@@ -75,12 +136,32 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> Tuple[LossCfg, s
         model_error_delta=lcb["model_error_delta"],
         lambda_z=lcb["lambda_z"],
         lambda_zreg=lcb["lambda_zreg"],
+        lambda_regime=lcb["lambda_regime"],
         throw_solver=lcb["throw_solver"],
-        rtol=lcb["rtol"],
-        atol=lcb["atol"],
     )
-    solver_name = str(cfg["training"].get("solver", "kvaerno5")).lower()
-    return loss_cfg, solver_name
+    return loss_cfg
+
+
+def build_imex_cfg(cfg) -> IMEXConfig:
+    imex_dict = cfg.get("training", {}).get(
+        "imex",
+        {
+            "theta": 1.0,
+            "dt_base": 0.001,
+            "max_steps": 50000,
+            "rtol": 1.0e-4,
+            "atol": 1.0e-6,
+            "substeps": 1,
+        },
+    )
+    return IMEXConfig(
+        theta=float(imex_dict["theta"]),
+        dt_base=float(imex_dict["dt_base"]),
+        max_steps=int(imex_dict["max_steps"]),
+        rtol=float(imex_dict["rtol"]),
+        atol=float(imex_dict["atol"]),
+        substeps=int(imex_dict.get("substeps", 1)),
+    )
 
 
 def build_model_template(cfg, key) -> HybridField:
@@ -116,9 +197,20 @@ def make_debug_plot_and_npz(bundle0, ev, out_png: str, out_npz: str, div_inf_ts=
     Te_model = np.array(ev.Te_model[:L], dtype=float)
     z_ts = np.array(ev.z_ts[:L], dtype=float)
     rho_rom = np.array(bundle0.rho_rom, dtype=float)
+    Vprime_rom = np.array(bundle0.Vprime_rom, dtype=float)
     shot_id = int(np.array(bundle0.shot_id))
     edge_idx = int(np.array(bundle0.edge_idx))
     rho_edge = float(np.array(bundle0.rho_edge))
+
+    # Geometry diagnostics used by the diffusion operator.
+    dr = np.diff(rho_rom) if rho_rom.size >= 2 else np.array([], dtype=float)
+    min_dr = float(np.min(dr)) if dr.size else 0.0
+    dr_floor = float(1e-6 * np.max(dr) + 1e-12) if dr.size else 0.0
+    min_Vprime = float(np.min(Vprime_rom)) if Vprime_rom.size else 0.0
+    Vprime_cell = 0.5 * (Vprime_rom[:-1] + Vprime_rom[1:]) if Vprime_rom.size >= 2 else np.array([], dtype=float)
+    denom_raw = Vprime_cell * dr if dr.size else np.array([], dtype=float)
+    min_denom = float(np.min(denom_raw)) if denom_raw.size else 0.0
+    denom_floor = float(max(1e-4 * float(np.max(denom_raw)) if denom_raw.size else 0.0, 1e-10))
 
     obs = np.array(bundle0.obs_idx, dtype=int)
     if obs.ndim > 1:
@@ -181,6 +273,7 @@ def make_debug_plot_and_npz(bundle0, ev, out_png: str, out_npz: str, div_inf_ts=
         mae_pct=float(np.array(ev.mae_pct)),
         ts=ts,
         rho_rom=rho_rom,
+        Vprime_rom=Vprime_rom,
         obs_idx=obs,
         Te_model=Te_model,
         Te_data=Te_data,
@@ -190,6 +283,11 @@ def make_debug_plot_and_npz(bundle0, ev, out_png: str, out_npz: str, div_inf_ts=
         Te_model_edge=Te_model[:, -1],
         edge_idx=edge_idx,
         rho_edge=rho_edge,
+        min_dr=min_dr,
+        dr_floor=dr_floor,
+        min_Vprime=min_Vprime,
+        min_denom=min_denom,
+        denom_floor=denom_floor,
         div_inf_ts=np.array(div_inf_ts[:L], dtype=float) if div_inf_ts is not None else None,
         src_inf_ts=np.array(src_inf_ts[:L], dtype=float) if src_inf_ts is not None else None,
         div_ts=np.array(div_ts[:L], dtype=float) if div_ts is not None else None,
@@ -199,7 +297,19 @@ def make_debug_plot_and_npz(bundle0, ev, out_png: str, out_npz: str, div_inf_ts=
 
 def run_debug_shot(config_path: str, shot_id: int, ckpt_path: str = None, out_dir: str = "out", solver_throw: bool = False):
     with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f)
+        cfg_cli = yaml.safe_load(f)
+
+    cfg = cfg_cli
+    try:
+        model_id = cfg_cli["output"].get("model_id")
+        base_log_dir = cfg_cli["output"].get("log_dir", "logs")
+        saved_cfg_path = os.path.join(base_log_dir, model_id, "config.yaml")
+        if model_id is not None and os.path.exists(saved_cfg_path):
+            with open(saved_cfg_path, "r") as f:
+                cfg = yaml.safe_load(f)
+            print(f"[debug] Using saved training config: {saved_cfg_path}")
+    except Exception as e:
+        print(f"[debug] Could not load saved training config; using CLI config. Reason: {e}")
 
     cfg.setdefault("data", {})
     cfg["data"]["shots"] = [shot_id]
@@ -217,8 +327,9 @@ def run_debug_shot(config_path: str, shot_id: int, ckpt_path: str = None, out_di
     template = build_model_template(cfg, key)
     model_loaded = eqx.tree_deserialise_leaves(ckpt_path, template)
 
-    loss_cfg, solver_name = build_loss_cfg(cfg, solver_throw_override=solver_throw)
-    ev = eval_shot_trajectory(model_loaded, bundle0, loss_cfg, solver_name)
+    loss_cfg = build_loss_cfg(cfg, solver_throw_override=solver_throw)
+    imex_cfg = build_imex_cfg(cfg)
+    ev = eval_shot_trajectory_imex(model_loaded, bundle0, loss_cfg, imex_cfg)
 
     # Build ode_args matching eval_shot_trajectory (valid window only)
     L = int(np.array(bundle0.t_len))
@@ -229,26 +340,22 @@ def run_debug_shot(config_path: str, shot_id: int, ckpt_path: str = None, out_di
     ne_vals_full = bundle0.ne_vals[:L]
     Te_edge_full = bundle0.Te_edge[:L]
 
-    import diffrax
-    ctrl_interp = diffrax.LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
-    ne_interp = diffrax.LinearInterpolation(ts=ts_t_full, ys=ne_vals_full)
-    Te_bc_interp = diffrax.LinearInterpolation(ts=ts_t_full, ys=Te_edge_full)
-    ode_args = (
-        bundle0.rho_rom,
-        bundle0.Vprime_rom,
-        ctrl_interp,
-        bundle0.ctrl_means,
-        bundle0.ctrl_stds,
-        ne_interp,
-        Te_bc_interp,
+    # Evaluate controls on Te grid once.
+    ctrl_interp = LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
+    ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
+    ctrl_norm_ts = (ctrl_vals_ts - bundle0.ctrl_means) / (bundle0.ctrl_stds + 1e-6)
+    ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
+
+    div_ts = jax.vmap(lambda Te_row, zi: model_loaded.compute_divergence_from_values(bundle0.rho_rom, bundle0.Vprime_rom, Te_row, zi))(
+        ev.Te_model,
+        ev.z_ts,
     )
-
-    def _div_src_at(ti, Te_row, zi):
-        div = model_loaded.compute_divergence_only(ti, Te_row, zi, ode_args)
-        src = model_loaded.compute_source(ti, Te_row, zi, ode_args)
-        return div, src
-
-    div_ts, src_ts = jax.vmap(_div_src_at)(ev.ts_t, ev.Te_model, ev.z_ts)
+    src_ts = jax.vmap(lambda Te_row, zi, cn, ne: model_loaded.compute_source_from_values(bundle0.rho_rom, Te_row, zi, ne, cn))(
+        ev.Te_model,
+        ev.z_ts,
+        ctrl_norm_ts,
+        ne_vals_full,
+    )
     div_inf_ts = jnp.max(jnp.abs(div_ts), axis=1)
     src_inf_ts = jnp.max(jnp.abs(src_ts), axis=1)
 

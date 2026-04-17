@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 # scripts/debug_shot.py
 import argparse
+import os
+import sys
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from fusion_ode_identification.debug import run_debug_shot
 

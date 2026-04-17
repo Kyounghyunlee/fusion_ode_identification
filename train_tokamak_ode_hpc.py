@@ -18,10 +18,10 @@ import numpy as np
 import optax
 
 from fusion_ode_identification.data import load_data, log_data_scale
-from fusion_ode_identification.debug import build_loss_cfg as build_debug_loss_cfg, build_model_template, find_best_checkpoint, make_debug_plot_and_npz
+from fusion_ode_identification.debug import build_loss_cfg as build_debug_loss_cfg, build_model_template, find_best_checkpoint, make_debug_plot_and_npz, sanitize_name
 from fusion_ode_identification.model import HybridField, LatentDynamics, SourceNN
-from fusion_ode_identification.loss import eval_shot_trajectory, shot_loss
-from fusion_ode_identification.types import LossCfg
+from fusion_ode_identification.loss import eval_shot_trajectory_imex, shot_loss_imex
+from fusion_ode_identification.types import LossCfg, IMEXConfig
 
 jax.config.update("jax_enable_x64", True)
 
@@ -100,6 +100,9 @@ def main():
     parser.add_argument("--throw", action="store_true", help="Force solver throw=True for debug")
     parser.add_argument("--lbfgs_finetune", action="store_true", help="Run optional single-device L-BFGS finetune after AdamW")
     parser.add_argument("--lbfgs_smoke", action="store_true", help="Quick L-BFGS smoke test: small batch and few iterations")
+    parser.add_argument("--resume_ckpt", type=str, default=None, help="Resume training from a specific checkpoint path")
+    parser.add_argument("--resume_latest_best", action="store_true", help="Resume training from the latest preferred best checkpoint for this model_id")
+    parser.add_argument("--resume_step_offset", type=int, default=0, help="Logical step offset to use for LR schedule and logging when resuming")
     args = parser.parse_args()
 
     # Configure logging early (before any logging.* calls) so INFO shows up.
@@ -114,6 +117,11 @@ def main():
 
     config = load_config(args.config)
 
+    if args.resume_ckpt and args.resume_latest_best:
+        raise ValueError("Use either --resume_ckpt or --resume_latest_best, not both.")
+    if int(args.resume_step_offset) < 0:
+        raise ValueError(f"--resume_step_offset must be >= 0, got {args.resume_step_offset}")
+
     if args.debug_one_shot is not None:
         config.setdefault("data", {})
         config["data"]["shots"] = [int(args.debug_one_shot)]
@@ -125,6 +133,11 @@ def main():
     tr = config.setdefault("training", {})
     ts = int(tr.get("total_steps", 1000))
     ws = int(tr.get("warmup_steps", 0))
+    if (args.resume_ckpt or args.resume_latest_best) and int(tr.get("num_restarts", 1)) != 1:
+        logging.warning(
+            f"[resume] Overriding training.num_restarts={int(tr.get('num_restarts', 1))} -> 1 for resumed training."
+        )
+        tr["num_restarts"] = 1
     if ts <= 0:
         raise ValueError(f"training.total_steps must be > 0, got {ts}")
     if ws < 0:
@@ -142,6 +155,17 @@ def main():
 
     out_dir = "out"
     os.makedirs(out_dir, exist_ok=True)
+
+    resume_ckpt_path = None
+    if args.resume_ckpt is not None:
+        resume_ckpt_path = os.path.abspath(args.resume_ckpt)
+    elif args.resume_latest_best:
+        resume_ckpt_path = find_best_checkpoint(config)
+    if resume_ckpt_path is not None and not os.path.exists(resume_ckpt_path):
+        raise FileNotFoundError(f"Resume checkpoint not found: {resume_ckpt_path}")
+    if resume_ckpt_path is not None:
+        logging.info(f"[resume] Will initialize model from checkpoint: {resume_ckpt_path}")
+        logging.info(f"[resume] Using step offset={int(args.resume_step_offset)} for LR schedule and logging.")
 
     log_every = int(config["training"].get("log_every", 50))
 
@@ -171,24 +195,20 @@ def main():
         config["training"]["lbfgs_batch_shots"] = 1
         config["training"]["lbfgs_tol"] = 1e-4
 
-    all_bundles, rho_rom, rho_cap, obs_idx = load_data(config)
-    n_shots = all_bundles.ts_t.shape[0]
-    logging.info(f"Loaded {n_shots} shots (stacked).")
-
-    log_data_scale(all_bundles, obs_idx)
-
-    logging.info(
-        "bundle shapes: ts_t %s, ts_Te %s, mask %s, rho_rom %s, Vprime_rom %s, t_len %s",
-        all_bundles.ts_t.shape,
-        all_bundles.ts_Te.shape,
-        all_bundles.mask.shape,
-        all_bundles.rho_rom.shape,
-        all_bundles.Vprime_rom.shape,
-        all_bundles.t_len.shape,
-    )
-
     if args.debug_eval_only:
+        # Prefer evaluating with the exact config used during training for this model_id.
         cfg_for_debug = yaml.safe_load(yaml.dump(config))
+        saved_cfg_path = os.path.join(log_dir, "config.yaml")
+        if os.path.exists(saved_cfg_path):
+            try:
+                with open(saved_cfg_path, "r") as f:
+                    cfg_for_debug = yaml.safe_load(f)
+                logging.info(f"[debug_eval_only] Using saved training config: {saved_cfg_path}")
+            except Exception as e:
+                logging.warning(f"[debug_eval_only] Could not load saved training config ({saved_cfg_path}): {e}")
+
+        # Load data using the chosen debug config.
+        all_bundles, rho_rom, rho_cap, obs_idx = load_data(cfg_for_debug)
         shot_array = np.array(all_bundles.shot_id)
         if args.debug_eval_shot is not None:
             match = np.where(shot_array == int(args.debug_eval_shot))[0]
@@ -204,13 +224,14 @@ def main():
         cfg_for_debug["data"]["shots"] = [shot_id]
 
         bundle0 = jax.tree_util.tree_map(lambda x: x[idx0], all_bundles)
+
         ckpt_path = args.debug_ckpt or find_best_checkpoint(cfg_for_debug)
         seed = int(cfg_for_debug.get("training", {}).get("seed", 0))
         key = jax.random.PRNGKey(seed)
         template = build_model_template(cfg_for_debug, key)
         model_loaded = eqx.tree_deserialise_leaves(ckpt_path, template)
 
-        npz_path = os.path.join(config["data"]["data_dir"], f"{shot_id}_torax_training.npz")
+        npz_path = os.path.join(cfg_for_debug["data"]["data_dir"], f"{shot_id}_torax_training.npz")
         try:
             with np.load(npz_path) as d:
                 rho_raw = d["rho"].astype(float)
@@ -223,8 +244,24 @@ def main():
 
         print_model_and_rho_summary(model_loaded, rho_rom, rho_cap, obs_idx)
 
-        loss_cfg_debug, solver_name_debug = build_debug_loss_cfg(cfg_for_debug, solver_throw_override=args.debug_solver_throw)
-        ev = eval_shot_trajectory(model_loaded, bundle0, loss_cfg_debug, solver_name_debug)
+        loss_cfg_debug = build_debug_loss_cfg(cfg_for_debug, solver_throw_override=args.debug_solver_throw)
+        imex_dict_debug = cfg_for_debug.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg_debug = IMEXConfig(
+            theta=float(imex_dict_debug['theta']),
+            dt_base=float(imex_dict_debug['dt_base']),
+            max_steps=int(imex_dict_debug['max_steps']),
+            rtol=float(imex_dict_debug['rtol']),
+            atol=float(imex_dict_debug['atol']),
+            substeps=int(imex_dict_debug.get('substeps', 1)),
+        )
+        ev = eval_shot_trajectory_imex(model_loaded, bundle0, loss_cfg_debug, imex_cfg_debug)
 
         out_png = os.path.join(out_dir, f"debug_shot_{shot_id}.png")
         out_npz = os.path.join(out_dir, f"debug_shot_{shot_id}.npz")
@@ -232,10 +269,37 @@ def main():
         logging.info("Debug artifacts written: %s, %s", out_png, out_npz)
         return
 
+    all_bundles, rho_rom, rho_cap, obs_idx = load_data(config)
+    n_shots = all_bundles.ts_t.shape[0]
+    logging.info(f"Loaded {n_shots} shots (stacked).")
+
+    # If we have fewer shots than devices (common with --debug_one_shot on a multi-GPU allocation),
+    # shrink the device set so pmap batch sizing remains feasible.
+    if n_shots < n_devices:
+        logging.warning(f"[devices] Reducing devices from {n_devices} -> {int(n_shots)} (n_shots < n_devices).")
+        devices = devices[: int(n_shots)]
+        n_devices = len(devices)
+        logging.info(f"[devices] Using devices: {devices} ({n_devices} total)")
+
+    log_data_scale(all_bundles, obs_idx)
+
+    logging.info(
+        "bundle shapes: ts_t %s, ts_Te %s, mask %s, rho_rom %s, Vprime_rom %s, t_len %s",
+        all_bundles.ts_t.shape,
+        all_bundles.ts_Te.shape,
+        all_bundles.mask.shape,
+        all_bundles.rho_rom.shape,
+        all_bundles.Vprime_rom.shape,
+        all_bundles.t_len.shape,
+    )
+
     base_seed = int(config["training"].get("seed", 0))
     global_best_val_loss = float("inf")
     global_best_step = -1
+    global_best_val_loss_ema = float("inf")
+    global_best_step_ema = -1
     failure_logged = 0
+    restart_summaries = []
 
     layers = int(config.get("model", {}).get("layers", 64))
     depth = int(config.get("model", {}).get("depth", 3))
@@ -251,13 +315,13 @@ def main():
         model_error_delta=float(config["training"].get("model_error_delta", 10.0)),
         lambda_z=float(config["training"].get("lambda_z", 1e-4)),
         lambda_zreg=float(config["training"].get("lambda_zreg", 1e-4)),
+        lambda_regime=float(config["training"].get("lambda_regime", 0.0)),
         throw_solver=bool(config["training"].get("throw_solver", False)),
-        solver=str(config["training"].get("solver", "kvaerno5")),
-        rtol=float(config["training"].get("rtol", 1e-3)),
-        atol=float(config["training"].get("atol", 1e-3)),
     )
 
     for restart in range(int(config["training"]["num_restarts"])):
+        resume_this_restart = resume_ckpt_path is not None and restart == 0
+        step_offset = int(args.resume_step_offset) if resume_this_restart else 0
         key = jax.random.PRNGKey(base_seed)
         key = jax.random.fold_in(key, restart)
         key_nn, key_mu = jax.random.split(key)
@@ -276,10 +340,18 @@ def main():
             divergence_clip=divergence_clip,
         )
 
+        if resume_this_restart:
+            model = eqx.tree_deserialise_leaves(resume_ckpt_path, model)
+            logging.info(f"[resume] Loaded model weights from: {resume_ckpt_path}")
+
         print_model_and_rho_summary(model, rho_rom, rho_cap, obs_idx)
 
         total_steps = int(config["training"]["total_steps"])
-        schedule = build_lr_schedule(config)
+        schedule_base = build_lr_schedule(config)
+        if step_offset > 0:
+            schedule = lambda step, _base=schedule_base, _offset=step_offset: _base(step + _offset)
+        else:
+            schedule = schedule_base
         opt_name = str(config["training"]["optimizer"]).lower()
         if not hasattr(optax, opt_name):
             raise ValueError(f"Unknown optax optimizer: {opt_name}")
@@ -323,16 +395,16 @@ def main():
                 ss = ss + jnp.sum(xx * xx)
             return jnp.sqrt(ss)
 
-        @functools.partial(jax.pmap, axis_name="devices", static_broadcasted_argnums=(3, 4))
-        def make_step(params, st, batch_bundles, loss_cfg, solver_name):
+        @functools.partial(jax.pmap, axis_name="devices", static_broadcasted_argnums=(3, 4), devices=devices)
+        def make_step(params, st, batch_bundles, loss_cfg, imex_cfg):
             m = eqx.combine(params, model_static)
 
-            def loss_fn(m, bundles, cfg, solver_name):
-                losses, oks, diags = jax.vmap(lambda b: shot_loss(m, b, cfg, solver_name))(bundles)
+            def loss_fn(m, bundles, cfg, imex_cfg):
+                losses, oks, diags = jax.vmap(lambda b: shot_loss_imex(m, b, cfg, imex_cfg))(bundles)
                 ok_mean = jnp.mean(oks)
                 return jnp.mean(losses), (ok_mean, diags, oks)
 
-            (loss, (ok_rate, diags, oks)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(m, batch_bundles, loss_cfg, solver_name)
+            (loss, (ok_rate, diags, oks)), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(m, batch_bundles, loss_cfg, imex_cfg)
 
             grad_norm_local = safe_global_norm(grads, dtype=GRAD_DTYPE)
             any_bad = jnp.logical_or(~tree_all_finite(grads), ~jnp.isfinite(grad_norm_local))
@@ -399,18 +471,22 @@ def main():
             raise ValueError("device_batch_size must be >= 1")
 
         @functools.partial(jax.jit, static_argnums=(2, 3))
-        def eval_loss_on_indices(params_single, idxs, loss_cfg, solver_name):
+        def eval_loss_on_indices(params_single, idxs, loss_cfg, imex_cfg):
             m = eqx.combine(params_single, model_static)
             b = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
-            losses, oks, diags = jax.vmap(lambda bb: shot_loss(m, bb, loss_cfg, solver_name))(b)
+            losses, oks, diags = jax.vmap(lambda bb: shot_loss_imex(m, bb, loss_cfg, imex_cfg))(b)
             return jnp.mean(losses), losses, jnp.mean(oks), oks, diags
 
         best_val_loss = float("inf")
         best_val_step = -1
+        best_val_loss_ema = float("inf")
+        best_val_step_ema = -1
 
         np_rng = np.random.default_rng(base_seed + 12345 * restart)
 
-        solver_name = str(loss_cfg_base["solver"]).lower()
+        solver_name = str(config.get("training", {}).get("solver", "imex")).lower()
+        if solver_name != "imex":
+            raise ValueError(f"This branch is IMEX-only, but training.solver={solver_name!r}")
         loss_cfg_step = LossCfg(
             huber_delta=loss_cfg_base["huber_delta"],
             lambda_src=loss_cfg_base["lambda_src"],
@@ -419,12 +495,79 @@ def main():
             model_error_delta=loss_cfg_base["model_error_delta"],
             lambda_z=loss_cfg_base["lambda_z"],
             lambda_zreg=loss_cfg_base["lambda_zreg"],
+            lambda_regime=loss_cfg_base["lambda_regime"],
             throw_solver=loss_cfg_base["throw_solver"],
-            rtol=loss_cfg_base["rtol"],
-            atol=loss_cfg_base["atol"],
+        )
+        
+        imex_dict = config.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg = IMEXConfig(
+            theta=float(imex_dict['theta']),
+            dt_base=float(imex_dict['dt_base']),
+            max_steps=int(imex_dict['max_steps']),
+            rtol=float(imex_dict['rtol']),
+            atol=float(imex_dict['atol']),
+            substeps=int(imex_dict.get('substeps', 1)),
         )
 
-        logging.info(f"[lr] lr(step0)={float(schedule(0)):.3e} lr(step_end)={float(schedule(total_steps - 1)):.3e}")
+        def first_existing(paths):
+            for p in paths:
+                if os.path.exists(p):
+                    return p
+            return None
+
+        def eval_checkpoint_mean(path: str) -> float:
+            ckpt_model = eqx.tree_deserialise_leaves(path, model)
+            ckpt_params, _ = eqx.partition(ckpt_model, eqx.is_inexact_array)
+            val_mean_ckpt, _, _, _, _ = eval_loss_on_indices(ckpt_params, jnp.array(val_idx), loss_cfg_step, imex_cfg)
+            return float(val_mean_ckpt)
+
+        raw_name = config["output"]["model_name"]
+        safe_name = sanitize_name(raw_name)
+        best_candidates = [
+            os.path.join(model_dir, f"{raw_name}_best.eqx"),
+            os.path.join(model_dir, f"{safe_name}_best.eqx"),
+        ]
+        best_ema_candidates = [
+            os.path.join(model_dir, f"{raw_name}_best_ema.eqx"),
+            os.path.join(model_dir, f"{safe_name}_best_ema.eqx"),
+        ]
+
+        if resume_this_restart:
+            baseline_raw_path = first_existing(best_candidates) or resume_ckpt_path
+            baseline_ema_path = first_existing(best_ema_candidates) or resume_ckpt_path
+
+            if baseline_raw_path is not None:
+                global_best_val_loss = eval_checkpoint_mean(baseline_raw_path)
+                best_val_loss = global_best_val_loss
+                global_best_step = step_offset
+                best_val_step = step_offset
+                logging.info(
+                    f"[resume] Initialized raw best baseline from {baseline_raw_path}: "
+                    f"val_loss={global_best_val_loss:.6g} step={global_best_step}"
+                )
+
+            if baseline_ema_path is not None:
+                global_best_val_loss_ema = eval_checkpoint_mean(baseline_ema_path)
+                best_val_loss_ema = global_best_val_loss_ema
+                global_best_step_ema = step_offset
+                best_val_step_ema = step_offset
+                logging.info(
+                    f"[resume] Initialized EMA best baseline from {baseline_ema_path}: "
+                    f"val_loss={global_best_val_loss_ema:.6g} step={global_best_step_ema}"
+                )
+
+        effective_total_steps = total_steps + step_offset
+        logging.info(
+            f"[lr] lr(step0)={float(schedule(0)):.3e} lr(step_end)={float(schedule(total_steps - 1)):.3e} "
+            f"step_offset={step_offset} effective_total_steps={effective_total_steps}"
+        )
 
         # ---- One-time warmup to make the first compile visible ----
         print("[compile] Warming up (first pmap compile)...", flush=True)
@@ -438,7 +581,7 @@ def main():
 
         _time_block(
             "make_step compile+run",
-            lambda: make_step(model_params, opt_state, warm_sharded, loss_cfg_step, solver_name),
+            lambda: make_step(model_params, opt_state, warm_sharded, loss_cfg_step, imex_cfg),
         )
         print("[compile] Warmup done. Starting loop.", flush=True)
         logging.info("[compile] Warmup done. Starting loop.")
@@ -464,7 +607,7 @@ def main():
             batch_bundle = jax.tree_util.tree_map(lambda x: x[batch_indices], all_bundles)
             sharded_bundle = jax.tree_util.tree_map(lambda x: x.reshape((n_devices, device_batch_size) + x.shape[1:]), batch_bundle)
 
-            loss, ok_rate, params, opt_state, grad_norm, upd_norm, grad_is_nan, diags, oks = make_step(model_params, opt_state, sharded_bundle, loss_cfg_step, solver_name)
+            loss, ok_rate, params, opt_state, grad_norm, upd_norm, grad_is_nan, diags, oks = make_step(model_params, opt_state, sharded_bundle, loss_cfg_step, imex_cfg)
             model_params = params
 
             if ema_params is not None and not bool(grad_is_nan[0]):
@@ -499,39 +642,96 @@ def main():
 
             if (step % log_every) == 0 or step == total_steps - 1:
                 elapsed = time.time() - start_time
+                effective_step = step + step_offset
                 current_lr = float(schedule(step))
                 params0 = jax.tree_util.tree_map(lambda x: x[0], model_params)
-                val_mean, val_vec, val_ok, val_oks, val_diags = eval_loss_on_indices(params0, jnp.array(val_idx), loss_cfg_step, solver_name)
-                val_mean_f = float(val_mean)
+                val_mean_raw, val_vec, val_ok, val_oks, val_diags = eval_loss_on_indices(
+                    params0, jnp.array(val_idx), loss_cfg_step, imex_cfg
+                )
+                val_mean_f = float(val_mean_raw)
+
+                val_mean_ema_f = float("nan")
+                if ema_params is not None:
+                    ema0 = jax.tree_util.tree_map(lambda x: x[0], ema_params)
+                    val_mean_ema, _, val_ok_ema, _, _ = eval_loss_on_indices(
+                        ema0, jnp.array(val_idx), loss_cfg_step, imex_cfg
+                    )
+                    val_mean_ema_f = float(val_mean_ema)
                 val_p90 = float(jnp.percentile(val_vec, 90.0))
                 val_max = float(jnp.max(val_vec))
                 val_mask = jnp.where(val_oks > 0.5, 1.0, 0.0)
                 mae_eV_val = float(jnp.sum(val_diags[:, 3] * val_mask) / (jnp.sum(val_mask) + 1e-8))
                 mae_pct_val = float(jnp.sum(val_diags[:, 4] * val_mask) / (jnp.sum(val_mask) + 1e-8))
-                logging.info(f"[restart {restart}] step {step}/{total_steps} train={loss_val:.6g} val={val_mean_f:.6g} val_p90={val_p90:.6g} val_max={val_max:.6g} ok={ok_rate_val:.3f} val_ok={float(val_ok):.3f} mae_eV={mae_eV_val:.3f} mae_pct={mae_pct_val:.3f} grad={grad_norm_val:.4e} upd={float(upd_norm[0]):.4e} lr={current_lr:.2e} nan={is_nan_val} elapsed={elapsed:.1f}s")
+                mean_abs_div = float(jnp.sum(val_diags[:, 5] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                mean_abs_src = float(jnp.sum(val_diags[:, 6] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                src_over_diff = float(jnp.sum(val_diags[:, 7] * val_mask) / (jnp.sum(val_mask) + 1e-8))
+                logging.info(
+                    f"[restart {restart}] step {effective_step}/{effective_total_steps} "
+                    f"train={loss_val:.6g} val_raw={val_mean_f:.6g} val_ema={val_mean_ema_f:.6g} "
+                    f"val_p90={val_p90:.6g} val_max={val_max:.6g} "
+                    f"ok={ok_rate_val:.3f} val_ok_raw={float(val_ok):.3f} "
+                    f"mae_eV={mae_eV_val:.3f} mae_pct={mae_pct_val:.3f} "
+                    f"|diff|={mean_abs_div:.3e} |src|={mean_abs_src:.3e} src/diff={src_over_diff:.3f} "
+                    f"grad={grad_norm_val:.4e} upd={float(upd_norm[0]):.4e} lr={current_lr:.2e} nan={is_nan_val} elapsed={elapsed:.1f}s"
+                )
 
             if ((step % log_every) == 0 or step == total_steps - 1):
+                effective_step = step + step_offset
+                # Track per-restart best for logging, but only overwrite the on-disk "best" checkpoint
+                # when the GLOBAL best (across all restarts) improves.
                 if val_mean_f < best_val_loss:
                     best_val_loss = val_mean_f
-                    best_val_step = restart * total_steps + step
+                    best_val_step = effective_step
+
+                if ema_params is not None and val_mean_ema_f < best_val_loss_ema:
+                    best_val_loss_ema = val_mean_ema_f
+                    best_val_step_ema = effective_step
+
+                if val_mean_f < global_best_val_loss:
+                    global_best_val_loss = val_mean_f
+                    global_best_step = effective_step
                     params_save = jax.tree_util.tree_map(lambda x: x[0], model_params)
                     model_save = eqx.combine(params_save, model_static)
                     save_path = os.path.join(model_dir, f"{config['output']['model_name']}_best.eqx")
                     eqx.tree_serialise_leaves(save_path, model_save)
-                    logging.info(f"New best (val) model saved: {save_path} val_loss={best_val_loss:.6g} step={best_val_step}")
+                    logging.info(
+                        f"New GLOBAL best (val) model saved: {save_path} val_loss={global_best_val_loss:.6g} step={global_best_step}"
+                    )
 
-                    if best_val_loss < global_best_val_loss:
-                        global_best_val_loss = best_val_loss
-                        global_best_step = best_val_step
+                if ema_params is not None and val_mean_ema_f < global_best_val_loss_ema:
+                    global_best_val_loss_ema = val_mean_ema_f
+                    global_best_step_ema = effective_step
+                    ema_params_save = jax.tree_util.tree_map(lambda x: x[0], ema_params)
+                    ema_model_save = eqx.combine(ema_params_save, model_static)
+                    ema_path = os.path.join(model_dir, f"{config['output']['model_name']}_best_ema.eqx")
+                    eqx.tree_serialise_leaves(ema_path, ema_model_save)
+                    logging.info(
+                        f"New GLOBAL best (val, EMA) model saved: {ema_path} val_loss={global_best_val_loss_ema:.6g} step={global_best_step_ema}"
+                    )
 
-                    if ema_params is not None:
-                        ema_params_save = jax.tree_util.tree_map(lambda x: x[0], ema_params)
-                        ema_model_save = eqx.combine(ema_params_save, model_static)
-                        ema_path = os.path.join(model_dir, f"{config['output']['model_name']}_best_ema.eqx")
-                        eqx.tree_serialise_leaves(ema_path, ema_model_save)
-                        logging.info(f"EMA snapshot (val-best) saved: {ema_path}")
+        restart_summaries.append((restart, float(best_val_loss), int(best_val_step), float(best_val_loss_ema), int(best_val_step_ema)))
+        logging.info(
+            f"[restart {restart}] complete. best_val_loss_raw={float(best_val_loss):.6g} best_step_raw={int(best_val_step)} "
+            f"best_val_loss_ema={float(best_val_loss_ema):.6g} best_step_ema={int(best_val_step_ema)}"
+        )
 
-    logging.info(f"Training complete. best_val_loss={global_best_val_loss:.6g} best_step={global_best_step}")
+    if restart_summaries:
+        per_restart = " | ".join(
+            [
+                f"r{r}:raw={l:.6g}@{s},ema={le:.6g}@{se}"
+                for (r, l, s, le, se) in restart_summaries
+            ]
+        )
+        logging.info(
+            f"Training complete. global_best_val_loss_raw={global_best_val_loss:.6g} global_best_step_raw={global_best_step} "
+            f"global_best_val_loss_ema={global_best_val_loss_ema:.6g} global_best_step_ema={global_best_step_ema} "
+            f"per_restart=[{per_restart}]"
+        )
+    else:
+        logging.info(
+            f"Training complete. global_best_val_loss_raw={global_best_val_loss:.6g} global_best_step_raw={global_best_step} "
+            f"global_best_val_loss_ema={global_best_val_loss_ema:.6g} global_best_step_ema={global_best_step_ema}"
+        )
 
     if args.lbfgs_finetune or bool(config.get("training", {}).get("lbfgs_finetune", False)):
         try:
@@ -545,26 +745,93 @@ def main():
             logging.warning(f"No best checkpoint found at {best_path}; skipping L-BFGS finetune.")
             return
 
-        key_nn = jax.random.PRNGKey(int(config["training"].get("seed", 0)))
-        template_model = HybridField(
-            nn=SourceNN(key_nn, source_scale=source_scale, layers=layers, depth=depth),
-            latent=LatentDynamics(
-                alpha=jnp.array(1.0, dtype=jnp.float64),
-                beta=jnp.array(1.0, dtype=jnp.float64),
-                gamma=jnp.array(1.0, dtype=jnp.float64),
-                mu_weights=jnp.zeros((3,), dtype=jnp.float64),
-                mu_bias=jnp.array(0.0, dtype=jnp.float64),
-                mu_ref=jnp.array(0.0, dtype=jnp.float64),
-            ),
-            latent_gain=latent_gain,
-        )
+        seed = int(config.get("training", {}).get("seed", 0))
+        key = jax.random.PRNGKey(seed)
+        # Use the same template builder as training/debug so static fields match.
+        template_model = build_model_template(config, key)
         model_best = eqx.tree_deserialise_leaves(best_path, template_model)
 
-        n_shots = all_bundles.ts_t.shape[0]
+        # Re-create a deterministic train/val split for finetune selection and promotion.
+        n_shots = int(all_bundles.ts_t.shape[0])
+        rng_lbfgs = np.random.default_rng(seed + 1000 * 0)
+        all_idx = np.arange(n_shots)
+        rng_lbfgs.shuffle(all_idx)
+        if n_shots < 3:
+            val_idx_lbfgs = all_idx
+            train_idx_lbfgs = all_idx
+        else:
+            n_val = max(2, int(0.2 * n_shots))
+            n_val = min(n_val, n_shots - 1)
+            val_idx_lbfgs = all_idx[:n_val]
+            train_idx_lbfgs = all_idx[n_val:]
+
+        # Evaluate the current best checkpoint on the validation metric used during training,
+        # so we can decide whether finetune should replace it.
+        try:
+            params_best, _ = eqx.partition(model_best, eqx.is_inexact_array)
+            val_mean_best, _, _, _, _ = eval_loss_on_indices(
+                params_best, jnp.array(val_idx_lbfgs), loss_cfg_step, imex_cfg
+            )
+            val_mean_best_f = float(val_mean_best)
+        except Exception as e:
+            logging.warning(f"[lbfgs] Could not evaluate baseline val loss for best checkpoint ({best_path}): {e}")
+            val_mean_best_f = float("inf")
+
+        # Choose finetune shots from TRAIN ONLY.
+        # Default behavior: pick the hardest k (deterministic).
+        # Optional behavior: resample/shuffle the k shots each L-BFGS "epoch".
         k = int(config.get("training", {}).get("lbfgs_batch_shots", 1))
-        k = max(1, min(k, n_shots))
-        idxs = jnp.arange(k)
-        fixed_bundle = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
+        k = max(1, min(k, int(train_idx_lbfgs.size)))
+        lbfgs_epochs = int(config.get("training", {}).get("lbfgs_epochs", 1))
+        lbfgs_epochs = max(1, lbfgs_epochs)
+        lbfgs_resample = bool(config.get("training", {}).get("lbfgs_resample_shots_each_epoch", False))
+        lbfgs_maxiter_total = int(config.get("training", {}).get("lbfgs_maxiter", 50))
+        lbfgs_maxiter_per_epoch = config.get("training", {}).get("lbfgs_maxiter_per_epoch", None)
+        if lbfgs_maxiter_per_epoch is None:
+            lbfgs_maxiter_per_epoch_i = lbfgs_maxiter_total
+        else:
+            lbfgs_maxiter_per_epoch_i = int(lbfgs_maxiter_per_epoch)
+        lbfgs_maxiter_per_epoch_i = max(1, lbfgs_maxiter_per_epoch_i)
+
+        # Candidate pool for (optional) resampling.
+        # We try to exclude shots that failed evaluation (oks ~ 0), but fall back to all train shots.
+        cand_idx = np.array(train_idx_lbfgs)
+        cand_losses = None
+        try:
+            _train_mean, train_losses, _train_ok, train_oks, _train_diags = eval_loss_on_indices(
+                params_best, jnp.array(train_idx_lbfgs), loss_cfg_step, imex_cfg
+            )
+            train_losses_np = np.array(train_losses)
+            train_oks_np = np.array(train_oks)
+            ok_mask = train_oks_np > 0.5
+            if np.any(ok_mask):
+                cand_idx = np.array(train_idx_lbfgs)[ok_mask]
+                cand_losses = train_losses_np[ok_mask]
+            else:
+                cand_idx = np.array(train_idx_lbfgs)
+                cand_losses = train_losses_np
+        except Exception as e:
+            logging.warning(f"[lbfgs] Could not score train shots for selection; falling back to all train shots. Reason: {e}")
+
+        def _select_fixed_shots() -> np.ndarray:
+            if (cand_losses is not None) and (cand_losses.size == cand_idx.size):
+                hard_order = np.argsort(-cand_losses)
+                return cand_idx[hard_order[:k]]
+            return cand_idx[:k]
+
+        if not lbfgs_resample:
+            hard_idx = _select_fixed_shots()
+            logging.info(f"[lbfgs] Finetune shots (fixed): {hard_idx.tolist()}")
+
+        if lbfgs_resample and lbfgs_epochs > 1:
+            logging.info(
+                f"[lbfgs] Resampling enabled: epochs={lbfgs_epochs}, k={k}, maxiter/epoch={lbfgs_maxiter_per_epoch_i} "
+                f"(note: stochastic shot selection; each epoch is deterministic within its solver run)"
+            )
+        elif lbfgs_resample:
+            logging.info(
+                f"[lbfgs] Resampling enabled: epochs={lbfgs_epochs}, k={k}, maxiter/epoch={lbfgs_maxiter_per_epoch_i}"
+            )
 
         lcb = dict(loss_cfg_base)
         loss_cfg_ft = LossCfg(
@@ -575,51 +842,88 @@ def main():
             model_error_delta=lcb["model_error_delta"],
             lambda_z=lcb["lambda_z"],
             lambda_zreg=lcb["lambda_zreg"],
+            lambda_regime=lcb["lambda_regime"],
             throw_solver=lcb["throw_solver"],
-            rtol=lcb["rtol"],
-            atol=lcb["atol"],
         )
 
-        def extract_train_vars(m: HybridField):
-            w = m.nn.mlp.layers[-1].weight
-            b = m.nn.mlp.layers[-1].bias
-            ld = m.latent
-            return (w, b, ld.alpha, ld.beta, ld.gamma, ld.mu_weights, ld.mu_bias, ld.mu_ref)
+        # Finetune full inexact parameter tree for a meaningful post-polish.
+        base_vars, static_ft = eqx.partition(model_best, eqx.is_inexact_array)
 
-        def set_train_vars(m: HybridField, vars_tuple):
-            (w, b, alpha, beta, gamma, mu_w, mu_b, mu_ref) = vars_tuple
-            m1 = eqx.tree_at(lambda mm: mm.nn.mlp.layers[-1].weight, m, w)
-            m1 = eqx.tree_at(lambda mm: mm.nn.mlp.layers[-1].bias, m1, b)
-            m1 = eqx.tree_at(lambda mm: mm.latent.alpha, m1, alpha)
-            m1 = eqx.tree_at(lambda mm: mm.latent.beta, m1, beta)
-            m1 = eqx.tree_at(lambda mm: mm.latent.gamma, m1, gamma)
-            m1 = eqx.tree_at(lambda mm: mm.latent.mu_weights, m1, mu_w)
-            m1 = eqx.tree_at(lambda mm: mm.latent.mu_bias, m1, mu_b)
-            m1 = eqx.tree_at(lambda mm: mm.latent.mu_ref, m1, mu_ref)
-            return m1
+        imex_dict_ft = config.get('training', {}).get('imex', {
+            'theta': 1.0,
+            'dt_base': 0.001,
+            'max_steps': 50000,
+            'rtol': 1.0e-4,
+            'atol': 1.0e-6,
+            'substeps': 1,
+        })
+        imex_cfg_ft = IMEXConfig(
+            theta=float(imex_dict_ft['theta']),
+            dt_base=float(imex_dict_ft['dt_base']),
+            max_steps=int(imex_dict_ft['max_steps']),
+            rtol=float(imex_dict_ft['rtol']),
+            atol=float(imex_dict_ft['atol']),
+            substeps=int(imex_dict_ft.get('substeps', 1)),
+        )
 
-        base_vars = extract_train_vars(model_best)
-
-        def objective(train_vars):
-            m_full = set_train_vars(model_best, train_vars)
-            solver_name_ft = str(loss_cfg_base["solver"]).lower()
-            losses, oks, _ = jax.vmap(lambda b: shot_loss(m_full, b, loss_cfg_ft, solver_name_ft))(fixed_bundle)
-            return jnp.mean(losses)
-
-        maxiter = int(config.get("training", {}).get("lbfgs_maxiter", 50))
         history = int(config.get("training", {}).get("lbfgs_history", 10))
         tol = float(config.get("training", {}).get("lbfgs_tol", 1e-6))
-        solver = LBFGS(fun=objective, maxiter=maxiter, tol=tol, history_size=history)
 
-        logging.info(f"[lbfgs] Starting finetune on {k} shot(s): maxiter={maxiter}, history={history}, tol={tol}")
-        vars_opt, state = solver.run(base_vars)
-        loss_ft = float(state.value)
-        logging.info(f"[lbfgs] Finetune complete. loss={loss_ft:.6g}, iters={int(state.iter_num)}")
+        vars_cur = base_vars
+        last_state = None
+        for epoch in range(lbfgs_epochs):
+            if lbfgs_resample:
+                pool = np.array(cand_idx, copy=True)
+                rng_lbfgs.shuffle(pool)
+                sel = pool[:k]
+            else:
+                sel = hard_idx
 
-        model_ft = set_train_vars(model_best, vars_opt)
+            idxs = jnp.array(sel)
+            fixed_bundle = jax.tree_util.tree_map(lambda x: x[idxs], all_bundles)
+
+            def objective(train_vars):
+                m_full = eqx.combine(train_vars, static_ft)
+                losses, oks, _ = jax.vmap(lambda b: shot_loss_imex(m_full, b, loss_cfg_ft, imex_cfg_ft))(fixed_bundle)
+                return jnp.mean(losses)
+
+            solver = LBFGS(fun=objective, maxiter=lbfgs_maxiter_per_epoch_i, tol=tol, history_size=history)
+            logging.info(
+                f"[lbfgs] Epoch {epoch + 1}/{lbfgs_epochs} on {k} shot(s): {sel.tolist()} "
+                f"maxiter={lbfgs_maxiter_per_epoch_i}, history={history}, tol={tol}"
+            )
+            vars_cur, last_state = solver.run(vars_cur)
+
+        loss_ft = float(last_state.value) if last_state is not None else float("nan")
+        iters_ft = int(last_state.iter_num) if last_state is not None else -1
+        logging.info(f"[lbfgs] Finetune complete. loss={loss_ft:.6g}, iters={iters_ft}")
+
+        model_ft = eqx.combine(vars_cur, static_ft)
         save_path_ft = os.path.join(model_dir, f"{config['output']['model_name']}_finetuned.eqx")
         eqx.tree_serialise_leaves(save_path_ft, model_ft)
         logging.info(f"[lbfgs] Saved finetuned model: {save_path_ft}")
+
+        # If finetune improves validation loss, promote it to the canonical "best" checkpoint.
+        try:
+            params_ft, _ = eqx.partition(model_ft, eqx.is_inexact_array)
+            val_mean_ft, _, _, _, _ = eval_loss_on_indices(
+                params_ft, jnp.array(val_idx_lbfgs), loss_cfg_step, imex_cfg
+            )
+            val_mean_ft_f = float(val_mean_ft)
+            logging.info(
+                f"[lbfgs] Validation: baseline_best={val_mean_best_f:.6g} finetuned={val_mean_ft_f:.6g}"
+            )
+
+            if val_mean_ft_f < val_mean_best_f:
+                eqx.tree_serialise_leaves(best_path, model_ft)
+                logging.info(
+                    f"[lbfgs] Finetuned model improved validation; updated best checkpoint: {best_path} "
+                    f"val_loss={val_mean_ft_f:.6g}"
+                )
+            else:
+                logging.info("[lbfgs] Finetuned model did not improve validation; keeping existing best checkpoint.")
+        except Exception as e:
+            logging.warning(f"[lbfgs] Could not evaluate/promote finetuned checkpoint: {e}")
 
 
 if __name__ == "__main__":

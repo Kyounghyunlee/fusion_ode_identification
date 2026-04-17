@@ -26,3 +26,6 @@ simulate_outputs.npz
 # Training and chat logs
 logs/
 
+# Model checkpoints and eqx files
+*.ckpt
+*.eqx

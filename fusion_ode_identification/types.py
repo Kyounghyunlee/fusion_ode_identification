@@ -50,6 +50,15 @@ class LossCfg(NamedTuple):
     model_error_delta: float
     lambda_z: float
     lambda_zreg: float
+    lambda_regime: float
     throw_solver: bool
+
+
+class IMEXConfig(NamedTuple):
+    """IMEX solver configuration."""
+    theta: float
+    dt_base: float
+    max_steps: int
     rtol: float
     atol: float
+    substeps: int
