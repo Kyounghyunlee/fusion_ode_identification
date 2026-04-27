@@ -8,7 +8,9 @@ import jax.numpy as jnp
 class ShotBundle(NamedTuple):
     ts_t: jnp.ndarray
     ts_Te: jnp.ndarray
+    ts_Te_raw: jnp.ndarray
     mask: jnp.ndarray
+    reliable_mask: jnp.ndarray
     obs_idx: jnp.ndarray
     regime_ts: jnp.ndarray
     regime_mask: jnp.ndarray

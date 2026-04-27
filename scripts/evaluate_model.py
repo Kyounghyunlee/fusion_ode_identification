@@ -104,7 +104,9 @@ jax.config.update("jax_enable_x64", True)
 class EvalBundle(NamedTuple):
     ts_t: jnp.ndarray
     ts_Te: jnp.ndarray
+    ts_Te_raw: jnp.ndarray
     mask: jnp.ndarray
+    reliable_mask: jnp.ndarray
     Te0: jnp.ndarray
     z0: float
     shot_id: int
@@ -134,7 +136,9 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
 
         ts_t = jnp.asarray(stacked.ts_t[i, :t_len])
         ts_Te = jnp.asarray(stacked.ts_Te[i, :t_len])
+        ts_Te_raw = jnp.asarray(stacked.ts_Te_raw[i, :t_len])
         mask = jnp.asarray(stacked.mask[i, :t_len])
+        reliable_mask = jnp.asarray(stacked.reliable_mask[i])
         Te0 = jnp.asarray(stacked.Te0[i])
         z0 = float(stacked.z0[i])
         rho = jnp.asarray(stacked.rho_rom[i])
@@ -152,7 +156,9 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
             EvalBundle(
                 ts_t=ts_t,
                 ts_Te=ts_Te,
+                ts_Te_raw=ts_Te_raw,
                 mask=mask,
+                reliable_mask=reliable_mask,
                 Te0=Te0,
                 z0=z0,
                 shot_id=shot_id,
@@ -195,13 +201,10 @@ def load_model(model_path, config):
     return eqx.tree_deserialise_leaves(model_path, model)
 
 
-def masked_error_metrics_weighted(pred, obs, mask):
-    # Exclude Dirichlet boundary node (last column) to match training loss.
-    if pred.shape[-1] >= 2:
-        pred = pred[:, :-1]
-        obs = obs[:, :-1]
-        mask = mask[:, :-1]
+def _observation_weight_grid(mask, reliable_mask=None):
     mask = mask.astype(jnp.float64)
+    if reliable_mask is not None:
+        mask = mask * reliable_mask[None, :].astype(jnp.float64)
     col_cov = jnp.mean(mask, axis=0)
     has_obs = col_cov > 0
     inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
@@ -209,9 +212,20 @@ def masked_error_metrics_weighted(pred, obs, mask):
     col_weight = jnp.where(
         inv_sum > 0,
         inv / (inv_sum + 1e-8),
-        jnp.ones_like(col_cov) / col_cov.size,
+        jnp.ones_like(col_cov) / jnp.maximum(col_cov.size, 1),
     )
-    weight_grid = mask * col_weight
+    return mask * col_weight[None, :]
+
+
+def masked_error_metrics_weighted(pred, obs, mask, reliable_mask=None):
+    # Exclude Dirichlet boundary node (last column) to match training loss.
+    if pred.shape[-1] >= 2:
+        pred = pred[:, :-1]
+        obs = obs[:, :-1]
+        mask = mask[:, :-1]
+        if reliable_mask is not None:
+            reliable_mask = reliable_mask[:-1]
+    weight_grid = _observation_weight_grid(mask, reliable_mask=reliable_mask)
     resid = (pred - obs) ** 2
     abs_resid = jnp.sqrt(resid)
     denom = jnp.maximum(jnp.abs(obs), 50.0)
@@ -293,33 +307,55 @@ def analyze_physics_components(model, bundle: EvalBundle, Te_model, zs):
     total = div_vals + src_vals
     return jnp.mean(jnp.abs(total)), jnp.mean(jnp.abs(src_vals))
 
-def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, plots_dir):
+def plot_results(ts, rho, Te_obs_raw, mask, Te_model, zs, shot_id, plots_dir):
     ts_np = np.asarray(ts)
     rho_np = np.asarray(rho)
-    Te_obs_np = np.asarray(Te_obs)
+    Te_obs_np = np.asarray(Te_obs_raw)
+    mask_np = np.asarray(mask)
     Te_model_np = np.asarray(Te_model)
     zs_np = np.asarray(zs)
 
+    Te_obs_plot = np.where(mask_np > 0.5, Te_obs_np, np.nan)
+    finite_obs = Te_obs_plot[np.isfinite(Te_obs_plot)]
+    if finite_obs.size > 0:
+        vmin = float(np.min(finite_obs))
+        vmax = float(np.max(finite_obs))
+    else:
+        finite_model = Te_model_np[np.isfinite(Te_model_np)]
+        if finite_model.size > 0:
+            vmin = float(np.min(finite_model))
+            vmax = float(np.max(finite_model))
+        else:
+            vmin, vmax = 0.0, 1.0
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+
+    obs_cmap = matplotlib.colormaps["inferno"].copy()
+    obs_cmap.set_bad("white")
+    model_cmap = matplotlib.colormaps["inferno"].copy()
+    model_cmap.set_bad("white")
+    Te_model_plot = np.where(np.isfinite(Te_model_np), np.clip(Te_model_np, vmin, vmax), np.nan)
+
     # 1. Temperature Profile Evolution (Heatmap)
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
-    
+
     # Obs
-    c1 = ax[0].contourf(ts_np, rho_np, Te_obs_np.T, levels=20, cmap='inferno')
-    ax[0].set_title(f"Shot {shot_id}: Observed Te")
+    c1 = ax[0].pcolormesh(ts_np, rho_np, Te_obs_plot.T, shading="auto", cmap=obs_cmap, vmin=vmin, vmax=vmax)
+    ax[0].set_title(f"Shot {shot_id}: Measured-only Te")
     ax[0].set_ylabel("rho")
     plt.colorbar(c1, ax=ax[0])
-    
+
     # Model
-    c2 = ax[1].contourf(ts_np, rho_np, Te_model_np.T, levels=20, cmap='inferno')
+    c2 = ax[1].pcolormesh(ts_np, rho_np, Te_model_plot.T, shading="auto", cmap=model_cmap, vmin=vmin, vmax=vmax)
     ax[1].set_title(f"Shot {shot_id}: Model Te")
     ax[1].set_xlabel("Time (s)")
     ax[1].set_ylabel("rho")
     plt.colorbar(c2, ax=ax[1])
-    
+
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, f"shot_{shot_id}_heatmap.png"))
     plt.close()
-    
+
     # 2. Latent Dynamics
     plt.figure(figsize=(10, 4))
     plt.plot(ts_np, zs_np, label='Latent z')
@@ -332,6 +368,26 @@ def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, plots_dir):
     plt.close()
 
 
+def _select_measured_trace_indices(mask_np: np.ndarray, obs_idx, max_traces: int) -> np.ndarray:
+    n_cols = int(mask_np.shape[1])
+    interior_cols = max(n_cols - 1, 1)
+    coverage = mask_np[:, :interior_cols].mean(axis=0)
+    measured_cols = np.flatnonzero(coverage > 0.0)
+
+    if measured_cols.size > 0:
+        if measured_cols.size <= max_traces:
+            return measured_cols.astype(int)
+
+        chunks = np.array_split(measured_cols, max_traces)
+        return np.array([int(chunk[len(chunk) // 2]) for chunk in chunks if chunk.size > 0], dtype=int)
+
+    fallback = np.array(obs_idx, dtype=int)
+    fallback = fallback[(fallback >= 0) & (fallback < interior_cols)]
+    if fallback.size == 0:
+        fallback = np.arange(min(max_traces, interior_cols), dtype=int)
+    return fallback[:max_traces]
+
+
 def plot_time_series(ts, rho, Te_obs, Te_model, mask, obs_idx, shot_id, plots_dir, max_traces: int = 6):
     ts_np = np.asarray(ts)
     rho_np = np.asarray(rho)
@@ -339,32 +395,39 @@ def plot_time_series(ts, rho, Te_obs, Te_model, mask, obs_idx, shot_id, plots_di
     Te_model_np = np.asarray(Te_model)
     mask_np = np.asarray(mask)
 
-    idxs = np.array(obs_idx)
-    if idxs.size == 0:
-        idxs = np.arange(min(5, Te_obs_np.shape[1]))
-    idxs = idxs[:max_traces]
+    idxs = _select_measured_trace_indices(mask_np, obs_idx, max_traces)
 
     n_rows = idxs.size
     fig, axes = plt.subplots(n_rows, 1, figsize=(12, 3 * n_rows), sharex=True)
     axes = np.atleast_1d(axes)
 
-    obs_labeled = False
+    measured_labeled = False
     for ax, idx in zip(axes, idxs):
-        ax.plot(ts_np, Te_model_np[:, idx], label="Model", linewidth=2.0, color="tab:blue")
+        ax.plot(ts_np, Te_model_np[:, idx], label="Model", linewidth=2.0, color="tab:blue", zorder=2)
 
         obs_mask = mask_np[:, idx] > 0.5
         if np.any(obs_mask):
-            ax.scatter(ts_np[obs_mask], Te_obs_np[obs_mask, idx], label="Observed" if not obs_labeled else None, color="tab:orange", s=14, alpha=0.8)
-            obs_labeled = True
+            ax.plot(
+                ts_np[obs_mask],
+                Te_obs_np[obs_mask, idx],
+                label="Measured" if not measured_labeled else None,
+                color="tab:orange",
+                linewidth=1.25,
+                marker="o",
+                markersize=3.2,
+                alpha=0.95,
+                zorder=3,
+            )
+            measured_labeled = True
 
         ax.set_ylabel(f"Te @ rho={rho_np[idx]:.2f}")
         ax.grid(True, alpha=0.3)
 
     axes[-1].set_xlabel("Time (s)")
-    if obs_labeled:
+    if measured_labeled:
         axes[0].legend(loc="best")
 
-    fig.suptitle(f"Shot {shot_id}: Model vs Observation (time series)")
+    fig.suptitle(f"Shot {shot_id}: Model vs Measured Te (time series)")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(os.path.join(plots_dir, f"shot_{shot_id}_timeseries.png"))
     plt.close(fig)
@@ -483,12 +546,22 @@ def main():
     report = {
         "model_config": config['model'],
         "training_config": config['training'],
+        "observability": {
+            "reliable_cov_min": float(config.get("data", {}).get("reliable_cov_min", 0.10)),
+            "reliable_rho_min": float(config.get("data", {}).get("reliable_rho_min", 0.80)),
+        },
         "shot_metrics": {}
     }
     
     total_mse = 0.0
     total_mae_eV = 0.0
     total_mae_pct = 0.0
+    annulus_total_mse = 0.0
+    annulus_total_mae_eV = 0.0
+    annulus_total_mae_pct = 0.0
+    outside_total_mse = 0.0
+    outside_total_mae_eV = 0.0
+    outside_total_mae_pct = 0.0
     
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
@@ -496,10 +569,37 @@ def main():
 
         # Match the training-time weighting so offline evaluation is comparable.
         mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
-        print(f"  MSE: {mse:.4f} | MAE: {mae_eV:.2f} eV | MAE%: {mae_pct:.2f}")
+        annulus_mse, annulus_mae_eV, annulus_mae_pct = masked_error_metrics_weighted(
+            Te_model,
+            bundle.ts_Te,
+            bundle.mask,
+            bundle.reliable_mask,
+        )
+        outside_mse, outside_mae_eV, outside_mae_pct = masked_error_metrics_weighted(
+            Te_model,
+            bundle.ts_Te,
+            bundle.mask,
+            1.0 - bundle.reliable_mask,
+        )
+        print(
+            "  Legacy MSE: {:.4f} | MAE: {:.2f} eV | MAE%: {:.2f} | "
+            "Annulus MAE: {:.2f} eV | Outside-annulus MAE: {:.2f} eV".format(
+                mse,
+                mae_eV,
+                mae_pct,
+                annulus_mae_eV,
+                outside_mae_eV,
+            )
+        )
         total_mse += mse
         total_mae_eV += mae_eV
         total_mae_pct += mae_pct
+        annulus_total_mse += annulus_mse
+        annulus_total_mae_eV += annulus_mae_eV
+        annulus_total_mae_pct += annulus_mae_pct
+        outside_total_mse += outside_mse
+        outside_total_mae_eV += outside_mae_eV
+        outside_total_mae_pct += outside_mae_pct
         
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
@@ -512,6 +612,16 @@ def main():
             "mse": mse,
             "mae_eV": mae_eV,
             "mae_pct": mae_pct,
+            "annulus_metrics": {
+                "mse": annulus_mse,
+                "mae_eV": annulus_mae_eV,
+                "mae_pct": annulus_mae_pct,
+            },
+            "outside_annulus_metrics": {
+                "mse": outside_mse,
+                "mae_eV": outside_mae_eV,
+                "mae_pct": outside_mae_pct,
+            },
             "z_stats": {"min": z_min, "max": z_max, "std": z_std},
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
@@ -522,13 +632,19 @@ def main():
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
         rho_vals = np.array(bundle.rho)
-        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, zs, bundle.shot_id, plots_dir)
-        plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
+        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te_raw, bundle.mask, Te_model, zs, bundle.shot_id, plots_dir)
+        plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te_raw, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
     report["overall_metrics"] = {
         "mean_mse": total_mse / len(eval_bundles),
         "mean_mae_eV": total_mae_eV / len(eval_bundles),
         "mean_mae_pct": total_mae_pct / len(eval_bundles),
+        "annulus_mean_mse": annulus_total_mse / len(eval_bundles),
+        "annulus_mean_mae_eV": annulus_total_mae_eV / len(eval_bundles),
+        "annulus_mean_mae_pct": annulus_total_mae_pct / len(eval_bundles),
+        "outside_annulus_mean_mse": outside_total_mse / len(eval_bundles),
+        "outside_annulus_mean_mae_eV": outside_total_mae_eV / len(eval_bundles),
+        "outside_annulus_mean_mae_pct": outside_total_mae_pct / len(eval_bundles),
     }
     
     # Save Report

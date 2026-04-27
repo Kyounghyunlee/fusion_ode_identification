@@ -22,6 +22,29 @@ def pseudo_huber(r, delta):
 # ==================== IMEX-Based Loss and Evaluation ====================
 
 
+def _observation_weight_grid(mask_obs, time_mask=None, reliable_mask=None):
+    mask_use = mask_obs.astype(jnp.float64)
+    if time_mask is not None:
+        mask_use = mask_use * time_mask[:, None].astype(jnp.float64)
+        denom = jnp.sum(time_mask.astype(jnp.float64))
+    else:
+        denom = jnp.array(mask_use.shape[0], dtype=jnp.float64)
+    if reliable_mask is not None:
+        mask_use = mask_use * reliable_mask[None, :].astype(jnp.float64)
+
+    denom = jnp.maximum(denom, 1.0)
+    col_cov = jnp.sum(mask_use, axis=0) / denom
+    has_obs = col_cov > 0
+    inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
+    inv_sum = jnp.sum(inv)
+    col_weight = jnp.where(
+        inv_sum > 0,
+        inv / (inv_sum + 1e-8),
+        jnp.ones_like(col_cov) / jnp.maximum(col_cov.size, 1),
+    )
+    return mask_use * col_weight[None, :]
+
+
 def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXConfig):
     """
     Shot loss using IMEX time integration.
@@ -40,6 +63,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     Te_edge_full = bundle.Te_edge
     ts_Te_full = bundle.ts_Te
     mask_full = bundle.mask
+    reliable_mask_full = bundle.reliable_mask
 
     T_max = ts_t_full.shape[0]
     time_mask = (jnp.arange(T_max, dtype=jnp.int32) < t_len).astype(jnp.float64)
@@ -132,20 +156,11 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         tm = time_mask.astype(jnp.float64)
         tm2 = tm[:, None]
 
-        mask_use = mask_full[:, use_cols].astype(jnp.float64) * tm2
-
-        # Inverse-coverage weighting: each radius gets comparable total weight
-        # even when it is sparsely observed.
-        col_cov = jnp.mean(mask_use, axis=0)  # (N-1,)
-        has_obs = col_cov > 0
-        inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
-        inv_sum = jnp.sum(inv)
-        col_weight = jnp.where(
-            inv_sum > 0,
-            inv / (inv_sum + 1e-8),
-            jnp.ones_like(col_cov) / col_cov.size,
+        weight_grid = _observation_weight_grid(
+            mask_full[:, use_cols],
+            time_mask=tm,
+            reliable_mask=reliable_mask_full[use_cols],
         )
-        weight_grid = mask_use * col_weight[None, :]
 
         resid = Te_model[:, use_cols] - ts_Te_full[:, use_cols]
 
@@ -265,6 +280,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     Te_edge_full = bundle.Te_edge[:L]
     ts_Te_full = bundle.ts_Te[:L]
     mask_full = bundle.mask[:L]
+    reliable_mask_full = bundle.reliable_mask
 
     ctrl_interp = LinearInterpolation(ts=ctrl_t_full, ys=ctrl_vals_full)
     ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
@@ -337,17 +353,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
 
     Te_model = jax.vmap(reconstruct)(Te_hats, Te_bc_ts)
 
-    mask_obs = mask_full[:, use_cols].astype(jnp.float64)
-    col_cov = jnp.mean(mask_obs, axis=0)
-    has_obs = col_cov > 0
-    inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
-    inv_sum = jnp.sum(inv)
-    col_weight = jnp.where(
-        inv_sum > 0,
-        inv / (inv_sum + 1e-8),
-        jnp.ones_like(col_cov) / col_cov.size,
-    )
-    weight_grid = mask_obs * col_weight[None, :]
+    weight_grid = _observation_weight_grid(mask_full[:, use_cols], reliable_mask=reliable_mask_full[use_cols])
     resid = Te_model[:, use_cols] - ts_Te_full[:, use_cols]
 
     abs_resid = jnp.abs(resid)

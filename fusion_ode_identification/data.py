@@ -99,6 +99,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     def interp_profile_to_grid(values_t_s, mask_t_s, rho_src, rho_dst):
         Nt = values_t_s.shape[0]
         out_val = np.full((Nt, rho_dst.size), np.nan, dtype=float)
+        out_raw = np.full((Nt, rho_dst.size), np.nan, dtype=float)
         out_mask = np.zeros_like(out_val)
         for i in range(Nt):
             row_val = values_t_s[i]
@@ -118,6 +119,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             left = float(vs[0])
             right = float(vs[-1])
             out_val[i] = np.interp(rho_dst, rs, vs, left=left, right=right)
+            out_raw[i] = np.interp(rho_dst, rs, vs, left=np.nan, right=np.nan)
             out_mask[i] = np.interp(rho_dst, rs, ms, left=0.0, right=0.0)
         # Fill time rows with no observations by carrying last valid profile forward,
         # then backward-fill any initial missing rows.
@@ -137,7 +139,8 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             out_val = np.nan_to_num(out_val, nan=0.0, posinf=0.0, neginf=0.0)
 
         out_mask = (out_mask > 0.5).astype(float)
-        return out_val, out_mask
+        out_raw = np.where(out_mask > 0.5, out_raw, np.nan)
+        return out_val, out_mask, out_raw
 
     raw_shots: List[dict] = []
 
@@ -171,8 +174,8 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
 
         rho_src = np.array(d["rho"], dtype=float)
         if (rho_src.shape[0] != rho_ref_np.size) or (not np.allclose(rho_src, rho_ref_np)):
-            ts_Te_full, mask_full = interp_profile_to_grid(ts_Te_full, mask_full, rho_src, rho_ref_np)
-            ne_full, ne_mask_full = interp_profile_to_grid(ne_full, ne_mask_full, rho_src, rho_ref_np)
+            ts_Te_full, mask_full, _ = interp_profile_to_grid(ts_Te_full, mask_full, rho_src, rho_ref_np)
+            ne_full, ne_mask_full, _ = interp_profile_to_grid(ne_full, ne_mask_full, rho_src, rho_ref_np)
             Vprime_src = np.array(d["Vprime"], dtype=float)
             rho_order = np.argsort(rho_src)
             rho_src_sorted = rho_src[rho_order]
@@ -256,6 +259,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             f"This codebase is uniform-grid-only. Got data.rho_grid_mode={rho_grid_mode!r} (expected 'uniform')."
         )
 
+    reliable_cov_min = float(data_cfg.get("reliable_cov_min", 0.10))
+    reliable_rho_min = float(data_cfg.get("reliable_rho_min", 0.80))
+
     edge_mode = str(data_cfg.get("edge_bc_mode", "use_last_observed")).lower()
 
     # Uniform grid on [0, 1] for simulation/training.
@@ -291,8 +297,8 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
 
     for shot in raw_shots:
         ts_t = shot["ts_t"]
-        ts_Te_rom, mask_rom = interp_profile_to_grid(shot["ts_Te"], shot["mask"], rho_ref_np, rho_rom)
-        ne_rom, _ = interp_profile_to_grid(shot["ne_vals"], shot["ne_mask"], rho_ref_np, rho_rom)
+        ts_Te_rom, mask_rom, ts_Te_raw_rom = interp_profile_to_grid(shot["ts_Te"], shot["mask"], rho_ref_np, rho_rom)
+        ne_rom, _, _ = interp_profile_to_grid(shot["ne_vals"], shot["ne_mask"], rho_ref_np, rho_rom)
 
         Te0 = ts_Te_rom[0]
         if (not np.isfinite(Te0).any()) or (mask_rom[0].sum() == 0):
@@ -366,6 +372,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         bundles_list.append({
             "ts_t": ts_t,
             "ts_Te": jnp.array(ts_Te_rom),
+            "ts_Te_raw": jnp.array(ts_Te_raw_rom),
             "mask": jnp.array(mask_rom),
             "obs_idx": jnp.array(obs_idx, dtype=jnp.int32),
             "regime_ts": shot["regime_ts"],
@@ -394,6 +401,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     t_len_list = [b["t_len"] for b in bundles_list]
     ts_t_stack = pad_time_to_max_strict([b["ts_t"] for b in bundles_list], t_len_list)
     ts_Te_stack = pad_to_max([b["ts_Te"] for b in bundles_list], mode="constant")
+    ts_Te_raw_stack = pad_to_max([b["ts_Te_raw"] for b in bundles_list], mode="constant", constant_values=np.nan)
     mask_stack = pad_to_max([b["mask"] for b in bundles_list], mode="constant")
     regime_ts_stack = pad_to_max([b["regime_ts"] for b in bundles_list], mode="edge")
     regime_mask_stack = pad_to_max([b["regime_mask"] for b in bundles_list], mode="constant")
@@ -417,6 +425,13 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     obs_idx_stack = jnp.stack([b["obs_idx"] for b in bundles_list])
     t_len_stack = jnp.array(t_len_list, dtype=jnp.int32)
 
+    time_mask_stack = (np.arange(ts_t_stack.shape[1])[None, :] < np.array(t_len_list)[:, None]).astype(float)
+    mask_np = np.array(mask_stack, dtype=float)
+    cov_denom = max(float(np.sum(time_mask_stack)), 1.0)
+    col_cov = np.sum(mask_np * time_mask_stack[:, :, None], axis=(0, 1)) / cov_denom
+    reliable_mask_np = ((col_cov >= reliable_cov_min) & (rho_rom >= reliable_rho_min)).astype(float)
+    reliable_mask_stack = jnp.tile(jnp.array(reliable_mask_np, dtype=jnp.float64)[None, :], (len(bundles_list), 1))
+
     ts_t_np = np.array(ts_t_stack)
     ctrl_t_np = np.array(ctrl_t_stack)
     for i in range(ts_t_np.shape[0]):
@@ -429,7 +444,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     stacked_bundle = ShotBundle(
         ts_t_stack,
         ts_Te_stack,
+        ts_Te_raw_stack,
         mask_stack,
+        reliable_mask_stack,
         obs_idx_stack,
         regime_ts_stack,
         regime_mask_stack,
@@ -453,6 +470,12 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
 
     print(f"[data] Loaded and stacked {len(bundles_list)} shots.")
     print(f"       Max time steps: {ts_t_stack.shape[1]}")
+    reliable_cols = int(np.sum(reliable_mask_np[:-1])) if reliable_mask_np.size > 1 else int(np.sum(reliable_mask_np))
+    first_reliable = float(rho_rom[np.where(reliable_mask_np > 0.5)[0][0]]) if np.any(reliable_mask_np > 0.5) else float("nan")
+    print(
+        f"       Reliable annulus: cov_min={reliable_cov_min:.2f}, rho_min={reliable_rho_min:.2f}, "
+        f"cols={reliable_cols}/{max(rho_rom.size - 1, 1)}, first_rho={first_reliable:.3f}"
+    )
 
     return stacked_bundle, rho_rom, rho_cap, obs_idx
 

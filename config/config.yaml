@@ -75,7 +75,7 @@ training:
   lbfgs_tol: 5.0e-5
 
 output:
-  model_id: "production_run_v1"
+  model_id: "production_run_v2"
   save_dir: "models"
   log_dir: "logs"
   model_name: "tokamak ode model"
