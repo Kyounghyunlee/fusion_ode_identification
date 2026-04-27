@@ -1,5 +1,13 @@
 # Fusion ODE Identification
 
+A physics-informed neural ODE that learns reduced-order electron-temperature transport for tokamak discharges (currently MAST). The PDE side is a conservative finite-volume diffusion operator with an explicit, differentiable diffusivity profile $\chi(\rho,z)$; the closure side is a small MLP residual source. A scalar latent $z(t)$ modulates only the edge diffusivity. Training and evaluation run end-to-end in JAX with a custom IMEX $\theta$-method integrator (Thomas-algorithm tridiagonal implicit diffusion + explicit source/latent), so reverse-mode autodiff goes through the rollout cleanly.
+
+Where to look:
+- **Design and physics**: [docs/PHYSICS_INFORMED_TOKAMAK_ODE.md](docs/PHYSICS_INFORMED_TOKAMAK_ODE.md). The one-page executive summary at the top, plus §13 (engineering roadmap with M1–M7 milestones), are the fastest entry points.
+- **Code architecture and HPC notes**: [docs/code_architecture.md](docs/code_architecture.md).
+- **Training pack format**: [docs/training_data_pack.md](docs/training_data_pack.md).
+- **Current status**: M1 phase 1 (observability hygiene — `ts_Te_raw` / `reliable_mask` on the in-memory bundle, supervision gated by the reliable annulus, measured-only heatmaps, annulus/outside metric decomposition in the evaluation report) has landed. Numbers are anchored against [logs/production_run_v1/evaluation/evaluation_report.json](logs/production_run_v1/evaluation/evaluation_report.json) — see PHYSICS doc §13.0.
+
 ## Development Workflow
 
 Connect to sdcc (if configured):
@@ -75,6 +83,8 @@ data:
 	shots: [27567, 27568]
 	rho_grid_mode: "uniform"
 	edge_bc_mode: "use_last_observed"
+	reliable_cov_min: 0.10  # min per-column coverage admitted to supervision
+	reliable_rho_min: 0.80  # min rho admitted to supervision
 output:
 	model_id: "production_run_v1"
 	save_dir: "models"
@@ -96,12 +106,19 @@ model:
 ```
 Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in `data_dir`.
 
-**Recent optimizations:**
-- Inverse-coverage weighting ensures all radii (dense or sparse) are supervised fairly.
-- Geometry precomputation (P1.2) eliminates per-substep recomputation overhead.
+**Recent changes (M1 phase 1, current):**
+- `ShotBundle` carries a NaN-preserving `ts_Te_raw` alongside the filled `ts_Te`, plus a corpus-level `reliable_mask` indicator.
+- Training loss and evaluator gate supervision through `mask * reliable_mask`, so the filled core (where Thomson has no support) is no longer scored as ground truth.
+- Evaluator heatmaps are measured-only (`np.where(mask>0, ts_Te_raw, np.nan)` with `cmap.set_bad("white")`); the JSON report adds explicit `annulus_metrics` and `outside_annulus_metrics` blocks alongside the legacy whole-mask numbers.
+- `data.reliable_cov_min` (default `0.10`) and `data.reliable_rho_min` (default `0.80`) configure the annulus from YAML.
+- See PHYSICS doc §13.1 for the remaining M1 follow-up (pack schema split, strict per-channel distance gate) and §13.7 for the M2–M7 milestones.
+
+**Earlier optimizations:**
+- Inverse-coverage weighting ensures all admitted radii (dense or sparse) are supervised fairly.
+- Geometry precomputation eliminates per-substep recomputation overhead.
 - EMA validation tracking saves both raw and EMA best checkpoints independently.
-- Lambda_z smoothness penalty stabilizes latent trajectories.
-- D-alpha is preserved explicitly in the packs and now drives the regime label heuristic used for latent supervision.
+- `lambda_z` smoothness penalty stabilizes latent trajectories.
+- D-alpha is preserved explicitly in the packs and drives the heuristic regime label used for latent supervision.
 
 ## Connect to Compute Node
 

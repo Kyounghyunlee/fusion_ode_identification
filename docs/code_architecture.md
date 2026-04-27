@@ -30,9 +30,11 @@ The complete development workflow consists of these stages:
 
 4. **Evaluation** (`scripts/evaluate_model.py`)
    - Loads best checkpoint (prefers EMA), runs full-trajectory predictions on test shots
-   - Generates plots, metrics (MAE, MSE, latent trajectories), JSON reports
+   - Generates plots and metrics (MAE, MSE, latent trajectories) and writes a JSON report
+   - Heatmaps render Thomson observations as a measured-only `pcolormesh` (`np.where(mask>0, ts_Te_raw, np.nan)` with `cmap.set_bad("white")`); regions without Thomson support stay blank instead of showing the filled-with-zero field
+   - The JSON report contains both legacy whole-mask metrics and an explicit decomposition into `annulus_metrics` (over the corpus reliable annulus) and `outside_annulus_metrics` (the complement of the annulus inside the regridded support)
    - Usage: `python scripts/evaluate_model.py --config config/config.yaml --model-id <id> --data-check`
-   - Outputs: `logs/<model_id>/evaluation/` with PNG plots and metrics.json
+   - Outputs: `logs/<model_id>/evaluation/` with PNG plots and `evaluation_report.json`
 
 5. **Debug/Validation** (multiple scripts)
    - **Quick debug-eval**: `./scripts/run_training_gpu.sh --config config.yaml --debug_eval_only --debug_eval_shot 27567`
@@ -58,8 +60,8 @@ The complete development workflow consists of these stages:
 ## Model Architecture (training script)
 - `HybridField`: PDE-inspired RHS combining diffusion (chi profile), finite-volume divergence, and a learned source NN. Latent scalar `z` evolves via a low-order ODE (`LatentDynamics`). State bounds (Te ∈ [0, 5000], z ∈ [-10, 10]) are enforced via **smooth clamps** (softplus-based) rather than hard clips to avoid zero-gradient saturation.
 - `SourceNN`: small MLP taking `(rho, Te, ne, controls, z)`; final layer zero-initialized for stability, scaled by `source_scale`.
-- `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `fusion_ode_identification.data.load_data` and consumed by `train_tokamak_ode_hpc.py`.
-- Loss: weighted Huber data term on **all interior masked radii** (weighted by per-column coverage), source magnitude regularizer, weak-constraint model error, regime supervision on `z`, latent regularization. Training now supervises all available radii, not just a small intersection subset.
+- `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `fusion_ode_identification.data.load_data` and consumed by `train_tokamak_ode_hpc.py`. The bundle carries **two** Te copies: `ts_Te` (filled with `0.0` where invalid, used for solver IC/continuity) and `ts_Te_raw` (NaN-preserving, used for plotting and measured-only diagnostics). It also carries a corpus-level `reliable_mask` (per-rho `1.0`/`0.0` indicator) computed from per-column coverage and a minimum rho threshold (`data.reliable_cov_min`, `data.reliable_rho_min`).
+- Loss: pseudo-Huber data term on **interior masked radii inside the reliable annulus** (`mask * reliable_mask`, weighted by inverse per-column coverage), pseudo-Huber source magnitude penalty, optional weak-constraint model error, regime BCE supervision on `z`, latent smoothness/magnitude regularizers. Radii outside the reliable annulus are dropped from supervision even when interpolation produced finite values, because their support is not actually measured (see PHYSICS_INFORMED_TOKAMAK_ODE.md §13.1–13.2).
 
 ## Parallelism and Performance (why GPU, what the terms mean)
 - **Why GPU helps now**: We have many shots and many rho points. We batch them so the GPU crunches large matrices instead of tiny loops. More arithmetic per batch → GPU wins.
@@ -109,13 +111,16 @@ with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumul
 ## Data Flow
 
 ### Pack Structure
-Packs (`*_torax_training.npz`) contain:
+Packs (`*_torax_training.npz`, `schema_version=3`) contain:
 - **Time bases**: `t_ts` (Thomson timestamps), `t` (control/summary grid)
-- **Profiles**: `Te` (electron temperature), `ne` (electron density), `Te_mask` (validity masks)
+- **Profiles**: `Te` (electron temperature, `0.0` where invalid), `ne` (electron density, `0.0` where invalid), `Te_mask` / `ne_mask` (validity masks)
 - **Geometry**: `rho` (flux coordinate), `Vprime` (volume derivative $V'(\rho)$), fallback flags
-- **Controls**: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` (all 1D time series, z-scored)
-- **Optional scalars**: `W_tot`, `P_ohm`, `H98`, `beta_n`, `B_t0`, `q95`, `li` (when available)
-- **Regimes** (optional): binary L/H-mode labels for latent supervision
+- **Controls**: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` (all 1D time series; z-scored at load time)
+- **Diagnostic traces**: `D_alpha` (summed), `D_alpha_channels`, `D_alpha_channel_names` — used to derive `S_rec=\max(D_\alpha,0)` and to build heuristic regime labels
+- **Optional scalars**: `W_tot`, `P_ohm`, `H98`, `beta_n`, `B_t0`, `q95`, `li` (kept when present and shape-checked)
+- **Regimes** (optional): heuristic L/transition/H labels (`regime`, `regime_score`, `transition_time`) for latent supervision
+
+Full schema is documented in [training_data_pack.md](training_data_pack.md). Note that the pack itself currently stores a single `Te` field; the `ts_Te` / `ts_Te_raw` split is reconstructed in memory by the loader, and a future M1 follow-up (PHYSICS doc §13.2) is to push the split into the pack schema directly.
 
 ### Data Loading Pipeline (`fusion_ode_identification.data.load_data`)
 
@@ -134,18 +139,20 @@ Packs (`*_torax_training.npz`) contain:
    - Interpolate Te, ne, masks from raw Thomson grid (or NPZ grid if non-uniform) to uniform `rho_rom`
    - Per time slice: use only finite, masked points; constant extrapolation at boundaries
    - Handle time gaps via forward-fill, then backward-fill initial missing rows
+   - Emit two profile copies: `ts_Te` (NaNs filled to `0.0` for solver use) and `ts_Te_raw` (NaNs preserved, used for measured-only plots)
 5. **Edge BC construction**: 
    - `use_last_observed` (default): At each time, take Te at outermost observed index when masked/finite
    - `extrapolate_to_1`: Linearly extrapolate from last two observed points to $\rho=1$
    - Time-interpolate to fill gaps; fallback to 50 eV if undefined
 6. **Geometry precomputation**: Compute per-shot FVM arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) once; passed to IMEX solver to avoid per-substep recomputation
-7. **Padding and stacking**: Pad time arrays to max length (strictly increasing via `pad_time_to_max_strict`), stack into batched `ShotBundle` with `t_len` mask
+7. **Reliable annulus**: Compute corpus-level per-column coverage on the regridded support mask, threshold at `data.reliable_cov_min` (default `0.10`) and `data.reliable_rho_min` (default `0.80`), and persist the resulting indicator as `reliable_mask` on the bundle (broadcast per-shot for `pmap` shape consistency). For the current 21-shot, 65-node corpus this admits 12 interior columns starting at $\rho\approx 0.812$.
+8. **Padding and stacking**: Pad time arrays to max length (strictly increasing via `pad_time_to_max_strict`), pad `ts_Te_raw` with NaN (other arrays with `0.0`/edge), stack into batched `ShotBundle` with `t_len` mask
 
 ### Training Loop
 - Sample mini-batches of `ShotBundle`s (size $B$), shard across $D$ devices ($B/D$ per GPU)
 - Run IMEX integrator over padded time grid (masked by `t_len`) for each shot
-- Compute composite loss: data term (all interior masked radii with inverse-coverage weights), source penalty, latent smoothness, optional regime supervision
-- Backprop via implicit differentiation (custom VJP for IMEX), update parameters via AdamW + gradient clipping
+- Compute composite loss: pseudo-Huber data term on `mask * reliable_mask` interior radii (inverse-coverage normalised weights), pseudo-Huber source magnitude penalty, latent smoothness/magnitude penalties, optional regime BCE on confident L/H windows, optional weak-constraint model error
+- Backprop via reverse-mode autodiff through the static-loop IMEX integrator (Thomas-algorithm tridiagonal solve is differentiated directly), update parameters via AdamW + gradient clipping
 - Track both raw and EMA parameters; validate at log intervals; save `_best.eqx` and `_best_ema.eqx` independently
 
 ## Why This Is Faster Than CPU (even for ODEs)

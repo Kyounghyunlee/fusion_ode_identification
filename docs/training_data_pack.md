@@ -750,7 +750,7 @@ gradient score.
 
 Output: `data/<shot>_torax_training.npz`
 Compression: `np.savez_compressed`
-Schema version: `2`
+Schema version: `3` (matches the `schema_version` key written by `preprocessing/build_training_pack.py`).
 
 ---
 
@@ -862,7 +862,21 @@ Schema version: `2`
 ## 5. Important Notes for Downstream Use
 
 1. **Always use masks**: `Te` and `ne` store `0.0` where data is invalid.
-   Use `Te_mask` and `ne_mask` to identify real measurements.
+   Use `Te_mask` and `ne_mask` to identify real measurements. The training
+   loader (`fusion_ode_identification.data.load_data`) carries this through to
+   the in-memory `ShotBundle` by storing two profile copies:
+   - `ts_Te`: regridded Te with NaNs filled to `0.0`, used by the IMEX solver
+     for IC construction and continuity.
+   - `ts_Te_raw`: regridded Te with NaNs **preserved**, used for plotting and
+     for any "measured-only" diagnostic.
+   It also computes a corpus-level **reliable annulus** (default
+   `data.reliable_cov_min=0.10`, `data.reliable_rho_min=0.80`) and stores it
+   as `ShotBundle.reliable_mask`. The training loss and the evaluator both
+   gate supervision through `mask * reliable_mask`, so radii outside the
+   reliable annulus are not used as ground truth even when interpolation
+   produced finite values there. See PHYSICS_INFORMED_TOKAMAK_ODE.md §13.1
+   and §13.2 for the rationale and the remaining work (pack-level
+   `Te_raw` / `Te_fill` split, strict per-channel distance gate).
 
 2. **Two separate time grids**: `t` has 2207 points (summary), `t_ts` has 111
    points (TS). `Te` and `ne` live on `t_ts`; all controls live on `t`.

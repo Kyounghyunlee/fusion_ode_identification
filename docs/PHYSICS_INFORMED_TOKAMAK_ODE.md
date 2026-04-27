@@ -104,6 +104,8 @@ Bold symbols are vectors sampled on $\boldsymbol{\rho}_{\mathrm{rom}}$. Norms ar
 | $\texttt{Te\_scale}$ | $10^3$ eV, normalising constant | `HybridField.__init__` |
 | $\texttt{ne\_scale}$ | $10^{19}$ m$^{-3}$, normalising constant | `HybridField.__init__` |
 | $m_i(t)$ | Thomson validity mask at $(t,\rho_i)$ | `ShotBundle.mask` |
+| $T_i^{\mathrm{raw}}(t)$ | NaN-preserving regridded $T_e$ for plotting/QA | `ShotBundle.ts_Te_raw` |
+| $\mathcal I_{\mathrm{rel}}$ | Corpus-level reliable-annulus indicator | `ShotBundle.reliable_mask` |
 | $\texttt{t\_len}$ | Per-shot number of valid time steps | `ShotBundle.t_len` |
 | `active_mask` | Solver freeze mask for padded tail | passed to `IMEXIntegrator.integrate` |
 
@@ -755,6 +757,7 @@ Every call to `shot_loss_imex` returns a fixed-order `diag` vector (see `fusion_
 ### 10.2 What should additionally be logged at startup
 
 - ROM grid size $N$, `rho_rom.min/max`, and a confirmation that the last node is excluded from loss (i.e. `obs_idx` does not contain $N-1$).
+- Reliable-annulus statistics from `load_data`: number of admitted columns out of $N-1$, the first reliable $\rho$, and the active `data.reliable_cov_min` / `data.reliable_rho_min` (already printed at load time).
 - Edge BC statistics per shot: min/max of $T_{\mathrm{edge}}(t)$ and the fraction of timesteps where the edge trace came from time-interpolation (gap-fill) rather than a direct Thomson measurement.
 - Geometry flags: whether the $V'(\rho)=2\rho$ fallback was used, and whether the safe-core clamp fired.
 - Model parameter count and the values of the fixed-at-construction hyperparameters (§11.6).
@@ -766,18 +769,33 @@ Every call to `shot_loss_imex` returns a fixed-order `diag` vector (see `fusion_
 3. **Affine-in-$\mathbf T_{\mathrm{int}}$ check:** for two test states $\mathbf T^{(1)}, \mathbf T^{(2)}$ at fixed $z$, verify $\mathbf D\mathbf T^{(\alpha)}-A\mathbf T^{(\alpha)}_{\mathrm{int}}=\mathbf b_{\mathrm{edge}}$ is independent of $\alpha$.
 4. **Edge-trace smoothness:** flag shots whose $T_{\mathrm{edge}}(t)$ has jumps exceeding, say, 200 eV per 1 ms — large discontinuities can masquerade as solver instability.
 
+### 10.4 Evaluation report fields (`logs/<model_id>/evaluation/evaluation_report.json`)
+
+`scripts/evaluate_model.py` writes a per-shot block plus a top-level summary. Each per-shot block carries:
+
+- `metrics`: legacy whole-mask MSE / MAE [eV] / MAE [%] (for backward comparison with pre-M1 runs);
+- `annulus_metrics`: same three numbers restricted to the reliable annulus $\mathcal I_{\mathrm{rel}}$;
+- `outside_annulus_metrics`: the complement inside the regridded support (a temporary decomposition; it will become a true filled-only metric once the strict per-channel distance gate from §13.2 lands);
+- `observability`: `n_reliable_columns`, `first_reliable_rho`, and the active `reliable_cov_min` / `reliable_rho_min`.
+
+The top-level summary aggregates `mean_mae_eV` / `mean_mae_pct` for legacy, annulus, and outside-annulus separately, so regressions in any of the three regimes are visible at a glance. §13.0 anchors the quantitative acceptance criteria to these fields.
+
 ---
 
 ## 11. Configuration knobs (grouped, matched to `config/config.yaml`)
 
 All paths below are YAML keys in `config/config.yaml`. Defaults shown are those in the committed `production_run_v1` configuration.
 
-### 11.1 Grid and boundary condition
+### 11.1 Grid, boundary condition, and reliable-annulus gate
 - `data.rho_grid_mode`: must be `"uniform"` (enforced at load time).
 - `data.uniform_n_rho`: $N$. If omitted, uses the NPZ `rho` length.
 - `data.edge_bc_mode`: edge boundary trace construction:
   - `"use_last_observed"` (default) — $T_{\mathrm{edge}}(t)$ is the outermost masked-valid $T_e$ at each time;
   - `"extrapolate_to_1"` — linear extrapolation from the last two observed points to $\rho=1$.
+- `data.reliable_cov_min` (default `0.10`) — minimum per-column coverage on the regridded support mask required for a radial bin to enter the reliable annulus $\mathcal I_{\mathrm{rel}}$.
+- `data.reliable_rho_min` (default `0.80`) — minimum $\rho$ required for a radial bin to enter $\mathcal I_{\mathrm{rel}}$.
+
+The two thresholds together define the M1 reliable annulus used by both the loss (`shot_loss_imex` multiplies the observation mask by $\mathbf 1[i\in\mathcal I_{\mathrm{rel}}]$) and the evaluator (it reports legacy, annulus, and outside-annulus metrics side by side and renders measured-only heatmaps from `ShotBundle.ts_Te_raw`).
 
 ### 11.2 Loss (all under `training.*`)
 - `training.huber_delta` (default `10.0` eV) — scale in $\phi_\delta$ for the data term.
