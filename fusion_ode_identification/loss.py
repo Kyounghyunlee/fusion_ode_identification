@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from .types import LossCfg, ShotBundle, ShotEval, IMEXConfig
 from .imex_solver import IMEXIntegrator
 from .interp import LinearInterpolation
-from .model import smooth_clamp
+from .model import build_latent_feature_series, normalize_observed_signal, smooth_clamp
 
 
 def pseudo_huber(r, delta):
@@ -45,6 +45,12 @@ def _observation_weight_grid(mask_obs, time_mask=None, reliable_mask=None):
     return mask_use * col_weight[None, :]
 
 
+def _latent_feature_inputs(model, ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts):
+    if model.uses_barrier_latent():
+        return build_latent_feature_series(ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts)
+    return ctrl_norm_ts
+
+
 def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXConfig):
     """
     Shot loss using IMEX time integration.
@@ -61,6 +67,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     ctrl_vals_full = bundle.ctrl_vals
     ne_vals_full = bundle.ne_vals
     Te_edge_full = bundle.Te_edge
+    dalpha_full = bundle.dalpha_ts
     ts_Te_full = bundle.ts_Te
     mask_full = bundle.mask
     reliable_mask_full = bundle.reliable_mask
@@ -75,6 +82,8 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
+    ne_edge_ts = ne_vals_full[:, -1]
+    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
 
     # Precompute static geometry factors once per shot (used by diffusion operator).
     rho = bundle.rho_rom
@@ -113,6 +122,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         Te_edge_ts=Te_edge_full,
         ctrl_norm_ts=ctrl_norm_ts,
         ne_ts=ne_vals_full,
+        latent_features_ts=latent_features_ts,
         args=ode_args_geom,
         active_mask=active_mask,
     )
@@ -207,11 +217,21 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
 
         regime_mask = bundle.regime_mask.astype(jnp.float64) * tm
         regime_target = jnp.where(bundle.regime_ts > 2.0, 1.0, 0.0)
-        regime_logits = model.latent_gain * zs
+        regime_logits = jax.vmap(model.compute_regime_logit)(zs)
         regime_bce = jnp.maximum(regime_logits, 0.0) - regime_logits * regime_target + jnp.log1p(jnp.exp(-jnp.abs(regime_logits)))
-        regime_penalty = loss_cfg.lambda_regime * (jnp.sum(regime_mask * regime_bce) / (jnp.sum(regime_mask) + 1e-8))
+        regime_weight = loss_cfg.lambda_regime + loss_cfg.lambda_pH
+        regime_penalty = regime_weight * (jnp.sum(regime_mask * regime_bce) / (jnp.sum(regime_mask) + 1e-8))
 
-        total_loss = obs_loss + src_penalty + z_reg + z_smooth + regime_penalty
+        dalpha_target = normalize_observed_signal(dalpha_full)
+        dalpha_hat = jax.vmap(lambda zi, cn, Tee, nee: model.compute_aux_dalpha_hat(zi, cn, Tee, nee))(
+            zs,
+            ctrl_norm_ts,
+            Te_edge_full,
+            ne_edge_ts,
+        )
+        dalpha_penalty = loss_cfg.lambda_dalpha * (jnp.sum(tm * ((dalpha_hat - dalpha_target) ** 2)) / (jnp.sum(tm) + 1e-8))
+
+        total_loss = obs_loss + src_penalty + z_reg + z_smooth + regime_penalty + dalpha_penalty
 
         diag = jnp.array(
             [
@@ -278,6 +298,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     ctrl_vals_full = bundle.ctrl_vals[:L]
     ne_vals_full = bundle.ne_vals[:L]
     Te_edge_full = bundle.Te_edge[:L]
+    dalpha_full = bundle.dalpha_ts[:L]
     ts_Te_full = bundle.ts_Te[:L]
     mask_full = bundle.mask[:L]
     reliable_mask_full = bundle.reliable_mask
@@ -286,6 +307,8 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     ctrl_vals_ts = ctrl_interp.evaluate(ts_t_full)
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
+    ne_edge_ts = ne_vals_full[:, -1]
+    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
 
     rho = bundle.rho_rom
     Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)
@@ -323,6 +346,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
         Te_edge_ts=Te_edge_full,
         ctrl_norm_ts=ctrl_norm_ts,
         ne_ts=ne_vals_full,
+        latent_features_ts=latent_features_ts,
         args=ode_args_geom,
     )
 

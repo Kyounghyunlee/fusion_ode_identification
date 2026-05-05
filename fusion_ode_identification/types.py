@@ -16,8 +16,6 @@ class ShotBundle(NamedTuple):
     regime_mask: jnp.ndarray
     Te0: jnp.ndarray
     z0: jnp.ndarray
-    latent_idx: jnp.ndarray
-    latent_proj: jnp.ndarray
     shot_id: jnp.ndarray
     t_len: jnp.ndarray  # scalar per-shot after slicing
     rho_rom: jnp.ndarray
@@ -30,6 +28,7 @@ class ShotBundle(NamedTuple):
     Te_edge: jnp.ndarray
     edge_idx: jnp.ndarray
     rho_edge: jnp.ndarray
+    dalpha_ts: jnp.ndarray
 
 
 class ShotEval(NamedTuple):
@@ -48,11 +47,11 @@ class LossCfg(NamedTuple):
     huber_delta: float
     lambda_src: float
     src_delta: float
-    lambda_w: float
-    model_error_delta: float
     lambda_z: float
     lambda_zreg: float
     lambda_regime: float
+    lambda_dalpha: float
+    lambda_pH: float
     throw_solver: bool
 
 

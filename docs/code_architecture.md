@@ -1,230 +1,167 @@
-# Code Architecture and HPC Overview
+# Code Architecture
 
-## Big Picture
-- Goal: learn a reduced plasma transport dynamics model (1D heat equation + latent source) from many discharges ("shots").
-- Pipeline: **download → pack build (NetCDF → NPZ) → train JAX model → evaluate → debug/validate**.
-- Design themes: physics-structured model, JAX for autodiff + accelerator execution, data-parallel training for throughput.
+This repository trains and evaluates a physics-informed electron-temperature
+transport ROM from strict MAST training packs. The active branch is IMEX-only,
+uniform-grid-only, and uses a small scalar input set.
 
-## Workflow Overview
+## Pipeline
 
-The complete development workflow consists of these stages:
+1. `preprocessing/download_data.py` downloads raw NetCDF diagnostics.
+2. `preprocessing/build_training_pack.py` converts raw diagnostics into strict
+   `*_torax_training.npz` packs.
+3. `fusion_ode_identification.data.load_data` loads packs, broadcasts scalar
+   density, builds boundary conditions, pads time, and returns `ShotBundle`.
+4. `train_tokamak_ode_hpc.py` trains `HybridField` with JAX/Equinox/Optax.
+5. `scripts/evaluate_model.py` loads the preferred checkpoint, runs full
+   trajectories, writes metrics, and regenerates plots.
 
-1. **Data Acquisition** (`preprocessing/download_data.py`)
-   - Download raw NetCDF files from S3 storage for specified shot numbers
-   - Fetches equilibrium, Thomson scattering, summary diagnostics, gas injection data, and a compact `d_alpha.nc` sidecar for the visible spectrometer D-alpha channels
-   - The full `spectrometer_visible.nc` file is still available as an explicit optional target, but it is no longer required for pack building
-   - Usage: `python preprocessing/download_data.py --shots 27567 27568 --overwrite`
+## Package Map
 
-2. **Pack Building** (`preprocessing/build_training_pack.py`)
-   - Convert NetCDF diagnostics into TORAX-ready NPZ training packs
-   - Extracts flux coordinates (rho), geometry (V'), profiles (Te, ne), controls (Ip, P_nbi, etc.), and explicit D-alpha arrays/labels
-   - Handles equilibrium fallbacks (slab/toroidal geometry when EFIT unavailable)
-   - Usage: `python -m preprocessing.build_training_pack --shots 27567 27568` or `--discover` for auto-discovery
-   - Outputs: `data/<shot>_torax_training.npz` containing time-aligned arrays
+| Path | Role |
+|---|---|
+| `fusion_ode_identification/model.py` | `HybridField`, `SourceNN`, diffusivity, latent dynamics |
+| `fusion_ode_identification/data.py` | Pack loading, interpolation, padding, masks, scalar-density broadcast |
+| `fusion_ode_identification/loss.py` | IMEX rollout loss, D-alpha auxiliary loss, diagnostics |
+| `fusion_ode_identification/imex_solver.py` | Fixed-step theta-method solver |
+| `fusion_ode_identification/interp.py` | JAX linear interpolation helper |
+| `fusion_ode_identification/types.py` | Shared `NamedTuple` schemas |
+| `preprocessing/build_training_pack.py` | Strict pack builder and QA artifacts |
+| `scripts/evaluate_model.py` | Evaluation reports and plots |
+| `scripts/smoke_*.py` | Regression smoke checks |
 
-3. **Training** (`train_tokamak_ode_hpc.py`)
-   - Main entrypoint via canonical wrapper: `./scripts/run_training_gpu.sh --config config/config.yaml`
-   - Loads all packs, constructs intersection grid + ROM grid, trains physics-informed ODE model
-   - Multi-GPU via `pmap`, EMA tracking, validation splits, checkpoint selection
-   - Saves: `models/<model_id>/{_best.eqx, _best_ema.eqx, _finetuned.eqx}`, logs to `logs/<model_id>/`
+## Current Data Contract
 
-4. **Evaluation** (`scripts/evaluate_model.py`)
-   - Loads best checkpoint (prefers EMA), runs full-trajectory predictions on test shots
-   - Generates plots and metrics (MAE, MSE, latent trajectories) and writes a JSON report
-   - Heatmaps render Thomson observations as a measured-only `pcolormesh` (`np.where(mask>0, ts_Te_raw, np.nan)` with `cmap.set_bad("white")`); regions without Thomson support stay blank instead of showing the filled-with-zero field
-   - The JSON report contains both legacy whole-mask metrics and an explicit decomposition into `annulus_metrics` (over the corpus reliable annulus) and `outside_annulus_metrics` (the complement of the annulus inside the regridded support)
-   - Usage: `python scripts/evaluate_model.py --config config/config.yaml --model-id <id> --data-check`
-   - Outputs: `logs/<model_id>/evaluation/` with PNG plots and `evaluation_report.json`
+Active controls are:
 
-5. **Debug/Validation** (multiple scripts)
-   - **Quick debug-eval**: `./scripts/run_training_gpu.sh --config config.yaml --debug_eval_only --debug_eval_shot 27567`
-   - **Smoke checks**: Lightweight regression tests before/after training:
-     - `check_bc.py`: Edge BC sanity (peak-to-peak threshold, coupling sign)
-     - `smoke_diffusion_sanity.py`: Const profile → div≈0, BC coupling correctness
-     - `smoke_time_padding_strict.py`: Padding strictness under float32 downcast
-   - **Inspect data**: `scripts/inspect_data.py` for pack contents summary
-   - All run via: `./scripts/run_training_gpu.sh --python scripts/<name>.py --config <cfg> --shot <id>`
-
-## Core Packages and What They Do (plain language)
-- **JAX**: NumPy-like arrays that can be *compiled* for GPU/TPU. It gives:
-	- `jit`: Just-In-Time compile a Python function into a fast GPU kernel. First call traces, later calls are fast.
-	- `vmap`: Vectorize a function over a batch dimension (no Python loops). Think “apply over many shots/rows in one go.”
-	- `pmap`: Parallel map across multiple devices (GPUs). Each GPU gets a slice of the batch; gradients are averaged.
-	- Autodiff: reverse-mode differentiation (backprop) through regular code and through the fixed-step IMEX integrator.
-- **equinox (eqx)**: Minimal neural-net module system for JAX. Lets us define `HybridField`/`SourceNN`, split trainable parameters from static fields, and save/load checkpoints.
-- **IMEX integrator**: Custom fixed-step theta-method (theta=0.7, substeps=5 by default) for implicit diffusion + explicit source/latent updates. This branch is **IMEX-only**; all Diffrax-based integration paths have been removed for simplicity and reverse-mode autodiff compatibility (see `fusion_ode_identification.imex_solver`).
-- **optax**: Optimizers (AdamW), gradient clipping, learning-rate schedules, EMA of weights.
-- **NumPy/xarray/zarr/fsspec**: Load and reshape data; zarr+xarray read S3-stored diagnostics; NumPy writes packs.
-- **Matplotlib**: Make evaluation plots.
-
-## Model Architecture (training script)
-- `HybridField`: PDE-inspired RHS combining diffusion (chi profile), finite-volume divergence, and a learned source NN. Latent scalar `z` evolves via a low-order ODE (`LatentDynamics`). State bounds (Te ∈ [0, 5000], z ∈ [-10, 10]) are enforced via **smooth clamps** (softplus-based) rather than hard clips to avoid zero-gradient saturation.
-- `SourceNN`: small MLP taking `(rho, Te, ne, controls, z)`; final layer zero-initialized for stability, scaled by `source_scale`.
-- `ShotBundle`: batched, padded shot data (times, profiles, masks, controls, boundary Te, geometry); built in `fusion_ode_identification.data.load_data` and consumed by `train_tokamak_ode_hpc.py`. The bundle carries **two** Te copies: `ts_Te` (filled with `0.0` where invalid, used for solver IC/continuity) and `ts_Te_raw` (NaN-preserving, used for plotting and measured-only diagnostics). It also carries a corpus-level `reliable_mask` (per-rho `1.0`/`0.0` indicator) computed from per-column coverage and a minimum rho threshold (`data.reliable_cov_min`, `data.reliable_rho_min`).
-- Loss: pseudo-Huber data term on **interior masked radii inside the reliable annulus** (`mask * reliable_mask`, weighted by inverse per-column coverage), pseudo-Huber source magnitude penalty, optional weak-constraint model error, regime BCE supervision on `z`, latent smoothness/magnitude regularizers. Radii outside the reliable annulus are dropped from supervision even when interpolation produced finite values, because their support is not actually measured (see PHYSICS_INFORMED_TOKAMAK_ODE.md §13.1–13.2).
-
-## Parallelism and Performance (why GPU, what the terms mean)
-- **Why GPU helps now**: We have many shots and many rho points. We batch them so the GPU crunches large matrices instead of tiny loops. More arithmetic per batch → GPU wins.
-- **Batching**: We stack shots into uniform shapes (padding). One forward/backward pass handles a whole batch.
-- **`vmap` (vectorize)**: Replaces Python loops over batch/shot with a single fused kernel. Used inside loss to evaluate multiple shots on one device.
-- **`pmap` (parallel map)**: Splits the batch across GPUs. Each GPU runs the same compiled code on its chunk. Gradients are averaged (all-reduce) so the update is as if it saw the whole batch.
-- **`jit` (just-in-time compile)**: First call traces the function (slow); the compiled version then runs fast. We JIT the training step so the ODE solve, loss, and optimizer are fused.
-- **IMEX on GPU**: fixed-step IMEX updates run inside JIT; diffusion is a small banded linear solve per step, source/latent are explicit. The first step includes a one-time warmup compile so the initial "quiet period" is clearly attributed to XLA compilation. Current defaults: theta=0.7, substeps=5 per observation interval.
-- **EMA (exponential moving average)**: A smoothed copy of weights that often generalizes better. Optax updates it cheaply each step. Checkpoint selection prefers `_best_ema.eqx` first.
-- **Gradient clipping**: Limit global gradient norm to avoid exploding updates.
-- **L-BFGS finetune**: After AdamW, an optional quasi-Newton refinement on a small batch to squeeze a bit more accuracy. Only enabled via `training.lbfgs_finetune: true`.
-- **Diagnostics**: Training logs now include mean absolute diffusion `|diff|`, mean absolute source `|src|`, and their ratio `src/diff` alongside standard metrics.
-
-## Autodiff and Backprop (what actually happens)
-- We run the model forward: solve the ODE for each shot → predicted temperatures + latent `z`.
-- Loss is computed (Huber data loss, model-error penalty, source/latent regs, regime supervision).
-- JAX records the operations; reverse-mode autodiff replays them backward to get gradients w.r.t. every parameter (MLP weights, chi params, latent params).
-- The IMEX integrator is written in JAX (`lax.scan`/`fori_loop`), so sensitivities account for every fixed step.
-- Equinox “filters” params: only arrays marked as trainable get gradients/updates; static config stays untouched.
-- Gradient clipping caps the norm before the optimizer step.
-
-## What “jit/compile” means in practice
-- JIT = “trace once, then run fast.” On the first call, JAX traces the Python/JAX ops, hands the graph to XLA, and XLA emits GPU code. Subsequent calls reuse that executable.
-- Benefits: fused kernels (fewer memory trips), GPU-friendly tiling, elimination of Python overhead in the training loop.
-
-## How this becomes big linear algebra on GPU
-Let $B$ be batch size (shots), $N_\rho$ radial points.
-
-1) **State per batch:** $T \in \mathbb{R}^{B \times N_\rho}$, $z \in \mathbb{R}^B$.
-2) **Finite-volume flux/divergence** (schematic):
-$$
-	ext{grad}_T = D T,\quad \text{flux} = -(P\,V'\chi) \odot \text{grad}_T,\quad \text{div} = A\,\text{flux},
-$$
-with $D$ a banded difference matrix, $P$ a face-averaging matrix, $A$ an accumulation matrix. Batched over $B$, these are matrix–matrix ops that GPUs accelerate.
-3) **Source MLP:** For each $(\rho, t)$ row, $S_\theta([\rho, T, n_e, u, z])$ is an MLP layer $Y = XW + b$ (GEMM). Batched over $(B \times N_\rho)$ rows → large GEMM on GPU.
-4) **Loss/reductions:** Weighted Huber, norms, and clipping are vectorized reductions over $(B, N_\rho)$.
-5) **`vmap` and batching:** Replace Python loops over shots with one batched kernel. Shapes become $(B, ...)$, turning many small vector ops into big matrix ops.
-6) **`pmap` across GPUs:** Split batch across devices; each GPU runs the same compiled program on its slice. Gradients are averaged via all-reduce.
-7) **Backprop:** Autodiff builds backward passes that mirror the same linear-algebra ops (Jacobian–vector products), so gradients are also batched GEMMs/reductions.
-
-## Why GPU wins (even for ODEs)
-- We integrate many shots × many rho points at once → high arithmetic intensity.
-- XLA fuses flux/divergence + MLP + loss into a few kernels → less memory traffic.
-- `vmap` + `pmap` keep GPUs busy with dense math; CPU would run many small loops.
-- All-reduce once per step is cheap relative to compute; most time is spent in fused kernels.
-
-## Data Flow
-
-### Pack Structure
-Packs (`*_torax_training.npz`, `schema_version=3`) contain:
-- **Time bases**: `t_ts` (Thomson timestamps), `t` (control/summary grid)
-- **Profiles**: `Te` (electron temperature, `0.0` where invalid), `ne` (electron density, `0.0` where invalid), `Te_mask` / `ne_mask` (validity masks)
-- **Geometry**: `rho` (flux coordinate), `Vprime` (volume derivative $V'(\rho)$), fallback flags
-- **Controls**: `P_nbi`, `Ip`, `nebar`, `S_gas`, `S_rec`, `S_nbi` (all 1D time series; z-scored at load time)
-- **Diagnostic traces**: `D_alpha` (summed), `D_alpha_channels`, `D_alpha_channel_names` — used to derive `S_rec=\max(D_\alpha,0)` and to build heuristic regime labels
-- **Optional scalars**: `W_tot`, `P_ohm`, `H98`, `beta_n`, `B_t0`, `q95`, `li` (kept when present and shape-checked)
-- **Regimes** (optional): heuristic L/transition/H labels (`regime`, `regime_score`, `transition_time`) for latent supervision
-
-Full schema is documented in [training_data_pack.md](training_data_pack.md). Note that the pack itself currently stores a single `Te` field; the `ts_Te` / `ts_Te_raw` split is reconstructed in memory by the loader, and a future M1 follow-up (PHYSICS doc §13.2) is to push the split into the pack schema directly.
-
-### Data Loading Pipeline (`fusion_ode_identification.data.load_data`)
-
-**Important: This codebase uses uniform grids only** (`data.rho_grid_mode: "uniform"`). All spatial operations are on a uniform `linspace(0, 1, N)` grid.
-
-1. **Load and validate packs**: Read all `*_torax_training.npz`, check for NaNs, enforce rho monotonicity
-2. **Construct uniform ROM grid** $\boldsymbol{\rho}_{\text{rom}}$:
-   - Simple uniform grid: `rho_rom = linspace(0, 1, N)` where $N$ = `uniform_n_rho` (defaults to NPZ rho length)
-   - If NPZ rho is not uniform, profiles are interpolated onto the uniform grid with a warning
-   - Typical size: $N \approx 26$ (configurable via `data.uniform_n_rho`)
-3. **Define observed indices**: 
-   - Use **all interior points** (exclude last boundary node): `obs_idx = arange(0, N-1)`
-   - The last node (`rho_rom[-1] = 1.0`) is reserved for Dirichlet BC in the solver
-   - No intersection thresholding or coverage-based selection; all interior radii are supervised
-4. **Regrid profiles/masks**: 
-   - Interpolate Te, ne, masks from raw Thomson grid (or NPZ grid if non-uniform) to uniform `rho_rom`
-   - Per time slice: use only finite, masked points; constant extrapolation at boundaries
-   - Handle time gaps via forward-fill, then backward-fill initial missing rows
-   - Emit two profile copies: `ts_Te` (NaNs filled to `0.0` for solver use) and `ts_Te_raw` (NaNs preserved, used for measured-only plots)
-5. **Edge BC construction**: 
-   - `use_last_observed` (default): At each time, take Te at outermost observed index when masked/finite
-   - `extrapolate_to_1`: Linearly extrapolate from last two observed points to $\rho=1$
-   - Time-interpolate to fill gaps; fallback to 50 eV if undefined
-6. **Geometry precomputation**: Compute per-shot FVM arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) once; passed to IMEX solver to avoid per-substep recomputation
-7. **Reliable annulus**: Compute corpus-level per-column coverage on the regridded support mask, threshold at `data.reliable_cov_min` (default `0.10`) and `data.reliable_rho_min` (default `0.80`), and persist the resulting indicator as `reliable_mask` on the bundle (broadcast per-shot for `pmap` shape consistency). For the current 21-shot, 65-node corpus this admits 12 interior columns starting at $\rho\approx 0.812$.
-8. **Padding and stacking**: Pad time arrays to max length (strictly increasing via `pad_time_to_max_strict`), pad `ts_Te_raw` with NaN (other arrays with `0.0`/edge), stack into batched `ShotBundle` with `t_len` mask
-
-### Training Loop
-- Sample mini-batches of `ShotBundle`s (size $B$), shard across $D$ devices ($B/D$ per GPU)
-- Run IMEX integrator over padded time grid (masked by `t_len`) for each shot
-- Compute composite loss: pseudo-Huber data term on `mask * reliable_mask` interior radii (inverse-coverage normalised weights), pseudo-Huber source magnitude penalty, latent smoothness/magnitude penalties, optional regime BCE on confident L/H windows, optional weak-constraint model error
-- Backprop via reverse-mode autodiff through the static-loop IMEX integrator (Thomas-algorithm tridiagonal solve is differentiated directly), update parameters via AdamW + gradient clipping
-- Track both raw and EMA parameters; validate at log intervals; save `_best.eqx` and `_best_ema.eqx` independently
-
-## Why This Is Faster Than CPU (even for ODEs)
-- We aren’t integrating one tiny time series; we integrate many shots × many rho points per batch. That’s a lot of math to fuse.
-- XLA fuses the flux/divergence math, MLP calls, and loss into big kernels → fewer memory trips.
-- `vmap` + `pmap` keep GPUs fed with large dense ops; CPU would run many small loops instead.
-- All-reduce once per step is cheap relative to the compute; GPUs stay busy most of the time.
-
-## Checkpoint Selection and Model Loading
-
-### Checkpoint Hierarchy (priority order)
-When loading a trained model, the following precedence is used:
-
-1. **`_best_ema.eqx`**: EMA-smoothed parameters at best validation loss (preferred for inference/deployment)
-2. **`_best.eqx`**: Raw parameters at best validation loss (training checkpoint)
-3. **`_finetuned.eqx`**: L-BFGS fine-tuned model (only when `training.lbfgs_finetune: true`)
-
-Rationale: EMA parameters often generalize better due to noise averaging; raw checkpoints are retained for ablation studies.
-
-### Debug Workflow (Single-Shot Inspection)
-
-**Quick debug-eval via training entrypoint:**
-```bash
-./scripts/run_training_gpu.sh --config config/config.yaml \
-  --debug_eval_only \
-  --debug_eval_shot 27567 \
-  [--debug_ckpt path/to/model.eqx] \
-  [--debug_solver_throw]  # Force solver errors to surface
+```python
+CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
 ```
 
-This:
-- Loads the dataset and best checkpoint (or specified `--debug_ckpt`)
-- Runs IMEX integration for one shot
-- Writes `out/debug_shot_<id>.{png,npz}` with predictions vs. data, latent trajectory, diagnostics
-- Useful for: inspecting edge BC behavior, latent regime transitions, solver convergence
+`nebar` is not the summary-file line average. It is the profile-derived scalar
+density saved as `ne_profile_scalar` and `ne_profile_scalar_ts`. The loader
+broadcasts the Thomson-time scalar over rho so `ShotBundle.ne_vals` retains shape
+`(shots,time,rho)` while carrying only one density value per time.
 
-**Dedicated debug script** (`scripts/debug_shot.py`):
-- More detailed plotting (per-radius traces, diffusion/source decomposition)
-- Usage: `./scripts/run_training_gpu.sh --python scripts/debug_shot.py --config <cfg> --shot <id>`
+Removed controls:
 
-## Practical Notes for New GPU Users
-- **First step warmup**: JIT compilation takes 10-60s; subsequent steps are fast. Training script prints "[timing] warmup & first step" to clarify.
-- **Batch sizing**: Global batch size $B$ must be divisible by number of devices $D$ for `pmap`. Each GPU processes $B/D$ shots.
-- **Memory management**: Padded batches increase footprint. If OOM, reduce `training.batch_size` or `data.rom_n_interior`.
-- **CUDA environment**: Always use the canonical wrapper `./scripts/run_training_gpu.sh` on SDCC/HPC; it loads modules, sets `JAX_ENABLE_X64=1`, exports CUDA/NCCL paths.
-- **Smoke checks**: Run lightweight regression tests before/after training:
-  ```bash
-  ./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config <cfg> --shot <id>
-  ./scripts/run_training_gpu.sh --python scripts/check_bc.py --config <cfg> --shot <id>
-  ./scripts/run_training_gpu.sh --python scripts/smoke_time_padding_strict.py
-  ```
-- **Multi-GPU allocation**: If running `--debug_one_shot` on a multi-GPU node, training script auto-reduces device count to `min(n_devices, n_shots)` to avoid batch-sizing failures.
+```text
+S_gas S_rec S_nbi
+```
 
-## Recent Optimization and Solver Fixes (stability + perf)
-- **IMEX-only branch:** All Diffrax and non-IMEX solver paths removed for simplicity. Implicit diffusion operator now exactly matches explicit discretization (conservative flux-form).
-- **Static IMEX/loss config in compiled paths:** In `train_tokamak_ode_hpc.py`, `make_step` uses `pmap(..., static_broadcasted_argnums=(3, 4))`, and `eval_loss_on_indices` uses `jit(..., static_argnums=(2, 3))`, so `LossCfg` and `IMEXConfig` are compile-time constants.
-- **Padded-time solves with valid-window masking:** Training solves over the padded time array (to keep `SaveAt(ts=...)` valid/strictly increasing) and applies a `time_mask` derived from `t_len` for every loss term. IMEX integrator uses `active_mask` to freeze dynamics in padded regions.
-- **Strictly increasing padding:** `fusion_ode_identification.data.pad_time_to_max_strict` appends steps guaranteed to remain strictly increasing even after float32 downcast, using `max(eps, ulp64, ulp32)` at the last time value.
-- **Smooth clamps replace hard clips:** State bounds (Te, z) enforced via softplus-based smooth clamps to preserve nonzero gradients near saturation, reducing gradient-killing.
-- **All-radii supervision with inverse-coverage weighting:** Training loss now supervises all interior masked radii with inverse-coverage normalized weights (each radius gets comparable total weight regardless of observation density), eliminating "coverage² punishment" of sparse radii and improving data utilization.
-- **Lambda_z smoothness regularization:** `lambda_z` is implemented as a latent smoothness penalty (mean squared Δz across time) rather than a no-op, encouraging stable latent trajectories.
-- **EMA validation and independent best tracking:** When `training.ema_decay > 0`, the training script evaluates both raw and EMA parameters on validation at log intervals, tracks separate global bests (`_best.eqx` for raw, `_best_ema.eqx` for EMA), and logs both metrics for comparison.
-- **Geometry precomputation (P1.2):** Per-shot geometry arrays (`dr`, `Vprime_face`, `Vprime_cell`, `denom`) are computed once and passed through IMEX args, eliminating repeated recomputation in every substep and significantly reducing diffusion operator overhead.
-- **Interpolant-free IMEX substeps (P1.1):** Controls and edge BC are evaluated once at save points and linearly blended across substeps, removing per-substep searchsorted interpolation overhead.
-- **IMEX lax.cond branch fix:** `interval_scan` active/inactive branches now return identical carry tuple structures `(y, t, Te_edge, ctrl, ne)` to satisfy JAX's type-structure invariant.
-- **Numerical guards:** diffusion denominator floors near the core, "skip update on NaN/Inf grads", and finiteness checks on solver success.
-- **L-BFGS finetune correctness:** Uses shared `build_model_template` for deserialization (matching trained model statics), selects hardest train-only shots (never validation), and finetunes the full inexact parameter tree rather than last-layer-only.
-- **Multi-GPU one-shot debug:** Device list is reduced to `min(n_devices, n_shots)` when `--debug_one_shot` is used on multi-GPU allocations, preventing batch-sizing failures.
-- **X64 enforcement:** `JAX_ENABLE_X64=1` exported in the canonical GPU wrapper for consistent dtype behavior across training/eval/smoke checks.
-- **Smoke checks:** Lightweight sanity checks added: `scripts/smoke_diffusion_sanity.py` (const profile → div≈0, BC coupling sign), `scripts/smoke_time_padding_strict.py` (padding strictness under downcast), `scripts/check_bc.py` (edge BC sanity).
+The D-alpha trace now enters directly as a scalar control and as the main latent
+transition evidence.
 
-## References (package docs)
-- JAX: https://jax.readthedocs.io
-- Equinox: https://docs.kidger.site/equinox/
-- Optax: https://optax.readthedocs.io
+## Data Loading Details
+
+`load_data(config)` returns:
+
+```python
+bundle, rho_rom, rho_cap, obs_idx
+```
+
+Important `ShotBundle` fields:
+
+| Field | Meaning |
+|---|---|
+| `ts_t` | Padded Thomson time base |
+| `ts_Te` | Filled temperature array used for numeric rollout/loss |
+| `ts_Te_raw` | NaN-preserving temperature array used for measured-only plotting |
+| `mask` | Strict measured `T_e` support after per-rho QA |
+| `reliable_mask` | Corpus reliable annulus mask computed after regridding |
+| `Te_edge` | Dirichlet boundary trace from outermost observed `T_e` |
+| `ctrl_vals` | Four scalar controls on the profile time base |
+| `ne_vals` | Broadcast representative scalar density |
+| `dalpha_ts` | D-alpha on the profile time base |
+| `z0` | Per-shot latent initial condition |
+| `t_len` | Valid unpadded length |
+
+The runtime grid is uniform: `rho_rom = linspace(0, 1, N)`. The final node is a
+Dirichlet boundary and is excluded from data-loss supervision.
+
+## Model
+
+`HybridField` combines:
+
+1. Conservative finite-volume diffusion using `chi(rho,z)` and `Vprime`.
+2. A residual source MLP evaluated pointwise at `(rho, Te, ne, controls, z)`.
+3. A scalar latent ODE.
+
+The active latent design is `barrier_v1`. Its barrier coordinate is
+`z_b = sigmoid(zeta)`. Higher `z_b` means stronger H-mode/barrier evidence and
+lower edge diffusivity through the existing diffusivity profile.
+
+Latent features have size 6:
+
+```text
+1 - norm(D_alpha)
+-d/dt norm(D_alpha)
++d/dt norm(Te_edge)
++d/dt norm(ne_edge)
+norm(P_nbi)
+norm(Ip)
+```
+
+The feature smoother uses short windows so transitions in these sub-second shots
+are not averaged away. The D-alpha auxiliary head predicts `norm(D_alpha)` as
+`1 - z_b`, directly tying the latent coordinate to the measured L-H proxy.
+
+## Loss
+
+`loss.py` computes a weighted pseudo-Huber data term on masked interior radii,
+gated by `reliable_mask`, plus:
+
+| Term | Meaning |
+|---|---|
+| `lambda_src` | Residual source magnitude penalty |
+| `lambda_z` | Latent smoothness penalty |
+| `lambda_zreg` | Latent magnitude penalty |
+| `lambda_regime`, `lambda_pH` | Heuristic regime BCE supervision |
+| `lambda_dalpha` | D-alpha auxiliary supervision |
+
+For `config_v3*.yaml`, `lambda_dalpha = 10.0` so the latent is materially
+supervised by D-alpha during training.
+
+## Evaluation
+
+`scripts/evaluate_model.py`:
+
+- Prefers `_best_ema.eqx`, then `_best.eqx`, then `_finetuned.eqx`.
+- Clears stale `shot_*.png` files before writing new plots.
+- Uses measured-only heatmaps where unobserved regions are white.
+- Reports whole-mask, annulus, D-alpha, latent, and physics consistency metrics.
+- Overlays `1 - norm(D_alpha)` and the barrier latent on overview/latent plots.
+
+## Smoke Workflow
+
+On the login node use CPU smoke tests:
+
+```bash
+JAX_PLATFORMS=cpu python scripts/smoke_time_padding_strict.py
+JAX_PLATFORMS=cpu python scripts/smoke_valid_window.py --config config/config_v3_debug.yaml
+JAX_PLATFORMS=cpu python scripts/smoke_padding_freeze.py --config config/config_v3_debug.yaml
+JAX_PLATFORMS=cpu python scripts/smoke_diffusion_sanity.py --config config/config_v3_debug.yaml --shot 27578
+python scripts/smoke_checkpoint_selection.py
+JAX_PLATFORMS=cpu python -m train_tokamak_ode_hpc --config config/config_v3_debug.yaml --device cpu
+JAX_PLATFORMS=cpu python scripts/evaluate_model.py --config config/config_v3_debug.yaml --model-id production_run_v3_debug --data-check
+```
+
+Validated strict-pack smoke state:
+
+```text
+18 packs loaded
+ShotBundle Te shape = (18, 102, 65)
+control shape = (18, 102, 4)
+density broadcast check = true
+training/evaluation ok fraction = 1.000
+```
+
+## GPU Training
+
+Use the wrapper on a compute node:
+
+```bash
+./scripts/run_training_gpu.sh --config config/config_v3.yaml
+```
+
+Do not run full GPU training on the login node. CPU smoke is fine there; real
+training should run under an allocated GPU session.
