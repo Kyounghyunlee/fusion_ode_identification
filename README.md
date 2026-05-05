@@ -63,14 +63,25 @@ training pipeline. If you also want the full visible spectrometer dump
 (`spectrometer_visible.nc`, including BES channels), request it explicitly with
 `--groups spectrometer_visible`.
 
-2) Build TORAX training packs (.npz):
+2) Build the current strict v3 training packs (.npz):
 ```bash
-python -m preprocessing.build_training_pack --shots 27567 27568
-# or discover any shot folders already under data/
 python -m preprocessing.build_training_pack --discover \
 	--qa-grade fail \
 	--qa-summary data/sanity_summary_v3.csv \
 	--qa-plots data/plots/strict_iter3
+```
+This command discovers shot folders under `data/`, applies the strict per-time and
+per-rho `T_e` QA gates, writes only shots with at least four stable edge/rho
+columns, saves the canonical QA table to `data/sanity_summary_v3.csv`, and writes
+QA plots/coverage heatmaps under `data/plots/strict_iter3/`. The current validated
+strict pack set contains 18 `*_torax_training.npz` files.
+
+For a quick targeted rebuild while debugging one or two shots:
+```bash
+python -m preprocessing.build_training_pack --shots 27567 27568 \
+	--qa-grade fail \
+	--qa-summary data/sanity_summary_debug.csv \
+	--qa-plots data/plots/debug_rebuild
 ```
 3) Inspect packs (optional):
 ```bash
@@ -262,14 +273,23 @@ We provide a **canonical GPU wrapper** (`scripts/run_training_gpu.sh`) that load
 ```bash
 ./scripts/run_training_gpu.sh --config config/config_v3.yaml
 ```
-- With tmux (recommended):
+- With tmux on a GPU compute node (recommended for the current strict packs):
 ```bash
-tmux new -s tokamak_resume
-./scripts/run_training_gpu.sh --config config/config.yaml
+cd /home/ITER/leek12/research/fusion_ode_identification
+tmux new -s tokamak_v3
+
+# inside tmux
+source venv/bin/activate
+export PYTHONPATH="$PWD"
+./scripts/run_training_gpu.sh --config config/config_v3.yaml
+
 # detach: Ctrl+b then d
 # list sessions: tmux ls
-# reattach: tmux attach -t tokamak_resume
+# reattach: tmux attach -t tokamak_v3
 ```
+`config/config_v3.yaml` uses `shots: "all"`, so it trains on the currently built
+strict packs in `data/`. Do not start this from the login node unless you have
+already entered an allocated GPU session.
 - Run arbitrary Python scripts via `--python`:
 ```bash
 ./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_debug.yaml --shot 27567
