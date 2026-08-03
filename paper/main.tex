@@ -1,0 +1,192 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper, margin=2.6cm]{geometry}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[colorlinks=true, linkcolor=MidnightBlue, citecolor=MidnightBlue, urlcolor=MidnightBlue]{hyperref}
+\usepackage[round]{natbib}
+\usepackage{microtype}
+
+% ---- symbols ----
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\state}{u}                 % transported field
+\newcommand{\lat}{\zeta}               % latent regime coordinate
+\newcommand{\barrier}{\beta}           % barrier coordinate in [0,1]
+\newcommand{\drive}{a}                 % normal-form drive
+\newcommand{\ctrl}{\bm{w}}             % exogenous inputs
+\newcommand{\emiss}{y}                 % scalar emission observable
+\newcommand{\pH}{p_{\mathrm{H}}}
+
+\title{Identification of a bistable normal form for regime transitions\\
+in a driven dissipative transport system}
+\author{Kyounghyun Lee}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Spatially extended dissipative systems under strong forcing can switch abruptly
+between distinct macroscopic transport regimes. We propose a hybrid
+reduced-order model in which a one-dimensional diffusion equation with a
+state-dependent transport coefficient is coupled to a scalar latent variable
+governed by the cusp normal form
+$\tau\,\dot\lat = \drive(\ctrl) + b\,\lat - \lat^{3}$.
+The two stable branches of the cusp define the two transport regimes; the
+transition and its hysteresis are saddle-node bifurcations of the latent
+dynamics, and the distance of the exogenous drive from the fold provides a
+quantitative, closed-form margin to transition. All model components --- the
+transport coefficient, a residual source term, the drive map, and an
+observation map from the latent state to a measured emission proxy --- are
+identified end-to-end from experimental time series by differentiating through
+an implicit--explicit integrator. Unlike proxy-following approaches, the
+latent dynamics are driven exclusively by exogenous actuation, so the inferred
+regime state is falsifiable against held-out observables. The identified model
+assigns a calibrated regime probability at every instant, locates transition
+times without supervision beyond weak segment labels, and yields
+bifurcation diagrams that summarize when a transition can be forced or undone.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:intro}
+
+% Placeholder: motivation from dynamical systems viewpoint.
+Abrupt transitions between metastable states are a recurring motif in
+nonequilibrium systems: bistability, hysteresis, and critical slowing down
+near folds are generic features predicted by normal-form theory
+\citep{kuznetsov2004elements, strogatz2018nonlinear}. In the experimental
+system considered here, a driven dissipative transport process switches
+between a low-transport-barrier regime (\emph{state L}) and a
+high-transport-barrier regime (\emph{state H}) as the external drive
+increases, with the reverse switch occurring at a lower drive --- the
+signature of hysteresis. A quantitative, model-based answer to the question
+\emph{``which regime is the system in, and how far is it from switching?''}
+is a prerequisite for control.
+
+Our contributions are:
+(i) a hybrid mechanistic--statistical model in which the regime is a latent
+coordinate of a cusp normal form, giving the L/H classification a precise
+mathematical meaning (basin membership of a bistable vector field);
+(ii) end-to-end identification through a differentiable implicit--explicit
+solver; and
+(iii) closed-form bifurcation diagnostics --- fold margins
+$\mu_{\mathrm{LH}}(t)$ and $\mu_{\mathrm{HL}}(t)$ --- that quantify
+proximity to forced and spontaneous transitions.
+
+\section{Model}
+\label{sec:model}
+
+\subsection{Transport backbone}
+Let $\state(\rho, t)$ denote the transported scalar field on the normalized
+domain $\rho \in [0, 1]$ with Neumann condition at $\rho = 0$ and a measured
+Dirichlet trace at $\rho = 1$. The field obeys a conservative diffusion law
+with a learned residual source $s_{\theta}$,
+\begin{equation}
+\partial_t \state
+= \frac{1}{V'(\rho)} \, \partial_\rho\!\left( V'(\rho)\, \chi(\rho, \lat)\,
+\partial_\rho \state \right) + s_{\theta}\!\left(\rho, \state, n, \ctrl, \lat\right),
+\label{eq:pde}
+\end{equation}
+where $V'$ is a fixed geometric weight and $n$ an auxiliary measured field.
+The transport coefficient is a monotone boundary-layer profile whose edge
+value is modulated by the latent regime coordinate $\lat$,
+\begin{equation}
+\chi(\rho, \lat) = \chi_0 + \sigma\!\left(\tfrac{\rho - \rho_c}{w}\right)
+\left[\chi_1 - \Delta\chi\,\barrier(\lat) - \chi_0\right],
+\qquad
+\barrier(\lat) = \sigma\!\left(\tfrac{3\lat}{\sqrt{b}}\right),
+\label{eq:chi}
+\end{equation}
+so that the H regime ($\lat > 0$) suppresses transport in the boundary layer
+and steepens the stationary profile there.
+
+\subsection{Latent regime dynamics: the cusp normal form}
+The regime coordinate evolves according to
+\begin{equation}
+\tau\,\dot\lat = \drive(\ctrl) + b\,\lat - \lat^{3},
+\qquad b > 0,
+\label{eq:cusp}
+\end{equation}
+with drive $\drive(\ctrl) = \bm{\kappa}^{\top}\ctrl + \kappa_0$ an affine map
+of the exogenous inputs only (injected power, current, mean density). For
+$\lvert \drive \rvert < \drive_{\mathrm{f}} = 2 (b/3)^{3/2}$ the vector field
+\eqref{eq:cusp} is bistable: stable equilibria
+$\lat_{\mathrm{L}}^{*} < 0 < \lat_{\mathrm{H}}^{*}$ are separated by a saddle
+$\lat_{\mathrm{s}}$. Sweeping $\drive$ through $+\drive_{\mathrm{f}}$
+annihilates the L branch in a saddle-node bifurcation (forced L$\to$H
+transition); sweeping back through $-\drive_{\mathrm{f}}$ annihilates the H
+branch (H$\to$L back-transition). Hysteresis is therefore intrinsic rather
+than imposed. We define the \emph{fold margins}
+\begin{equation}
+\mu_{\mathrm{LH}}(t) = \drive_{\mathrm{f}} - \drive(\ctrl(t)),
+\qquad
+\mu_{\mathrm{HL}}(t) = \drive(\ctrl(t)) + \drive_{\mathrm{f}},
+\label{eq:margins}
+\end{equation}
+which measure the distance of the instantaneous drive from the two folds and
+constitute the control-relevant output of the identified model.
+
+\subsection{Observation model and regime probability}
+The latent state is linked to a measured emission proxy $\emiss(t)$ (bright in
+state L, quiescent in state H) through a learned map
+$\hat{\emiss} = h_{\psi}\!\left(\barrier(\lat), \ctrl, \state_{\mathrm{edge}},
+n_{\mathrm{edge}}\right)$. Crucially, $\emiss$ never enters the latent
+dynamics \eqref{eq:cusp}; it only supervises the observation head, which
+breaks the circularity of proxy-following formulations. The instantaneous
+regime probability is the calibrated logistic
+\begin{equation}
+\pH(t) = \sigma\!\left(k\,\lat(t) / \sqrt{b}\right),
+\label{eq:ph}
+\end{equation}
+and the mathematically sharp classification is basin membership:
+the system is in regime H at time $t$ iff $\lat(t)$ lies in the basin of
+attraction of $\lat^{*}_{\mathrm{H}}\big(\drive(t)\big)$.
+
+\section{Identification}
+\label{sec:ident}
+
+% Placeholder: data description, labels, loss, solver. To be completed after
+% the production training run.
+\paragraph{Data.} Publicly released measurement campaigns from a toroidal
+confinement experiment (MAST); each discharge provides profile measurements
+$\state(\rho_i, t_j)$ in the outer domain, exogenous inputs $\ctrl(t)$, and
+the emission proxy $\emiss(t)$ at millisecond resolution. Discharges are
+screened by strict per-channel quality gates; regime segment labels are
+produced by a dwell-time-constrained bimodal split of the lower envelope of
+$\emiss$ and used only as weak supervision.
+
+\paragraph{Objective.} The loss combines
+(i) a robust profile misfit,
+(ii) a source-magnitude penalty,
+(iii) smoothness and magnitude regularization of $\lat$,
+(iv) a binary cross-entropy on $\pH$ against the weak segment labels, and
+(v) the observation-head misfit on $\emiss$.
+Gradients are obtained by reverse-mode differentiation through a
+$\theta$-method implicit--explicit integrator with tridiagonal implicit
+diffusion.
+
+\section{Results}
+\label{sec:results}
+
+% Placeholder — figures generated by paper/scripts/make_figures.py:
+% fig:data          — example discharge: emission proxy, inputs, labels
+% fig:fits          — profile fits and latent trajectories
+% fig:bifurcation   — identified cusp: equilibria vs drive, data overlaid
+% fig:classification— p_H vs labels, metrics table, transition timing
+% fig:margins       — fold margins along a discharge
+
+\section{Discussion}
+\label{sec:discussion}
+
+% Placeholder: control interpretation of the fold margins; limitations
+% (weak labels, non-causal normalization to be addressed; single latent mode).
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}
