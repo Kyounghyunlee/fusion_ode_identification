@@ -150,25 +150,55 @@ attraction of $\lat^{*}_{\mathrm{H}}\big(\drive(t)\big)$.
 \section{Identification}
 \label{sec:ident}
 
-% Placeholder: data description, labels, loss, solver. To be completed after
-% the production training run.
 \paragraph{Data.} Publicly released measurement campaigns from a toroidal
-confinement experiment (MAST); each discharge provides profile measurements
-$\state(\rho_i, t_j)$ in the outer domain, exogenous inputs $\ctrl(t)$, and
-the emission proxy $\emiss(t)$ at millisecond resolution. Discharges are
-screened by strict per-channel quality gates; regime segment labels are
-produced by a dwell-time-constrained bimodal split of the lower envelope of
-$\emiss$ and used only as weak supervision.
+confinement experiment (MAST) \citep{mastopendata}; each discharge provides
+profile measurements $\state(\rho_i, t_j)$ in the outer domain, exogenous
+inputs $\ctrl(t)$, and the emission proxy $\emiss(t)$ at millisecond
+resolution. The corpus contains 36 discharges: 26 with at least one L$\to$H
+transition (several with back-transitions or dithering phases) and 10 that
+remain in state L throughout, retained deliberately as negative examples.
+Discharges are screened by strict per-channel quality gates (median level,
+bounded jumps and span, minimum time coverage), which is essential: raw
+channels are frequently corrupted, and admitting them destabilizes both the
+rollout and the labels.
 
-\paragraph{Objective.} The loss combines
-(i) a robust profile misfit,
-(ii) a source-magnitude penalty,
-(iii) smoothness and magnitude regularization of $\lat$,
-(iv) a binary cross-entropy on $\pH$ against the weak segment labels, and
-(v) the observation-head misfit on $\emiss$.
-Gradients are obtained by reverse-mode differentiation through a
-$\theta$-method implicit--explicit integrator with tridiagonal implicit
-diffusion.
+\paragraph{Weak segment labels.} Because $\emiss$ is bright in state L and
+quiescent in state H but heavily contaminated by short bursts, labels are
+computed from its \emph{lower envelope} (rolling 15th percentile, \SI{15}{ms}
+window). Within a gate that excludes the formation and termination phases of
+each discharge, the envelope distribution is split by a variance-maximizing
+threshold; a candidate H segment is accepted only if
+(i) it persists for at least \SI{20}{ms},
+(ii) it is preceded by an L reference inside the gate, and
+(iii) the envelope steps down sharply across its entry
+(\SI{25}{ms} contrast windows), which rejects slow drifts.
+Detected transition times agree with independent session-log annotations to
+within $\sim$\SI{20}{ms} on the discharges where such annotations exist.
+
+\paragraph{Objective.} With $\Theta = (\theta, \psi, \bm{\kappa}, b, \tau,
+k, \chi\text{-parameters})$, the per-discharge loss is
+\begin{equation}
+\mathcal{L} =
+\underbrace{\sum_{i,j} W_{ij}\, \phi_{\delta}\!\big(\hat\state(\rho_i, t_j) - \state_{ij}\big)}_{\text{profile misfit}}
++ \lambda_s \sum \phi_{\delta_s}(s_\theta)
++ \lambda_1 \overline{\lat^2} + \lambda_2 \overline{\dot\lat^2}
++ \lambda_r\, \mathrm{BCE}\big(\pH, \ell\big)
++ \lambda_y\, \overline{\big(h_\psi - \tilde\emiss\big)^2},
+\label{eq:loss}
+\end{equation}
+where $\phi_\delta$ is the pseudo-Huber function, $W$ inverse-coverage
+weights that equalize sparsely and densely observed channels, $\ell$ the weak
+segment labels (scored only on clean L/H samples), and $\tilde\emiss$ the
+range-normalized emission proxy. We use $\lambda_r = 5\times 10^{-2}$ and
+$\lambda_y = 1$; in particular the emission term supervises the
+\emph{observation head}, not the latent directly. Gradients of
+\eqref{eq:loss} are obtained by reverse-mode differentiation through a
+$\theta$-method implicit--explicit integrator ($\theta = 0.7$, five substeps
+per observation interval) whose implicit stage is a tridiagonal (Thomas)
+solve of the diffusion operator; the latent and source terms are explicit.
+Model selection uses a held-out validation set of discharges whose loss
+includes the regime and emission terms, so checkpoints are selected for
+regime fidelity as well as profile fit.
 
 \section{Results}
 \label{sec:results}
