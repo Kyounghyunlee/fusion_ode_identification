@@ -2,11 +2,34 @@
 
 A physics-informed neural ODE that learns reduced-order electron-temperature transport for tokamak discharges (currently MAST). The PDE side is a conservative finite-volume diffusion operator with an explicit, differentiable diffusivity profile $\chi(\rho,z)$; the closure side is a small MLP residual source. A scalar latent $z(t)$ modulates only the edge diffusivity. Training and evaluation run end-to-end in JAX with a custom IMEX $\theta$-method integrator (Thomas-algorithm tridiagonal implicit diffusion + explicit source/latent), so reverse-mode autodiff goes through the rollout cleanly.
 
+**Current status (`lh-bifurcation` branch)**: the latent is a bistable cusp
+normal form `tau * dz/dt = a(u) + b*z - z^3` driven by actuators only
+(`P_nbi`, `Ip`, `nebar`); D-alpha supervises a learned observation head
+instead of pinning the latent, so L/H classification is a property of the
+identified dynamics (basin membership, fold margins) rather than a proxy
+readout. Regime labels come from a dwell-time-constrained bimodal split of
+the D-alpha lower envelope; evaluation reports accuracy/F1/AUC/Brier,
+transition-time error, and closed-form bifurcation diagnostics.
+
 Where to look:
-- **Design and physics**: [docs/PHYSICS_INFORMED_TOKAMAK_ODE.md](docs/PHYSICS_INFORMED_TOKAMAK_ODE.md). The one-page executive summary at the top, plus §13 (engineering roadmap with M1–M7 milestones), are the fastest entry points.
-- **Code architecture and HPC notes**: [docs/code_architecture.md](docs/code_architecture.md).
+- **Design and physics**: [docs/PHYSICS_INFORMED_TOKAMAK_ODE.md](docs/PHYSICS_INFORMED_TOKAMAK_ODE.md).
+- **Code architecture**: [docs/code_architecture.md](docs/code_architecture.md).
 - **Training pack format**: [docs/training_data_pack.md](docs/training_data_pack.md).
-- **Current status**: v3 now uses strict per-rho `T_e` QA, four scalar controls (`P_nbi`, `Ip`, profile-derived `nebar`, `D_alpha`), broadcast scalar density, and a D-alpha-following barrier latent. The validated strict pack set has 18 shots and 110 trusted edge/rho columns; old pre-scalar-control checkpoints should be retrained.
+- **Paper draft**: [paper/main.tex](paper/main.tex) (dynamical-systems framing).
+
+## Local Workstation Setup (Fedora, single GPU)
+
+```bash
+cd ~/Research/fusion_ode_identification
+uv venv .venv --python 3.12 --native-tls
+UV_NATIVE_TLS=1 uv pip install -p .venv -r requirements.txt
+source scripts/env_local.sh   # CA bundle for the TLS proxy, PYTHONPATH, x64, venv
+```
+
+Device choice on this machine (RTX 5080, float64 pipeline): GPU and CPU tie
+at batch 8 (~1.4 s/step); GPU step time is flat in batch size, CPU scales
+linearly. Use `JAX_PLATFORMS=cuda` with batch >= 16 for production training
+and `JAX_PLATFORMS=cpu` for small debug runs.
 
 ## Development Workflow
 

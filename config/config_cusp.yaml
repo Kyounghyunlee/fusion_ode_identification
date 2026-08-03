@@ -16,6 +16,10 @@ training:
 
   warmup_steps: 5
   total_steps: 6000
+  # Batch 8 is the practical ceiling: XLA-GPU core-dumps compiling the
+  # gradient for batch >= 10 on this stack, and at batch 8 CPU (14 cores)
+  # and the RTX 5080 are tied (~1.4 s/step, float64). CPU is the robust
+  # choice for long runs; GPU works equally well at batch 8.
   batch_size: 8
   grad_clip: 1.0e3
 
