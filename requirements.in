@@ -1,0 +1,16 @@
+jax[cuda12]
+equinox
+optax
+jaxtyping
+numpy
+pyyaml
+matplotlib
+xarray
+zarr
+fsspec
+s3fs
+netcdf4
+h5netcdf
+requests
+pandas
+scipy

@@ -152,73 +152,130 @@ def interp_channels_to_time(t_src: np.ndarray, values_c_t: np.ndarray, t_dst: np
     return out
 
 
+def _smooth_time_window(x: np.ndarray, t: np.ndarray, window_s: float) -> np.ndarray:
+    """Moving average over an approximately fixed time window (seconds)."""
+    if x.size < 3:
+        return x
+    dt = float(np.median(np.diff(t)))
+    if not np.isfinite(dt) or dt <= 0:
+        return x
+    k = int(np.clip(round(window_s / dt), 1, x.size))
+    if k <= 1:
+        return x
+    pad_l = k // 2
+    pad_r = k - 1 - pad_l
+    x_pad = np.concatenate([np.repeat(x[:1], pad_l), x, np.repeat(x[-1:], pad_r)])
+    return np.convolve(x_pad, np.ones(k) / k, mode="valid")
+
+
+def _otsu_threshold(x: np.ndarray, n_bins: int = 128) -> float:
+    """Two-class variance-maximizing threshold (Otsu) on a 1D sample."""
+    x = x[np.isfinite(x)]
+    hist, edges = np.histogram(x, bins=n_bins)
+    hist = hist.astype(float)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    w0 = np.cumsum(hist)
+    w1 = w0[-1] - w0
+    m0 = np.cumsum(hist * centers)
+    mu0 = np.divide(m0, w0, out=np.zeros_like(m0), where=w0 > 0)
+    mu1 = np.divide(m0[-1] - m0, w1, out=np.zeros_like(m0), where=w1 > 0)
+    between = w0 * w1 * (mu0 - mu1) ** 2
+    return float(centers[int(np.argmax(between))])
+
+
 def estimate_regime_labels(
     t: np.ndarray,
     nebar: np.ndarray,
     P_nbi: np.ndarray,
     D_alpha: np.ndarray,
+    Ip: Optional[np.ndarray] = None,
+    min_dwell_s: float = 0.02,
+    transition_halfwidth_s: float = 0.003,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Estimate L/H transition timing using D-alpha drop plus actuator rises."""
+    """Label L/H regime from D-alpha with a dwell-time-constrained bimodal split.
+
+    Method: smooth D-alpha over ~4 ms, split its distribution (within the
+    plasma window, gated on Ip and nebar) with an Otsu threshold, and accept
+    low-D-alpha (H-regime) segments only if they persist for >= min_dwell_s.
+    Multiple segments are allowed, so H->L back-transitions are labelled too.
+
+    Returns:
+        regime: int8 array; 0 = unknown/no plasma, 1 = L, 2 = transition, 3 = H
+        score: H-evidence in [0, 1] (distance of smoothed D-alpha below threshold)
+        transition_time: time of the first L->H switch (nan if none)
+    """
     regime = np.zeros_like(t, dtype=np.int8)
     score = np.zeros_like(t, dtype=float)
-    if t.size < 5:
+    if t.size < 5 or not np.any(np.isfinite(D_alpha)):
         return regime, score, float("nan")
 
-    def _smooth(x: np.ndarray, k: int) -> np.ndarray:
-        if x.size < 3:
-            return x
-        k = min(k, x.size)
-        if k <= 1:
-            return x
-        filt = np.ones(k, dtype=float) / float(k)
-        return np.convolve(x, filt, mode="same")
+    dalpha = interp_fill_1d(t, np.asarray(D_alpha, dtype=float))
+    dalpha_s = _smooth_time_window(dalpha, t, 0.004)
 
-    def _norm(x: np.ndarray) -> Optional[np.ndarray]:
-        if not np.any(np.isfinite(x)):
-            return None
-        x_filled = interp_fill_1d(t, x)
-        span = float(np.nanmax(x_filled) - np.nanmin(x_filled))
-        if span < 1e-9:
-            return None
-        return (x_filled - np.nanmin(x_filled)) / (span + 1e-6)
-
-    score_terms = []
-
-    d_alpha_norm = _norm(D_alpha)
-    if d_alpha_norm is not None:
-        d_alpha_s = _smooth(d_alpha_norm, 101)
-        score_terms.append(1.2 * np.maximum(-np.gradient(d_alpha_s, t), 0.0))
-
-    ne_norm = _norm(nebar)
-    if ne_norm is not None:
-        ne_s = _smooth(ne_norm, 31)
-        score_terms.append(0.7 * np.maximum(np.gradient(ne_s, t), 0.0))
-
-    pnbi_norm = _norm(P_nbi)
-    if pnbi_norm is not None:
-        pnbi_s = _smooth(pnbi_norm, 31)
-        score_terms.append(0.3 * np.maximum(np.gradient(pnbi_s, t), 0.0))
-
-    if not score_terms:
+    # Plasma gate: only label where there is a real discharge.
+    gate = np.ones_like(t, dtype=bool)
+    if Ip is not None and np.any(np.isfinite(Ip)):
+        ip_abs = np.abs(interp_fill_1d(t, np.asarray(Ip, dtype=float)))
+        gate &= ip_abs > 0.25 * np.nanpercentile(ip_abs, 95)
+    if np.any(np.isfinite(nebar)):
+        ne_f = interp_fill_1d(t, np.asarray(nebar, dtype=float))
+        gate &= ne_f > 0.15 * np.nanpercentile(ne_f, 95)
+    if np.count_nonzero(gate) < 10:
         return regime, score, float("nan")
 
-    score = np.sum(score_terms, axis=0)
-    pad = max(10, score.size // 20)
-    if score.size > 2 * pad:
-        score[:pad] = 0.0
-        score[-pad:] = 0.0
-
-    trans_idx = int(np.argmax(score))
-    if not np.isfinite(score[trans_idx]) or score[trans_idx] <= 0.0:
+    gated = dalpha_s[gate]
+    lo, hi = np.nanpercentile(gated, [1, 99])
+    span = hi - lo
+    if span < 1e-12:
+        return regime, score, float("nan")
+    norm_s = np.clip((dalpha_s - lo) / span, 0.0, 1.0)
+    thr = _otsu_threshold(norm_s[gate])
+    # Guard against degenerate splits: require the threshold to sit inside the
+    # central range and the two classes to be reasonably separated.
+    if not (0.05 < thr < 0.95):
+        regime[gate] = 1
+        return regime, score, float("nan")
+    low_frac = float(np.mean(norm_s[gate] < thr))
+    if low_frac < 0.02 or low_frac > 0.98:
+        regime[gate] = 1
         return regime, score, float("nan")
 
-    regime[:] = 1
-    width = max(2, regime.size // 20)
-    lo = max(0, trans_idx - width)
-    hi = min(regime.size, trans_idx + width + 1)
-    regime[lo:hi] = 2
-    regime[hi:] = 3
-    return regime, score, float(t[trans_idx])
+    score = np.clip((thr - norm_s) / max(thr, 1e-6), 0.0, 1.0)
+
+    # H candidate = low D-alpha inside the gate; enforce minimum dwell time.
+    h_cand = (norm_s < thr) & gate
+    dt = float(np.median(np.diff(t)))
+    min_dwell_n = max(2, int(round(min_dwell_s / max(dt, 1e-9))))
+    h_ok = np.zeros_like(h_cand)
+    i = 0
+    n = h_cand.size
+    while i < n:
+        if h_cand[i]:
+            j = i
+            while j < n and h_cand[j]:
+                j += 1
+            if (j - i) >= min_dwell_n:
+                h_ok[i:j] = True
+            i = j
+        else:
+            i += 1
+
+    regime[gate] = 1
+    regime[h_ok] = 3
+
+    # Mark short transition windows around every regime switch inside the gate.
+    half_n = max(1, int(round(transition_halfwidth_s / max(dt, 1e-9))))
+    switches = np.where(np.diff(regime.astype(int)) != 0)[0]
+    transition_time = float("nan")
+    for s_idx in switches:
+        if regime[s_idx] in (1, 3) and regime[s_idx + 1] in (1, 3):
+            if np.isnan(transition_time) and regime[s_idx] == 1 and regime[s_idx + 1] == 3:
+                transition_time = float(t[s_idx + 1])
+            lo_i = max(0, s_idx - half_n + 1)
+            hi_i = min(n, s_idx + 1 + half_n)
+            regime[lo_i:hi_i] = 2
+
+    return regime, score, transition_time
 
 
 def infer_ts_radial_coordinate(ts: xr.Dataset) -> Optional[str]: 
@@ -1202,7 +1259,7 @@ def build_one_shot(
 
     # Simple regime labelling on summary grid (t_summary)
     # 0 = unknown, 1 = L-mode, 2 = transition, 3 = H-mode
-    regime, regime_score, transition_time = estimate_regime_labels(t_summary, nebar, P_nbi, D_alpha)
+    regime, regime_score, transition_time = estimate_regime_labels(t_summary, nebar, P_nbi, D_alpha, Ip=Ip)
 
     # Coverage diagnostics
     Te_mask_col_cov = Te_mask.mean(axis=0).astype(np.float32)

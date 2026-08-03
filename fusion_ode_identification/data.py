@@ -332,6 +332,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         initial_barrier = float(data_cfg.get("latent_initial_barrier", model_cfg.get("initial_barrier", 0.05)))
         initial_barrier = float(np.clip(initial_barrier, 1.0e-4, 1.0 - 1.0e-4))
         z0_default = float(np.log(initial_barrier / (1.0 - initial_barrier)))
+    elif latent_design == "cusp":
+        # Start on the lower (L-regime) branch of the cusp; z* ~ -sqrt(b) ~ -1 at init.
+        z0_default = -1.0
     else:
         z0_default = 0.0
 

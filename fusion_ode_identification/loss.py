@@ -403,7 +403,25 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     dz = zs[1:] - zs[:-1]
     z_smooth = loss_cfg.lambda_z * jnp.mean(dz**2)
 
-    total_loss = obs_loss + src_penalty + z_reg + z_smooth
+    # Regime and D-alpha terms mirror the training loss so that checkpoint
+    # selection (validation loss) also reflects L/H discrimination quality.
+    regime_mask = bundle.regime_mask[:L].astype(jnp.float64)
+    regime_target = jnp.where(bundle.regime_ts[:L] > 2.0, 1.0, 0.0)
+    regime_logits = jax.vmap(model.compute_regime_logit)(zs)
+    regime_bce = jnp.maximum(regime_logits, 0.0) - regime_logits * regime_target + jnp.log1p(jnp.exp(-jnp.abs(regime_logits)))
+    regime_weight = loss_cfg.lambda_regime + loss_cfg.lambda_pH
+    regime_penalty = regime_weight * (jnp.sum(regime_mask * regime_bce) / (jnp.sum(regime_mask) + 1e-8))
+
+    dalpha_target = normalize_observed_signal(dalpha_full)
+    dalpha_hat = jax.vmap(lambda zi, cn, Tee, nee: model.compute_aux_dalpha_hat(zi, cn, Tee, nee))(
+        zs,
+        ctrl_norm_ts,
+        Te_edge_full,
+        ne_edge_ts,
+    )
+    dalpha_penalty = loss_cfg.lambda_dalpha * jnp.mean((dalpha_hat - dalpha_target) ** 2)
+
+    total_loss = obs_loss + src_penalty + z_reg + z_smooth + regime_penalty + dalpha_penalty
 
     return ShotEval(
         ok=jnp.array(1, dtype=jnp.int32),

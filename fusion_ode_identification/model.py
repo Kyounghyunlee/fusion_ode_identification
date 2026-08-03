@@ -202,6 +202,102 @@ class BarrierLatentDynamics(eqx.Module):
         return 1.0 - self.barrier_coordinate(z)
 
 
+class CuspLatentDynamics(eqx.Module):
+    """Bistable cusp normal-form latent for the confinement state.
+
+    tau * dz/dt = a(u) + b * z - z**3,   b > 0
+
+    For |a| < a_fold = 2*(b/3)**1.5 the system is bistable: a lower stable
+    branch (L regime, z < 0) and an upper stable branch (H regime, z > 0)
+    separated by an unstable middle equilibrium. Sweeping the actuator drive
+    a(u) through +a_fold destroys the L branch (forced L->H transition,
+    saddle-node bifurcation); sweeping back through -a_fold destroys the H
+    branch (H->L back-transition). Hysteresis is intrinsic to the normal form.
+
+    The drive a(u) is an affine map of normalized actuator controls only
+    (P_nbi, Ip, nebar). The D-alpha measurement never enters the dynamics;
+    it is predicted by a separate observation head, so the latent is
+    identified from data rather than pinned to a proxy signal.
+    """
+
+    drive_weights: jnp.ndarray
+    drive_bias: jnp.ndarray
+    b_raw: jnp.ndarray
+    tau_raw: jnp.ndarray
+    regime_gain_raw: jnp.ndarray
+    dalpha_head: eqx.nn.MLP
+
+    N_DRIVE = 3  # P_nbi, Ip, nebar (normalized); D_alpha excluded by design
+
+    def __init__(self, key):
+        key_w, key_head = jax.random.split(key)
+        self.drive_weights = jax.random.normal(key_w, (self.N_DRIVE,), dtype=jnp.float64) * 0.05
+        self.drive_bias = jnp.array(0.0, dtype=jnp.float64)
+        self.b_raw = jnp.array(0.55, dtype=jnp.float64)      # softplus -> b ~ 1.0
+        self.tau_raw = jnp.array(-3.9, dtype=jnp.float64)    # softplus + 5e-3 -> tau ~ 25 ms
+        self.regime_gain_raw = jnp.array(1.5, dtype=jnp.float64)
+        # Small observation head: D_alpha_hat = sigmoid(MLP(z_b, controls, Te_edge, ne_edge))
+        self.dalpha_head = eqx.nn.MLP(
+            in_size=1 + len(CONTROL_NAMES) + 2,
+            out_size=1,
+            width_size=16,
+            depth=1,
+            activation=jax.nn.tanh,
+            key=key_head,
+        )
+
+    # -- normal-form quantities (all closed-form) --
+
+    def b_eff(self) -> jnp.ndarray:
+        return jax.nn.softplus(self.b_raw) + 1e-3
+
+    def tau_eff(self) -> jnp.ndarray:
+        return jax.nn.softplus(self.tau_raw) + 5.0e-3
+
+    def z_scale(self) -> jnp.ndarray:
+        """Amplitude of the stable branches at a=0: z* = +/- sqrt(b)."""
+        return jnp.sqrt(self.b_eff())
+
+    def a_fold(self) -> jnp.ndarray:
+        """Fold amplitude: bistability holds for |a| < a_fold."""
+        b = self.b_eff()
+        return 2.0 * (b / 3.0) ** 1.5
+
+    def drive(self, latent_features: jnp.ndarray) -> jnp.ndarray:
+        feat = _as64(latent_features)
+        raw = jnp.dot(self.drive_weights, feat[: self.N_DRIVE]) + self.drive_bias
+        return softclip(raw, 5.0)
+
+    def __call__(self, z: float, latent_features: jnp.ndarray) -> float:
+        zeta = _as64(z)
+        a = self.drive(latent_features)
+        rhs = (a + self.b_eff() * zeta - zeta**3) / self.tau_eff()
+        return softclip(rhs, 1.0e3)
+
+    # -- observation / classification heads --
+
+    def barrier_coordinate(self, z: float, latent_gain: float = 1.0) -> float:
+        # Scale-invariant barrier coordinate: branches map to ~0.05 / ~0.95.
+        return jax.nn.sigmoid(_as64(latent_gain) * 3.0 * _as64(z) / self.z_scale())
+
+    def regime_logit(self, z: float, latent_gain: float = 1.0) -> float:
+        del latent_gain
+        k = jax.nn.softplus(self.regime_gain_raw) + 0.5
+        return k * _as64(z) / self.z_scale()
+
+    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float, latent_gain: float = 1.0) -> float:
+        z_b = self.barrier_coordinate(z, latent_gain=latent_gain)
+        x = jnp.concatenate(
+            [
+                jnp.atleast_1d(z_b),
+                jnp.asarray(control_norm, dtype=jnp.float64),
+                jnp.atleast_1d(_as64(Te_edge) / 1000.0),
+                jnp.atleast_1d(_as64(ne_edge) / 1e19),
+            ]
+        )
+        return jax.nn.sigmoid(self.dalpha_head(x)[0])
+
+
 def build_hybrid_model(cfg, key) -> "HybridField":
     model_cfg = cfg.get("model", {})
     layers = int(model_cfg.get("layers", 64))
@@ -223,6 +319,8 @@ def build_hybrid_model(cfg, key) -> "HybridField":
         )
     elif latent_design == "barrier_v1":
         latent = BarrierLatentDynamics(key_latent)
+    elif latent_design == "cusp":
+        latent = CuspLatentDynamics(key_latent)
     else:
         raise ValueError(f"Unknown model.latent_design={latent_design!r}")
 

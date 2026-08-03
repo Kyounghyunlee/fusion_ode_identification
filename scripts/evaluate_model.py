@@ -90,6 +90,11 @@ from fusion_ode_identification.data import load_data
 from fusion_ode_identification.types import ShotBundle, IMEXConfig
 from fusion_ode_identification.imex_solver import IMEXIntegrator
 from fusion_ode_identification.interp import LinearInterpolation
+from fusion_ode_identification.regime_metrics import (
+    regime_classification_metrics,
+    transition_time_error,
+    cusp_bifurcation_diagnostics,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -778,7 +783,7 @@ def main():
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle, imex_cfg)
-        z_barrier = jax.vmap(model.barrier_coordinate)(zs) if model.uses_barrier_latent() else None
+        z_barrier = jax.vmap(model.barrier_coordinate)(zs)
 
         # Match the training-time weighting so offline evaluation is comparable.
         mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
@@ -814,6 +819,53 @@ def main():
         outside_total_mae_eV += outside_mae_eV
         outside_total_mae_pct += outside_mae_pct
         
+        # Quantitative L/H regime assessment
+        regime_ts_np = np.asarray(bundle.regime_ts)
+        # Same clean-L/clean-H masking rule as the training loader.
+        regime_mask_np = (
+            ((regime_ts_np > 0.5) & (regime_ts_np < 1.5)) | ((regime_ts_np > 2.5) & (regime_ts_np < 3.5))
+        ).astype(float)
+        regime_logits_np = np.asarray(jax.vmap(model.compute_regime_logit)(zs))
+        regime_class = regime_classification_metrics(regime_logits_np, regime_ts_np, regime_mask_np)
+
+        # Labeled transition time: first sample where the label reaches H (3).
+        ts_np = np.asarray(bundle.ts_t)
+        h_idx = np.where(regime_ts_np > 2.5)[0]
+        t_label = float(ts_np[h_idx[0]]) if h_idx.size else float("nan")
+        transition_timing = transition_time_error(ts_np, regime_logits_np, t_label)
+
+        bifurcation_summary = None
+        ctrl_interp_diag = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+        ctrl_norm_diag = jnp.clip(
+            (ctrl_interp_diag.evaluate(bundle.ts_t) - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6),
+            -10.0,
+            10.0,
+        )
+        bif = cusp_bifurcation_diagnostics(model.latent, np.asarray(ctrl_norm_diag), np.asarray(zs))
+        if bif is not None:
+            bifurcation_summary = {
+                "b": bif["b"],
+                "tau_s": bif["tau"],
+                "a_fold": bif["a_fold"],
+                "drive_min": float(np.min(bif["a_t"])),
+                "drive_max": float(np.max(bif["a_t"])),
+                "bistable_fraction": bif["bistable_fraction"],
+                "h_basin_fraction": float(np.mean(bif["basin"] > 0)),
+            }
+            np.savez(
+                os.path.join(eval_dir, f"bifurcation_shot_{bundle.shot_id}.npz"),
+                ts=ts_np,
+                z=np.asarray(zs),
+                a_t=bif["a_t"],
+                a_fold=bif["a_fold"],
+                b=bif["b"],
+                z_saddle=bif["z_saddle"],
+                basin=bif["basin"],
+                regime_ts=regime_ts_np,
+                regime_logits=regime_logits_np,
+                dalpha_ts=np.asarray(bundle.dalpha_ts),
+            )
+
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
         
@@ -847,6 +899,9 @@ def main():
             "dalpha_stats": compute_dalpha_stats(bundle.ts_t, bundle.dalpha_ts, bundle.regime_ts),
             "regime_consistency": compute_regime_consistency(bundle.regime_ts, zs, z_barrier),
             "dalpha_latent_alignment": compute_dalpha_latent_alignment(bundle.dalpha_ts, z_barrier),
+            "regime_classification": regime_class,
+            "transition_timing": transition_timing,
+            "bifurcation": bifurcation_summary,
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
                 "source_magnitude": float(source_mag),
@@ -871,6 +926,27 @@ def main():
         )
         plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te_raw, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
+    # Pooled regime-classification summary over shots.
+    per_shot_cls = [m.get("regime_classification", {}) for m in report["shot_metrics"].values()]
+    per_shot_cls = [c for c in per_shot_cls if c and c.get("n_scored", 0) > 1]
+    if per_shot_cls:
+        def _mean_of(key):
+            vals = [c[key] for c in per_shot_cls if key in c and np.isfinite(c[key])]
+            return float(np.mean(vals)) if vals else float("nan")
+        tt_errors = [
+            abs(m["transition_timing"]["transition_time_error_s"])
+            for m in report["shot_metrics"].values()
+            if m.get("transition_timing") and np.isfinite(m["transition_timing"].get("transition_time_error_s", float("nan")))
+        ]
+        report["regime_classification_summary"] = {
+            "n_shots_scored": len(per_shot_cls),
+            "mean_accuracy": _mean_of("accuracy"),
+            "mean_f1": _mean_of("f1"),
+            "mean_auc": _mean_of("auc"),
+            "mean_brier": _mean_of("brier"),
+            "mean_abs_transition_time_error_s": float(np.mean(tt_errors)) if tt_errors else float("nan"),
+        }
+
     report["overall_metrics"] = {
         "mean_mse": total_mse / len(eval_bundles),
         "mean_mae_eV": total_mae_eV / len(eval_bundles),
