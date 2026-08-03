@@ -20,7 +20,7 @@ from fusion_ode_identification.data import load_data
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", default="config/config_debug.yaml")
+    p.add_argument("--config", default="config/config_cusp.yaml")
     p.add_argument("--shot", type=int, default=None, help="Shot id to inspect (default: first in config)")
     p.add_argument("--ptp_tol", type=float, default=1.0, help="Minimum allowed Te_edge peak-to-peak (eV)")
     args = p.parse_args()

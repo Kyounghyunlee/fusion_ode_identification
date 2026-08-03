@@ -5,7 +5,7 @@ Goal: ensure pad_time_to_max_strict() remains strictly increasing even if
 values are later downcast to float32 (e.g. x64 disabled).
 
 Run via:
-  ./scripts/run_training_gpu.sh --python scripts/smoke_time_padding_strict.py
+  python scripts/smoke_time_padding_strict.py
 """
 
 import os

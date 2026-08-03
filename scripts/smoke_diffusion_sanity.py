@@ -2,7 +2,7 @@
 """Lightweight diffusion operator sanity checks.
 
 Run via:
-  ./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config config/config_debug.yaml --shot 27567
+  python scripts/smoke_diffusion_sanity.py --config config/config_cusp.yaml --shot 27567
 
 Checks:
 - Constant Te profile => explicit diffusion ~ 0
@@ -34,7 +34,7 @@ def _assert(name: str, cond: bool):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--config", default="config/config_debug.yaml")
+    p.add_argument("--config", default="config/config_cusp.yaml")
     p.add_argument("--shot", type=int, default=None)
     p.add_argument("--tol", type=float, default=1e-10)
     args = p.parse_args()

@@ -1,167 +1,116 @@
 # Code Architecture
 
 This repository trains and evaluates a physics-informed electron-temperature
-transport ROM from strict MAST training packs. The active branch is IMEX-only,
-uniform-grid-only, and uses a small scalar input set.
+transport ROM from strict MAST training packs, with a bistable cusp latent for
+quantitative L/H regime assessment. The active branch is IMEX-only,
+uniform-grid-only, single-device (jit + vmap), and float64.
 
 ## Pipeline
 
-1. `preprocessing/download_data.py` downloads raw NetCDF diagnostics.
+1. `preprocessing/download_data.py` downloads raw NetCDF diagnostics
+   (anonymous S3, MAST Level-2 Zarr).
 2. `preprocessing/build_training_pack.py` converts raw diagnostics into strict
-   `*_torax_training.npz` packs.
+   `*_torax_training.npz` packs, including dwell-constrained L/H regime labels.
 3. `fusion_ode_identification.data.load_data` loads packs, broadcasts scalar
    density, builds boundary conditions, pads time, and returns `ShotBundle`.
-4. `train_tokamak_ode_hpc.py` trains `HybridField` with JAX/Equinox/Optax.
+4. `train.py` trains `HybridField` with JAX/Equinox/Optax on one device.
 5. `scripts/evaluate_model.py` loads the preferred checkpoint, runs full
-   trajectories, writes metrics, and regenerates plots.
+   trajectories, writes fit metrics, regime-classification metrics, and
+   bifurcation diagnostics, and regenerates plots.
+6. `paper/scripts/make_figures.py` turns evaluation artifacts into the paper
+   figures.
 
 ## Package Map
 
 | Path | Role |
 |---|---|
-| `fusion_ode_identification/model.py` | `HybridField`, `SourceNN`, diffusivity, latent dynamics |
+| `fusion_ode_identification/model.py` | `HybridField`, `SourceNN`, diffusivity, latent designs (`cusp`, `barrier_v1`, `cubic`) |
 | `fusion_ode_identification/data.py` | Pack loading, interpolation, padding, masks, scalar-density broadcast |
-| `fusion_ode_identification/loss.py` | IMEX rollout loss, D-alpha auxiliary loss, diagnostics |
+| `fusion_ode_identification/loss.py` | IMEX rollout loss + regime/D-alpha terms, diagnostics |
 | `fusion_ode_identification/imex_solver.py` | Fixed-step theta-method solver |
 | `fusion_ode_identification/interp.py` | JAX linear interpolation helper |
 | `fusion_ode_identification/types.py` | Shared `NamedTuple` schemas |
-| `preprocessing/build_training_pack.py` | Strict pack builder and QA artifacts |
+| `fusion_ode_identification/regime_metrics.py` | Quantitative L/H metrics and cusp bifurcation diagnostics |
+| `preprocessing/build_training_pack.py` | Strict pack builder, QA artifacts, regime labeler |
+| `train.py` | Single-device training entrypoint |
 | `scripts/evaluate_model.py` | Evaluation reports and plots |
-| `scripts/smoke_*.py` | Regression smoke checks |
+| `scripts/smoke_*.py`, `scripts/check_bc.py` | Regression smoke checks |
 
-## Current Data Contract
+## Data Contract
 
-Active controls are:
+Active controls:
 
 ```python
 CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
 ```
 
-`nebar` is not the summary-file line average. It is the profile-derived scalar
-density saved as `ne_profile_scalar` and `ne_profile_scalar_ts`. The loader
-broadcasts the Thomson-time scalar over rho so `ShotBundle.ne_vals` retains shape
-`(shots,time,rho)` while carrying only one density value per time.
+`nebar` is the profile-derived scalar density (`ne_profile_scalar`), not the
+summary-file line average. The loader broadcasts it over rho so
+`ShotBundle.ne_vals` keeps shape `(shots, time, rho)`.
 
-Removed controls:
-
-```text
-S_gas S_rec S_nbi
-```
-
-The D-alpha trace now enters directly as a scalar control and as the main latent
-transition evidence.
-
-## Data Loading Details
-
-`load_data(config)` returns:
-
-```python
-bundle, rho_rom, rho_cap, obs_idx
-```
-
-Important `ShotBundle` fields:
-
-| Field | Meaning |
-|---|---|
-| `ts_t` | Padded Thomson time base |
-| `ts_Te` | Filled temperature array used for numeric rollout/loss |
-| `ts_Te_raw` | NaN-preserving temperature array used for measured-only plotting |
-| `mask` | Strict measured `T_e` support after per-rho QA |
-| `reliable_mask` | Corpus reliable annulus mask computed after regridding |
-| `Te_edge` | Dirichlet boundary trace from outermost observed `T_e` |
-| `ctrl_vals` | Four scalar controls on the profile time base |
-| `ne_vals` | Broadcast representative scalar density |
-| `dalpha_ts` | D-alpha on the profile time base |
-| `z0` | Per-shot latent initial condition |
-| `t_len` | Valid unpadded length |
-
-The runtime grid is uniform: `rho_rom = linspace(0, 1, N)`. The final node is a
-Dirichlet boundary and is excluded from data-loss supervision.
+Regime labels in the packs: `0` unknown/no plasma, `1` L, `2` transition
+window, `3` H. They are produced by `estimate_regime_labels`: rolling
+15th-percentile lower envelope of D-alpha (ELM-robust), flat-top gating on
+`|Ip|` and `nebar`, Otsu split with separation guards, >= 20 ms dwell, an
+L-lead requirement (no H at gate opening), and a 25 ms entry-sharpness test
+that rejects slow drifts. Multiple H segments (back-transitions) are allowed.
 
 ## Model
 
 `HybridField` combines:
 
-1. Conservative finite-volume diffusion using `chi(rho,z)` and `Vprime`.
+1. Conservative finite-volume diffusion using `chi(rho, z)` and `Vprime`.
 2. A residual source MLP evaluated pointwise at `(rho, Te, ne, controls, z)`.
-3. A scalar latent ODE.
+3. A scalar latent ODE (`model.latent_design`).
 
-The active latent design is `barrier_v1`. Its barrier coordinate is
-`z_b = sigmoid(zeta)`. Higher `z_b` means stronger H-mode/barrier evidence and
-lower edge diffusivity through the existing diffusivity profile.
+### Latent designs
 
-Latent features have size 6:
-
-```text
-1 - norm(D_alpha)
--d/dt norm(D_alpha)
-+d/dt norm(Te_edge)
-+d/dt norm(ne_edge)
-norm(P_nbi)
-norm(Ip)
-```
-
-The feature smoother uses short windows so transitions in these sub-second shots
-are not averaged away. The D-alpha auxiliary head predicts `norm(D_alpha)` as
-`1 - z_b`, directly tying the latent coordinate to the measured L-H proxy.
+- **`cusp` (active)** — `CuspLatentDynamics`:
+  `tau * dz/dt = a(u) + b z - z^3` with `b > 0`, drive
+  `a(u) = softclip(w . u[:3] + w0)` over normalized `P_nbi, Ip, nebar` only.
+  Bistable for `|a| < a_fold = 2 (b/3)^{3/2}`; regimes are the two stable
+  branches, transitions are fold crossings, hysteresis is intrinsic. The
+  barrier coordinate is `z_b = sigmoid(3 z / sqrt(b))`; the regime logit is
+  `k z / sqrt(b)`. D-alpha is predicted by a learned head
+  `sigmoid(MLP(z_b, controls, Te_edge, ne_edge))` and never drives the latent.
+- `barrier_v1` (legacy) — relaxation toward a D-alpha-derived target; kept for
+  comparison. Its aux head is the parameter-free `1 - z_b`, which pins the
+  latent to the proxy.
+- `cubic` (legacy) — symmetric cubic driven by normalized controls.
 
 ## Loss
 
-`loss.py` computes a weighted pseudo-Huber data term on masked interior radii,
-gated by `reliable_mask`, plus:
+Weighted pseudo-Huber data term on masked interior radii (gated by
+`reliable_mask`), plus:
 
 | Term | Meaning |
 |---|---|
 | `lambda_src` | Residual source magnitude penalty |
-| `lambda_z` | Latent smoothness penalty |
-| `lambda_zreg` | Latent magnitude penalty |
-| `lambda_regime`, `lambda_pH` | Heuristic regime BCE supervision |
-| `lambda_dalpha` | D-alpha auxiliary supervision |
+| `lambda_z`, `lambda_zreg` | Latent smoothness / magnitude penalties |
+| `lambda_regime` (+ `lambda_pH`) | Regime BCE against pack labels (clean L/H samples only) |
+| `lambda_dalpha` | Observation-head misfit against normalized D-alpha |
 
-For `config_v3*.yaml`, `lambda_dalpha = 10.0` so the latent is materially
-supervised by D-alpha during training.
+For `config_cusp.yaml`: `lambda_regime = 5e-2`, `lambda_dalpha = 1.0`. The
+validation loss used for checkpoint selection includes the regime and D-alpha
+terms, so checkpoints are selected for regime quality too.
 
 ## Evaluation
 
-`scripts/evaluate_model.py`:
+`scripts/evaluate_model.py` reports, per shot and pooled:
 
-- Prefers `_best_ema.eqx`, then `_best.eqx`, then `_finetuned.eqx`.
-- Clears stale `shot_*.png` files before writing new plots.
-- Uses measured-only heatmaps where unobserved regions are white.
-- Reports whole-mask, annulus, D-alpha, latent, and physics consistency metrics.
-- Overlays `1 - norm(D_alpha)` and the barrier latent on overview/latent plots.
+- profile fit (MSE / MAE, whole-mask and reliable annulus),
+- **regime classification**: accuracy, F1, AUC, Brier of
+  `p_H = sigmoid(regime_logit)` against clean-L/H labels,
+- **transition timing**: first sustained `p_H > 0.5` upcrossing vs label,
+- **bifurcation diagnostics** (cusp only): `b`, `tau`, `a_fold`, drive range,
+  bistable fraction, basin membership; per-shot
+  `bifurcation_shot_<id>.npz` artifacts.
 
 ## Smoke Workflow
 
-On the login node use CPU smoke tests:
-
 ```bash
 JAX_PLATFORMS=cpu python scripts/smoke_time_padding_strict.py
-JAX_PLATFORMS=cpu python scripts/smoke_valid_window.py --config config/config_v3_debug.yaml
-JAX_PLATFORMS=cpu python scripts/smoke_padding_freeze.py --config config/config_v3_debug.yaml
-JAX_PLATFORMS=cpu python scripts/smoke_diffusion_sanity.py --config config/config_v3_debug.yaml --shot 27578
-python scripts/smoke_checkpoint_selection.py
-JAX_PLATFORMS=cpu python -m train_tokamak_ode_hpc --config config/config_v3_debug.yaml --device cpu
-JAX_PLATFORMS=cpu python scripts/evaluate_model.py --config config/config_v3_debug.yaml --model-id production_run_v3_debug --data-check
+JAX_PLATFORMS=cpu python scripts/smoke_diffusion_sanity.py --config config/config_cusp.yaml --shot 27578
+JAX_PLATFORMS=cpu python scripts/check_bc.py --config config/config_cusp.yaml --shot 27567
+JAX_PLATFORMS=cpu python train.py --config config/config_cusp.yaml --total-steps 20
 ```
-
-Validated strict-pack smoke state:
-
-```text
-18 packs loaded
-ShotBundle Te shape = (18, 102, 65)
-control shape = (18, 102, 4)
-density broadcast check = true
-training/evaluation ok fraction = 1.000
-```
-
-## GPU Training
-
-Use the wrapper on a compute node:
-
-```bash
-./scripts/run_training_gpu.sh --config config/config_v3.yaml
-```
-
-Do not run full GPU training on the login node. CPU smoke is fine there; real
-training should run under an allocated GPU session.
