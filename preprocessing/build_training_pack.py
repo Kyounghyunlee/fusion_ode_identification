@@ -168,6 +168,24 @@ def _smooth_time_window(x: np.ndarray, t: np.ndarray, window_s: float) -> np.nda
     return np.convolve(x_pad, np.ones(k) / k, mode="valid")
 
 
+def _rolling_quantile(x: np.ndarray, t: np.ndarray, window_s: float, q: float) -> np.ndarray:
+    """Rolling quantile over an approximately fixed time window (seconds).
+
+    Used to extract the lower envelope (baseline) of D-alpha: ELM bursts are
+    short positive spikes, so a low quantile tracks the inter-ELM level.
+    """
+    dt = float(np.median(np.diff(t)))
+    if not np.isfinite(dt) or dt <= 0 or x.size < 5:
+        return x.copy()
+    half = max(1, int(round(0.5 * window_s / dt)))
+    out = np.empty_like(x, dtype=float)
+    for i in range(x.size):
+        lo = max(0, i - half)
+        hi = min(x.size, i + half + 1)
+        out[i] = np.nanquantile(x[lo:hi], q)
+    return out
+
+
 def _otsu_threshold(x: np.ndarray, n_bins: int = 128) -> float:
     """Two-class variance-maximizing threshold (Otsu) on a 1D sample."""
     x = x[np.isfinite(x)]
@@ -210,16 +228,20 @@ def estimate_regime_labels(
         return regime, score, float("nan")
 
     dalpha = interp_fill_1d(t, np.asarray(D_alpha, dtype=float))
-    dalpha_s = _smooth_time_window(dalpha, t, 0.004)
+    # Lower envelope of D-alpha: robust to ELM bursts, tracks the inter-ELM
+    # baseline whose step-down is the actual L->H signature.
+    dalpha_s = _rolling_quantile(dalpha, t, 0.015, 0.15)
 
-    # Plasma gate: only label where there is a real discharge.
+    # Flat-top gate: only label where the discharge is established. This must
+    # exclude the current ramp, where D-alpha is low simply because recycling
+    # has not built up yet (not because of confinement).
     gate = np.ones_like(t, dtype=bool)
     if Ip is not None and np.any(np.isfinite(Ip)):
         ip_abs = np.abs(interp_fill_1d(t, np.asarray(Ip, dtype=float)))
-        gate &= ip_abs > 0.25 * np.nanpercentile(ip_abs, 95)
+        gate &= ip_abs > 0.6 * np.nanpercentile(ip_abs, 95)
     if np.any(np.isfinite(nebar)):
         ne_f = interp_fill_1d(t, np.asarray(nebar, dtype=float))
-        gate &= ne_f > 0.15 * np.nanpercentile(ne_f, 95)
+        gate &= ne_f > 0.2 * np.nanpercentile(ne_f, 95)
     if np.count_nonzero(gate) < 10:
         return regime, score, float("nan")
 
@@ -230,22 +252,35 @@ def estimate_regime_labels(
         return regime, score, float("nan")
     norm_s = np.clip((dalpha_s - lo) / span, 0.0, 1.0)
     thr = _otsu_threshold(norm_s[gate])
-    # Guard against degenerate splits: require the threshold to sit inside the
-    # central range and the two classes to be reasonably separated.
+    # Guards against fabricating a transition on unimodal data: the threshold
+    # must sit inside the central range, both classes must be populated, and
+    # the class means must be genuinely separated.
+    def _all_L():
+        regime[gate] = 1
+        return regime, score, float("nan")
+
     if not (0.05 < thr < 0.95):
-        regime[gate] = 1
-        return regime, score, float("nan")
-    low_frac = float(np.mean(norm_s[gate] < thr))
-    if low_frac < 0.02 or low_frac > 0.98:
-        regime[gate] = 1
-        return regime, score, float("nan")
+        return _all_L()
+    low = norm_s[gate] < thr
+    low_frac = float(np.mean(low))
+    if low_frac < 0.05 or low_frac > 0.90:
+        return _all_L()
+    mean_low = float(np.mean(norm_s[gate][low]))
+    mean_high = float(np.mean(norm_s[gate][~low]))
+    if (mean_high - mean_low) < 0.20:
+        return _all_L()
 
     score = np.clip((thr - norm_s) / max(thr, 1e-6), 0.0, 1.0)
 
     # H candidate = low D-alpha inside the gate; enforce minimum dwell time.
+    # An H run must also be preceded by an L reference inside the gate: right
+    # at gate opening D-alpha is still building up, so a low baseline there is
+    # ramp physics, not confinement.
     h_cand = (norm_s < thr) & gate
     dt = float(np.median(np.diff(t)))
     min_dwell_n = max(2, int(round(min_dwell_s / max(dt, 1e-9))))
+    gate_start = int(np.argmax(gate))
+    min_L_lead_n = max(min_dwell_n, int(round(0.02 / max(dt, 1e-9))))
     h_ok = np.zeros_like(h_cand)
     i = 0
     n = h_cand.size
@@ -254,7 +289,7 @@ def estimate_regime_labels(
             j = i
             while j < n and h_cand[j]:
                 j += 1
-            if (j - i) >= min_dwell_n:
+            if (j - i) >= min_dwell_n and (i - gate_start) >= min_L_lead_n:
                 h_ok[i:j] = True
             i = j
         else:
