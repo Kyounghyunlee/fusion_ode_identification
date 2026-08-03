@@ -347,8 +347,13 @@ def main():
 
         model_params_host, model_static = eqx.partition(model, eqx.is_inexact_array)
         opt_state = optimizer.init(model_params_host)
-        model_params = jax.device_put_replicated(model_params_host, devices)
-        opt_state = jax.device_put_replicated(opt_state, devices)
+        # jax.device_put_replicated was removed in JAX 0.11; pmap only needs a
+        # leading device axis on its inputs and shards them itself.
+        def _replicate(tree):
+            return jax.tree_util.tree_map(lambda x: jnp.stack([x] * len(devices)), tree)
+
+        model_params = _replicate(model_params_host)
+        opt_state = _replicate(opt_state)
 
         test_params, _ = eqx.partition(model, eqx.is_inexact_array)
         _ = optimizer.init(test_params)
