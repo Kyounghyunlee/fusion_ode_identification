@@ -281,7 +281,7 @@ def estimate_regime_labels(
     min_dwell_n = max(2, int(round(min_dwell_s / max(dt, 1e-9))))
     gate_start = int(np.argmax(gate))
     min_L_lead_n = max(min_dwell_n, int(round(0.02 / max(dt, 1e-9))))
-    sharp_n = max(2, int(round(0.010 / max(dt, 1e-9))))  # 10 ms contrast windows
+    sharp_n = max(2, int(round(0.025 / max(dt, 1e-9))))  # 25 ms contrast windows
     h_ok = np.zeros_like(h_cand)
     i = 0
     n = h_cand.size
@@ -297,7 +297,7 @@ def estimate_regime_labels(
                 # the Otsu threshold is not a confinement transition.
                 pre = norm_s[max(gate_start, i - sharp_n) : i]
                 post = norm_s[i : min(j, i + sharp_n)]
-                accept = pre.size > 0 and post.size > 0 and (float(np.mean(pre)) - float(np.mean(post))) >= 0.12
+                accept = pre.size > 0 and post.size > 0 and (float(np.mean(pre)) - float(np.mean(post))) >= 0.10
             if accept:
                 h_ok[i:j] = True
             i = j
