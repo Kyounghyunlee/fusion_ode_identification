@@ -3,13 +3,6 @@ Evaluation Script for Physics-Consistent Manifold Model
 Loads a trained model and generates comparison plots (Model vs Observation).
 """
 
-# scripts/evaluate_model.py
-
-"""
-Evaluation Script for Physics-Consistent Manifold Model
-Loads a trained model and generates comparison plots (Model vs Observation).
-"""
-
 import sys
 
 import os
@@ -92,7 +85,7 @@ def _sanitize_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
     return name
 
-from fusion_ode_identification.model import HybridField, SourceNN, LatentDynamics
+from fusion_ode_identification.model import build_hybrid_model, build_latent_feature_series
 from fusion_ode_identification.data import load_data
 from fusion_ode_identification.types import ShotBundle, IMEXConfig
 from fusion_ode_identification.imex_solver import IMEXIntegrator
@@ -104,7 +97,9 @@ jax.config.update("jax_enable_x64", True)
 class EvalBundle(NamedTuple):
     ts_t: jnp.ndarray
     ts_Te: jnp.ndarray
+    ts_Te_raw: jnp.ndarray
     mask: jnp.ndarray
+    reliable_mask: jnp.ndarray
     Te0: jnp.ndarray
     z0: float
     shot_id: int
@@ -114,8 +109,10 @@ class EvalBundle(NamedTuple):
     ctrl_vals: jnp.ndarray
     ctrl_means: jnp.ndarray
     ctrl_stds: jnp.ndarray
+    regime_ts: jnp.ndarray
     ne_vals: jnp.ndarray
     Te_edge: jnp.ndarray
+    dalpha_ts: jnp.ndarray
     obs_idx: jnp.ndarray
 
 def load_config(config_path="config/config.yaml"):
@@ -134,7 +131,9 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
 
         ts_t = jnp.asarray(stacked.ts_t[i, :t_len])
         ts_Te = jnp.asarray(stacked.ts_Te[i, :t_len])
+        ts_Te_raw = jnp.asarray(stacked.ts_Te_raw[i, :t_len])
         mask = jnp.asarray(stacked.mask[i, :t_len])
+        reliable_mask = jnp.asarray(stacked.reliable_mask[i])
         Te0 = jnp.asarray(stacked.Te0[i])
         z0 = float(stacked.z0[i])
         rho = jnp.asarray(stacked.rho_rom[i])
@@ -143,8 +142,10 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
         ctrl_vals = jnp.asarray(stacked.ctrl_vals[i, :t_len])
         ctrl_means = jnp.asarray(stacked.ctrl_means[i])
         ctrl_stds = jnp.asarray(stacked.ctrl_stds[i])
+        regime_ts = jnp.asarray(stacked.regime_ts[i, :t_len])
         ne_vals = jnp.asarray(stacked.ne_vals[i, :t_len])
         Te_edge = jnp.asarray(stacked.Te_edge[i, :t_len])
+        dalpha_ts = jnp.asarray(stacked.dalpha_ts[i, :t_len])
         obs_idx = jnp.asarray(stacked.obs_idx[i])
         shot_id = int(stacked.shot_id[i])
 
@@ -152,7 +153,9 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
             EvalBundle(
                 ts_t=ts_t,
                 ts_Te=ts_Te,
+                ts_Te_raw=ts_Te_raw,
                 mask=mask,
+                reliable_mask=reliable_mask,
                 Te0=Te0,
                 z0=z0,
                 shot_id=shot_id,
@@ -162,8 +165,10 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
                 ctrl_vals=ctrl_vals,
                 ctrl_means=ctrl_means,
                 ctrl_stds=ctrl_stds,
+                regime_ts=regime_ts,
                 ne_vals=ne_vals,
                 Te_edge=Te_edge,
+                dalpha_ts=dalpha_ts,
                 obs_idx=obs_idx,
             )
         )
@@ -173,35 +178,14 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
 def load_model(model_path, config):
     """Recreate the trained model structure for deserialization."""
     key = jax.random.PRNGKey(0)
-
-    layers = int(config.get("model", {}).get("layers", 64))
-    depth = int(config.get("model", {}).get("depth", 3))
-    latent_gain = float(config.get("model", {}).get("latent_gain", 1.0))
-    source_scale = float(config.get("model", {}).get("source_scale", 3.0e5))
-
-    model = HybridField(
-        nn=SourceNN(key, source_scale=source_scale, layers=layers, depth=depth),
-        latent=LatentDynamics(
-            alpha=jnp.array(1.0, dtype=jnp.float64),
-            beta=jnp.array(1.0, dtype=jnp.float64),
-            gamma=jnp.array(1.0, dtype=jnp.float64),
-            mu_weights=jnp.zeros(3, dtype=jnp.float64),
-            mu_bias=jnp.array(0.0, dtype=jnp.float64),
-            mu_ref=jnp.array(0.0, dtype=jnp.float64),
-        ),
-        latent_gain=latent_gain,
-    )
-
+    model = build_hybrid_model(config, key)
     return eqx.tree_deserialise_leaves(model_path, model)
 
 
-def masked_error_metrics_weighted(pred, obs, mask):
-    # Exclude Dirichlet boundary node (last column) to match training loss.
-    if pred.shape[-1] >= 2:
-        pred = pred[:, :-1]
-        obs = obs[:, :-1]
-        mask = mask[:, :-1]
+def _observation_weight_grid(mask, reliable_mask=None):
     mask = mask.astype(jnp.float64)
+    if reliable_mask is not None:
+        mask = mask * reliable_mask[None, :].astype(jnp.float64)
     col_cov = jnp.mean(mask, axis=0)
     has_obs = col_cov > 0
     inv = jnp.where(has_obs, 1.0 / (col_cov + 1e-8), 0.0)
@@ -209,9 +193,20 @@ def masked_error_metrics_weighted(pred, obs, mask):
     col_weight = jnp.where(
         inv_sum > 0,
         inv / (inv_sum + 1e-8),
-        jnp.ones_like(col_cov) / col_cov.size,
+        jnp.ones_like(col_cov) / jnp.maximum(col_cov.size, 1),
     )
-    weight_grid = mask * col_weight
+    return mask * col_weight[None, :]
+
+
+def masked_error_metrics_weighted(pred, obs, mask, reliable_mask=None):
+    # Exclude Dirichlet boundary node (last column) to match training loss.
+    if pred.shape[-1] >= 2:
+        pred = pred[:, :-1]
+        obs = obs[:, :-1]
+        mask = mask[:, :-1]
+        if reliable_mask is not None:
+            reliable_mask = reliable_mask[:-1]
+    weight_grid = _observation_weight_grid(mask, reliable_mask=reliable_mask)
     resid = (pred - obs) ** 2
     abs_resid = jnp.sqrt(resid)
     denom = jnp.maximum(jnp.abs(obs), 50.0)
@@ -229,6 +224,8 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     ctrl_vals_ts = ctrl_interp.evaluate(bundle.ts_t)
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
+    ne_edge_ts = bundle.ne_vals[:, -1]
+    latent_features_ts = build_latent_feature_series(bundle.ts_t, ctrl_norm_ts, bundle.dalpha_ts, bundle.Te_edge, ne_edge_ts) if model.uses_barrier_latent() else ctrl_norm_ts
 
     rho = bundle.rho
     Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
@@ -261,6 +258,7 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
         ctrl_norm_ts=ctrl_norm_ts,
         ne_ts=bundle.ne_vals,
         args=ode_args_geom,
+        latent_features_ts=latent_features_ts,
     )
 
     ys_clean = jnp.nan_to_num(sol.ys, nan=0.0, posinf=0.0, neginf=0.0)
@@ -293,43 +291,310 @@ def analyze_physics_components(model, bundle: EvalBundle, Te_model, zs):
     total = div_vals + src_vals
     return jnp.mean(jnp.abs(total)), jnp.mean(jnp.abs(src_vals))
 
-def plot_results(ts, rho, Te_obs, Te_model, zs, shot_id, plots_dir):
+def _regime_states(regime_ts) -> np.ndarray:
+    regime_np = np.asarray(regime_ts, dtype=float)
+    states = np.zeros_like(regime_np, dtype=np.int8)
+    states[(regime_np >= 0.5) & (regime_np < 1.5)] = 1
+    states[(regime_np >= 1.5) & (regime_np < 2.5)] = 2
+    states[regime_np >= 2.5] = 3
+    return states
+
+
+def _boxcar_smooth(values: np.ndarray, width: int) -> np.ndarray:
+    if values.size < 3:
+        return values
+    width = max(1, min(int(width), int(values.size)))
+    if width <= 1:
+        return values
+    filt = np.ones(width, dtype=float) / float(width)
+    return np.convolve(values, filt, mode="same")
+
+
+def compute_dalpha_stats(ts, dalpha, regime_ts) -> dict:
+    ts_np = np.asarray(ts, dtype=float)
+    dalpha_np = np.asarray(dalpha, dtype=float)
+    if dalpha_np.size == 0:
+        return {
+            "available": False,
+            "finite_fraction": 0.0,
+        }
+
+    finite = np.isfinite(dalpha_np)
+    finite_fraction = float(np.mean(finite))
+    if not np.any(finite):
+        return {
+            "available": False,
+            "finite_fraction": finite_fraction,
+        }
+
+    dalpha_filled = dalpha_np.copy()
+    if not np.all(finite):
+        dalpha_filled[~finite] = np.interp(
+            ts_np[~finite],
+            ts_np[finite],
+            dalpha_np[finite],
+            left=dalpha_np[finite][0],
+            right=dalpha_np[finite][-1],
+        )
+
+    mean = float(np.mean(dalpha_filled))
+    std = float(np.std(dalpha_filled))
+    norm = (dalpha_filled - mean) / (std + 1.0e-6)
+    slope = np.gradient(_boxcar_smooth(norm, 101), ts_np) if ts_np.size > 1 else np.zeros_like(norm)
+
+    regime_state = _regime_states(regime_ts)
+    transition_idx = np.flatnonzero((regime_state[:-1] < 2) & (regime_state[1:] >= 2)) if regime_state.size > 1 else np.array([], dtype=int)
+    if transition_idx.size > 0:
+        center = int(transition_idx[0] + 1)
+    else:
+        center = int(np.argmax(-slope)) if slope.size > 0 else 0
+    lo = max(0, center - 5)
+    hi = min(slope.size, center + 6)
+
+    return {
+        "available": True,
+        "finite_fraction": finite_fraction,
+        "min": float(np.min(dalpha_filled)),
+        "max": float(np.max(dalpha_filled)),
+        "mean": mean,
+        "std": std,
+        "hmode_fraction": float(np.mean(regime_state == 3)),
+        "transition_fraction": float(np.mean(regime_state == 2)),
+        "transition_time": float(ts_np[center]) if ts_np.size > 0 else float("nan"),
+        "normalized_slope_min": float(np.min(slope)) if slope.size > 0 else 0.0,
+        "normalized_slope_max": float(np.max(slope)) if slope.size > 0 else 0.0,
+        "transition_window_slope_min": float(np.min(slope[lo:hi])) if hi > lo else 0.0,
+        "transition_window_slope_max": float(np.max(slope[lo:hi])) if hi > lo else 0.0,
+    }
+
+
+def _add_regime_band(ax, ts_np: np.ndarray, regime_state: np.ndarray) -> None:
+    colors = {
+        0: (0.92, 0.92, 0.92, 0.35),
+        1: (0.25, 0.47, 0.85, 0.14),
+        2: (0.55, 0.55, 0.55, 0.16),
+        3: (0.85, 0.25, 0.25, 0.14),
+    }
+    if ts_np.size == 0 or regime_state.size == 0:
+        return
+    start = 0
+    while start < regime_state.size:
+        state = int(regime_state[start])
+        end = start + 1
+        while end < regime_state.size and int(regime_state[end]) == state:
+            end += 1
+        x0 = float(ts_np[start])
+        x1 = float(ts_np[end - 1])
+        if end < ts_np.size:
+            x1 = float(0.5 * (ts_np[end - 1] + ts_np[end]))
+        elif ts_np.size > 1:
+            x1 = float(ts_np[-1] + 0.5 * (ts_np[-1] - ts_np[-2]))
+        ax.axvspan(x0, x1, color=colors.get(state, colors[0]), lw=0.0)
+        start = end
+
+
+def _unit_range(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return np.zeros_like(values)
+    filled = values.copy()
+    if not np.all(finite):
+        idx = np.flatnonzero(finite)
+        filled[~finite] = np.interp(np.flatnonzero(~finite), idx, values[finite])
+    vmin = float(np.nanmin(filled))
+    vmax = float(np.nanmax(filled))
+    return (filled - vmin) / (vmax - vmin + 1.0e-6)
+
+
+def _padded_ylim(values: np.ndarray, lo: float = None, hi: float = None) -> tuple:
+    values = np.asarray(values, dtype=float)
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return (0.0 if lo is None else lo, 1.0 if hi is None else hi)
+    ymin = float(np.min(finite)) if lo is None else min(float(lo), float(np.min(finite)))
+    ymax = float(np.max(finite)) if hi is None else max(float(hi), float(np.max(finite)))
+    if ymax <= ymin:
+        pad = max(0.05, abs(ymax) * 0.1)
+        return ymin - pad, ymax + pad
+    pad = 0.08 * (ymax - ymin)
+    return ymin - pad, ymax + pad
+
+
+def compute_regime_consistency(regime_ts, zs, z_barrier=None) -> dict:
+    regime_state = _regime_states(regime_ts)
+    latent_np = np.asarray(z_barrier if z_barrier is not None else zs, dtype=float)
+    finite = np.isfinite(latent_np)
+    out = {"available": bool(np.any(finite))}
+    if not out["available"]:
+        return out
+    h_mask = (regime_state == 3) & finite
+    l_mask = (regime_state == 1) & finite
+    out["latent_min"] = float(np.min(latent_np[finite]))
+    out["latent_max"] = float(np.max(latent_np[finite]))
+    out["latent_span"] = float(out["latent_max"] - out["latent_min"])
+    out["hmode_median"] = float(np.median(latent_np[h_mask])) if np.any(h_mask) else float("nan")
+    out["lmode_median"] = float(np.median(latent_np[l_mask])) if np.any(l_mask) else float("nan")
+    out["h_minus_l_median"] = (
+        float(out["hmode_median"] - out["lmode_median"])
+        if np.isfinite(out["hmode_median"]) and np.isfinite(out["lmode_median"])
+        else float("nan")
+    )
+    return out
+
+
+def compute_dalpha_latent_alignment(dalpha_ts, z_barrier) -> dict:
+    if z_barrier is None:
+        return {"available": False}
+    dalpha_np = np.asarray(dalpha_ts, dtype=float)
+    z_np = np.asarray(z_barrier, dtype=float)
+    if dalpha_np.size != z_np.size or dalpha_np.size == 0:
+        return {"available": False}
+    evidence = 1.0 - _unit_range(dalpha_np)
+    finite = np.isfinite(evidence) & np.isfinite(z_np)
+    if np.count_nonzero(finite) < 3:
+        return {"available": False}
+    evidence_use = evidence[finite]
+    z_use = z_np[finite]
+    evidence_std = float(np.std(evidence_use))
+    z_std = float(np.std(z_use))
+    corr = float("nan")
+    if evidence_std > 1.0e-9 and z_std > 1.0e-9:
+        corr = float(np.corrcoef(evidence_use, z_use)[0, 1])
+    return {
+        "available": True,
+        "pearson_corr_with_1_minus_norm_dalpha": corr,
+        "rmse_vs_1_minus_norm_dalpha": float(np.sqrt(np.mean((z_use - evidence_use) ** 2))),
+        "mean_abs_error_vs_1_minus_norm_dalpha": float(np.mean(np.abs(z_use - evidence_use))),
+    }
+
+
+def plot_results(ts, rho, Te_obs_raw, mask, Te_model, zs, shot_id, plots_dir, regime_ts=None, dalpha_ts=None, z_barrier=None):
     ts_np = np.asarray(ts)
     rho_np = np.asarray(rho)
-    Te_obs_np = np.asarray(Te_obs)
+    Te_obs_np = np.asarray(Te_obs_raw)
+    mask_np = np.asarray(mask)
     Te_model_np = np.asarray(Te_model)
     zs_np = np.asarray(zs)
+    z_display_np = np.asarray(z_barrier, dtype=float) if z_barrier is not None else zs_np
+    z_display_label = "Barrier latent" if z_barrier is not None else "Latent z"
+
+    Te_obs_plot = np.where(mask_np > 0.5, Te_obs_np, np.nan)
+    finite_obs = Te_obs_plot[np.isfinite(Te_obs_plot)]
+    if finite_obs.size > 0:
+        vmin = float(np.min(finite_obs))
+        vmax = float(np.max(finite_obs))
+    else:
+        finite_model = Te_model_np[np.isfinite(Te_model_np)]
+        if finite_model.size > 0:
+            vmin = float(np.min(finite_model))
+            vmax = float(np.max(finite_model))
+        else:
+            vmin, vmax = 0.0, 1.0
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+
+    obs_cmap = matplotlib.colormaps["inferno"].copy()
+    obs_cmap.set_bad("white")
+    model_cmap = matplotlib.colormaps["inferno"].copy()
+    model_cmap.set_bad("white")
+    Te_model_plot = np.where(np.isfinite(Te_model_np), np.clip(Te_model_np, vmin, vmax), np.nan)
 
     # 1. Temperature Profile Evolution (Heatmap)
     fig, ax = plt.subplots(2, 1, figsize=(10, 10))
-    
+
     # Obs
-    c1 = ax[0].contourf(ts_np, rho_np, Te_obs_np.T, levels=20, cmap='inferno')
-    ax[0].set_title(f"Shot {shot_id}: Observed Te")
+    c1 = ax[0].pcolormesh(ts_np, rho_np, Te_obs_plot.T, shading="auto", cmap=obs_cmap, vmin=vmin, vmax=vmax)
+    ax[0].set_title(f"Shot {shot_id}: Measured-only Te")
     ax[0].set_ylabel("rho")
     plt.colorbar(c1, ax=ax[0])
-    
+
     # Model
-    c2 = ax[1].contourf(ts_np, rho_np, Te_model_np.T, levels=20, cmap='inferno')
+    c2 = ax[1].pcolormesh(ts_np, rho_np, Te_model_plot.T, shading="auto", cmap=model_cmap, vmin=vmin, vmax=vmax)
     ax[1].set_title(f"Shot {shot_id}: Model Te")
     ax[1].set_xlabel("Time (s)")
     ax[1].set_ylabel("rho")
     plt.colorbar(c2, ax=ax[1])
-    
+
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, f"shot_{shot_id}_heatmap.png"))
     plt.close()
-    
-    # 2. Latent Dynamics
+
+    regime_state = _regime_states(regime_ts) if regime_ts is not None else np.zeros(ts_np.shape, dtype=np.int8)
+    dalpha_np = np.asarray(dalpha_ts, dtype=float) if dalpha_ts is not None else np.zeros_like(ts_np)
+
+    fig, ax = plt.subplots(3, 1, figsize=(11, 12), sharex=True, gridspec_kw={"height_ratios": [2.2, 1.0, 1.0]})
+    c1 = ax[0].pcolormesh(ts_np, rho_np, Te_obs_plot.T, shading="auto", cmap=obs_cmap, vmin=vmin, vmax=vmax)
+    ax[0].set_title(f"Shot {shot_id}: Measured Te, D_alpha, and latent state")
+    ax[0].set_ylabel("rho")
+    plt.colorbar(c1, ax=ax[0], label="Te [eV]")
+
+    _add_regime_band(ax[1], ts_np, regime_state)
+    ax[1].plot(ts_np, dalpha_np, color="black", linewidth=1.4, label="D_alpha")
+    ax[1].set_ylabel("D_alpha")
+    ax[1].grid(True, alpha=0.25)
+    if np.any((regime_state == 1) | (regime_state == 3)):
+        ax[1].legend(loc="best")
+    else:
+        ax[1].set_title("Regime undecided")
+
+    _add_regime_band(ax[2], ts_np, regime_state)
+    if dalpha_np.size == z_display_np.size:
+        ax[2].plot(ts_np, 1.0 - _unit_range(dalpha_np), color="tab:orange", linewidth=1.0, linestyle="--", alpha=0.75, label="1 - norm(D_alpha)")
+    ax[2].plot(ts_np, z_display_np, color="tab:blue", linewidth=1.8, label=z_display_label)
+    if z_barrier is not None:
+        ax[2].axhline(0.5, color="tab:red", linewidth=0.8, linestyle=":", alpha=0.6)
+        ax[2].set_ylim(*_padded_ylim(z_display_np, lo=0.0, hi=1.0))
+    else:
+        ax[2].axhline(0.0, color="black", linewidth=0.8, linestyle="--", alpha=0.6)
+        ax[2].set_ylim(*_padded_ylim(z_display_np))
+    ax[2].set_xlabel("Time (s)")
+    ax[2].set_ylabel("latent")
+    ax[2].grid(True, alpha=0.25)
+    ax[2].legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(plots_dir, f"shot_{shot_id}_overview.png"))
+    plt.close(fig)
+
     plt.figure(figsize=(10, 4))
-    plt.plot(ts_np, zs_np, label='Latent z')
-    plt.title(f"Shot {shot_id}: Latent Coordinate Evolution")
+    _add_regime_band(plt.gca(), ts_np, regime_state)
+    if dalpha_np.size == z_display_np.size:
+        plt.plot(ts_np, 1.0 - _unit_range(dalpha_np), label="1 - norm(D_alpha)", color="tab:orange", linestyle="--", alpha=0.75)
+    plt.plot(ts_np, z_display_np, label=z_display_label, color="tab:blue")
+    if z_barrier is not None:
+        plt.axhline(0.5, color="tab:red", linewidth=0.8, linestyle=":", alpha=0.6)
+        plt.ylim(*_padded_ylim(z_display_np, lo=0.0, hi=1.0))
+    else:
+        plt.ylim(*_padded_ylim(z_display_np))
     plt.xlabel("Time (s)")
-    plt.ylabel("z")
-    plt.grid(True)
+    plt.ylabel("latent")
+    plt.title(f"Shot {shot_id}: Latent Coordinate Evolution")
+    plt.grid(True, alpha=0.25)
     plt.legend()
+    plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, f"shot_{shot_id}_latent.png"))
     plt.close()
+
+
+def _select_measured_trace_indices(mask_np: np.ndarray, obs_idx, max_traces: int) -> np.ndarray:
+    n_cols = int(mask_np.shape[1])
+    interior_cols = max(n_cols - 1, 1)
+    coverage = mask_np[:, :interior_cols].mean(axis=0)
+    measured_cols = np.flatnonzero(coverage > 0.0)
+
+    if measured_cols.size > 0:
+        if measured_cols.size <= max_traces:
+            return measured_cols.astype(int)
+
+        chunks = np.array_split(measured_cols, max_traces)
+        return np.array([int(chunk[len(chunk) // 2]) for chunk in chunks if chunk.size > 0], dtype=int)
+
+    fallback = np.array(obs_idx, dtype=int)
+    fallback = fallback[(fallback >= 0) & (fallback < interior_cols)]
+    if fallback.size == 0:
+        fallback = np.arange(min(max_traces, interior_cols), dtype=int)
+    return fallback[:max_traces]
 
 
 def plot_time_series(ts, rho, Te_obs, Te_model, mask, obs_idx, shot_id, plots_dir, max_traces: int = 6):
@@ -339,32 +604,39 @@ def plot_time_series(ts, rho, Te_obs, Te_model, mask, obs_idx, shot_id, plots_di
     Te_model_np = np.asarray(Te_model)
     mask_np = np.asarray(mask)
 
-    idxs = np.array(obs_idx)
-    if idxs.size == 0:
-        idxs = np.arange(min(5, Te_obs_np.shape[1]))
-    idxs = idxs[:max_traces]
+    idxs = _select_measured_trace_indices(mask_np, obs_idx, max_traces)
 
     n_rows = idxs.size
     fig, axes = plt.subplots(n_rows, 1, figsize=(12, 3 * n_rows), sharex=True)
     axes = np.atleast_1d(axes)
 
-    obs_labeled = False
+    measured_labeled = False
     for ax, idx in zip(axes, idxs):
-        ax.plot(ts_np, Te_model_np[:, idx], label="Model", linewidth=2.0, color="tab:blue")
+        ax.plot(ts_np, Te_model_np[:, idx], label="Model", linewidth=2.0, color="tab:blue", zorder=2)
 
         obs_mask = mask_np[:, idx] > 0.5
         if np.any(obs_mask):
-            ax.scatter(ts_np[obs_mask], Te_obs_np[obs_mask, idx], label="Observed" if not obs_labeled else None, color="tab:orange", s=14, alpha=0.8)
-            obs_labeled = True
+            ax.plot(
+                ts_np[obs_mask],
+                Te_obs_np[obs_mask, idx],
+                label="Measured" if not measured_labeled else None,
+                color="tab:orange",
+                linewidth=1.25,
+                marker="o",
+                markersize=3.2,
+                alpha=0.95,
+                zorder=3,
+            )
+            measured_labeled = True
 
         ax.set_ylabel(f"Te @ rho={rho_np[idx]:.2f}")
         ax.grid(True, alpha=0.3)
 
     axes[-1].set_xlabel("Time (s)")
-    if obs_labeled:
+    if measured_labeled:
         axes[0].legend(loc="best")
 
-    fig.suptitle(f"Shot {shot_id}: Model vs Observation (time series)")
+    fig.suptitle(f"Shot {shot_id}: Model vs Measured Te (time series)")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(os.path.join(plots_dir, f"shot_{shot_id}_timeseries.png"))
     plt.close(fig)
@@ -477,29 +749,70 @@ def main():
     plots_dir = os.path.join(eval_dir, "plots")
     os.makedirs(eval_dir, exist_ok=True)
     os.makedirs(plots_dir, exist_ok=True)
+    for filename in os.listdir(plots_dir):
+        if filename.startswith("shot_") and filename.endswith(".png"):
+            os.remove(os.path.join(plots_dir, filename))
     
     print("Running Inference...")
     
     report = {
         "model_config": config['model'],
         "training_config": config['training'],
+        "observability": {
+            "reliable_cov_min": float(config.get("data", {}).get("reliable_cov_min", 0.10)),
+            "reliable_rho_min": float(config.get("data", {}).get("reliable_rho_min", 0.80)),
+        },
         "shot_metrics": {}
     }
     
     total_mse = 0.0
     total_mae_eV = 0.0
     total_mae_pct = 0.0
+    annulus_total_mse = 0.0
+    annulus_total_mae_eV = 0.0
+    annulus_total_mae_pct = 0.0
+    outside_total_mse = 0.0
+    outside_total_mae_eV = 0.0
+    outside_total_mae_pct = 0.0
     
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle, imex_cfg)
+        z_barrier = jax.vmap(model.barrier_coordinate)(zs) if model.uses_barrier_latent() else None
 
         # Match the training-time weighting so offline evaluation is comparable.
         mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
-        print(f"  MSE: {mse:.4f} | MAE: {mae_eV:.2f} eV | MAE%: {mae_pct:.2f}")
+        annulus_mse, annulus_mae_eV, annulus_mae_pct = masked_error_metrics_weighted(
+            Te_model,
+            bundle.ts_Te,
+            bundle.mask,
+            bundle.reliable_mask,
+        )
+        outside_mse, outside_mae_eV, outside_mae_pct = masked_error_metrics_weighted(
+            Te_model,
+            bundle.ts_Te,
+            bundle.mask,
+            1.0 - bundle.reliable_mask,
+        )
+        print(
+            "  Legacy MSE: {:.4f} | MAE: {:.2f} eV | MAE%: {:.2f} | "
+            "Annulus MAE: {:.2f} eV | Outside-annulus MAE: {:.2f} eV".format(
+                mse,
+                mae_eV,
+                mae_pct,
+                annulus_mae_eV,
+                outside_mae_eV,
+            )
+        )
         total_mse += mse
         total_mae_eV += mae_eV
         total_mae_pct += mae_pct
+        annulus_total_mse += annulus_mse
+        annulus_total_mae_eV += annulus_mae_eV
+        annulus_total_mae_pct += annulus_mae_pct
+        outside_total_mse += outside_mse
+        outside_total_mae_eV += outside_mae_eV
+        outside_total_mae_pct += outside_mae_pct
         
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
@@ -507,12 +820,33 @@ def main():
         # Latent Stats
         z_min, z_max = float(jnp.min(zs)), float(jnp.max(zs))
         z_std = float(jnp.std(zs))
+        z_barrier_stats = None
+        if z_barrier is not None:
+            z_barrier_stats = {
+                "min": float(jnp.min(z_barrier)),
+                "max": float(jnp.max(z_barrier)),
+                "std": float(jnp.std(z_barrier)),
+            }
         
         metrics = {
             "mse": mse,
             "mae_eV": mae_eV,
             "mae_pct": mae_pct,
+            "annulus_metrics": {
+                "mse": annulus_mse,
+                "mae_eV": annulus_mae_eV,
+                "mae_pct": annulus_mae_pct,
+            },
+            "outside_annulus_metrics": {
+                "mse": outside_mse,
+                "mae_eV": outside_mae_eV,
+                "mae_pct": outside_mae_pct,
+            },
             "z_stats": {"min": z_min, "max": z_max, "std": z_std},
+            "z_barrier_stats": z_barrier_stats,
+            "dalpha_stats": compute_dalpha_stats(bundle.ts_t, bundle.dalpha_ts, bundle.regime_ts),
+            "regime_consistency": compute_regime_consistency(bundle.regime_ts, zs, z_barrier),
+            "dalpha_latent_alignment": compute_dalpha_latent_alignment(bundle.dalpha_ts, z_barrier),
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
                 "source_magnitude": float(source_mag),
@@ -522,13 +856,31 @@ def main():
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
         rho_vals = np.array(bundle.rho)
-        plot_results(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, zs, bundle.shot_id, plots_dir)
-        plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
+        plot_results(
+            bundle.ts_t,
+            rho_vals,
+            bundle.ts_Te_raw,
+            bundle.mask,
+            Te_model,
+            zs,
+            bundle.shot_id,
+            plots_dir,
+            regime_ts=bundle.regime_ts,
+            dalpha_ts=bundle.dalpha_ts,
+            z_barrier=z_barrier,
+        )
+        plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te_raw, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
     report["overall_metrics"] = {
         "mean_mse": total_mse / len(eval_bundles),
         "mean_mae_eV": total_mae_eV / len(eval_bundles),
         "mean_mae_pct": total_mae_pct / len(eval_bundles),
+        "annulus_mean_mse": annulus_total_mse / len(eval_bundles),
+        "annulus_mean_mae_eV": annulus_total_mae_eV / len(eval_bundles),
+        "annulus_mean_mae_pct": annulus_total_mae_pct / len(eval_bundles),
+        "outside_annulus_mean_mse": outside_total_mse / len(eval_bundles),
+        "outside_annulus_mean_mae_eV": outside_total_mae_eV / len(eval_bundles),
+        "outside_annulus_mean_mae_pct": outside_total_mae_pct / len(eval_bundles),
     }
     
     # Save Report

@@ -1,5 +1,13 @@
 # Fusion ODE Identification
 
+A physics-informed neural ODE that learns reduced-order electron-temperature transport for tokamak discharges (currently MAST). The PDE side is a conservative finite-volume diffusion operator with an explicit, differentiable diffusivity profile $\chi(\rho,z)$; the closure side is a small MLP residual source. A scalar latent $z(t)$ modulates only the edge diffusivity. Training and evaluation run end-to-end in JAX with a custom IMEX $\theta$-method integrator (Thomas-algorithm tridiagonal implicit diffusion + explicit source/latent), so reverse-mode autodiff goes through the rollout cleanly.
+
+Where to look:
+- **Design and physics**: [docs/PHYSICS_INFORMED_TOKAMAK_ODE.md](docs/PHYSICS_INFORMED_TOKAMAK_ODE.md). The one-page executive summary at the top, plus §13 (engineering roadmap with M1–M7 milestones), are the fastest entry points.
+- **Code architecture and HPC notes**: [docs/code_architecture.md](docs/code_architecture.md).
+- **Training pack format**: [docs/training_data_pack.md](docs/training_data_pack.md).
+- **Current status**: v3 now uses strict per-rho `T_e` QA, four scalar controls (`P_nbi`, `Ip`, profile-derived `nebar`, `D_alpha`), broadcast scalar density, and a D-alpha-following barrier latent. The validated strict pack set has 18 shots and 110 trusted edge/rho columns; old pre-scalar-control checkpoints should be retrained.
+
 ## Development Workflow
 
 Connect to sdcc (if configured):
@@ -55,11 +63,25 @@ training pipeline. If you also want the full visible spectrometer dump
 (`spectrometer_visible.nc`, including BES channels), request it explicitly with
 `--groups spectrometer_visible`.
 
-2) Build TORAX training packs (.npz):
+2) Build the current strict v3 training packs (.npz):
 ```bash
-python -m preprocessing.build_training_pack --shots 27567 27568
-# or discover any shot folders already under data/
-python -m preprocessing.build_training_pack --discover
+python -m preprocessing.build_training_pack --discover \
+	--qa-grade fail \
+	--qa-summary data/sanity_summary_v3.csv \
+	--qa-plots data/plots/strict_iter3
+```
+This command discovers shot folders under `data/`, applies the strict per-time and
+per-rho `T_e` QA gates, writes only shots with at least four stable edge/rho
+columns, saves the canonical QA table to `data/sanity_summary_v3.csv`, and writes
+QA plots/coverage heatmaps under `data/plots/strict_iter3/`. The current validated
+strict pack set contains 18 `*_torax_training.npz` files.
+
+For a quick targeted rebuild while debugging one or two shots:
+```bash
+python -m preprocessing.build_training_pack --shots 27567 27568 \
+	--qa-grade fail \
+	--qa-summary data/sanity_summary_debug.csv \
+	--qa-plots data/plots/debug_rebuild
 ```
 3) Inspect packs (optional):
 ```bash
@@ -75,8 +97,10 @@ data:
 	shots: [27567, 27568]
 	rho_grid_mode: "uniform"
 	edge_bc_mode: "use_last_observed"
+	reliable_cov_min: 0.10  # min per-column coverage admitted to supervision
+	reliable_rho_min: 0.80  # min rho admitted to supervision
 output:
-	model_id: "production_run_v1"
+	model_id: "production_run_v3"
 	save_dir: "models"
 	log_dir: "logs"
 	model_name: "tokamak ode model"
@@ -87,6 +111,7 @@ training:
 	ema_decay: 0.999  # Enable EMA for better generalization
 	lambda_z: 1.0e-4  # Latent smoothness penalty
 	lambda_regime: 1.0e-3  # L/H supervision from D-alpha-assisted labels
+	lambda_dalpha: 10.0    # Barrier latent follows D-alpha evidence
 	imex:
 		theta: 0.7
 		substeps: 5
@@ -96,12 +121,19 @@ model:
 ```
 Adjust shots as needed; `shots: "all"` will load every `*_torax_training.npz` in `data_dir`.
 
-**Recent optimizations:**
-- Inverse-coverage weighting ensures all radii (dense or sparse) are supervised fairly.
-- Geometry precomputation (P1.2) eliminates per-substep recomputation overhead.
+**Recent changes (v3 strict pipeline):**
+- Pack building now keeps only stable per-shot/per-rho `T_e` columns: minimum median `50 eV`, max relative jump p95 `0.60`, max relative span `1.80`, and at least four stable edge columns per written shot.
+- Active controls are reduced to `P_nbi`, absolute `Ip`, profile-derived scalar `nebar`, and direct `D_alpha`; old `S_gas`, `S_rec`, and `S_nbi` proxy controls were removed.
+- Density is reduced to a representative scalar over trusted overlapping rho support and broadcast over rho at load time.
+- The `barrier_v1` latent uses `1 - norm(D_alpha)` as H-mode evidence and is directly supervised through the D-alpha auxiliary loss.
+- Evaluation clears stale plot PNGs before writing new outputs, so skipped shots do not leave misleading artifacts.
+
+**Earlier optimizations:**
+- Inverse-coverage weighting ensures all admitted radii (dense or sparse) are supervised fairly.
+- Geometry precomputation eliminates per-substep recomputation overhead.
 - EMA validation tracking saves both raw and EMA best checkpoints independently.
-- Lambda_z smoothness penalty stabilizes latent trajectories.
-- D-alpha is preserved explicitly in the packs and now drives the regime label heuristic used for latent supervision.
+- `lambda_z` smoothness penalty stabilizes latent trajectories.
+- D-alpha is preserved explicitly in the packs and drives the heuristic regime label used for latent supervision.
 
 ## Connect to Compute Node
 
@@ -212,7 +244,7 @@ If you are on a GPU node and your JAX install supports CUDA, this will use GPU a
 
 ```bash
 export PYTHONPATH="$PWD"
-python train_tokamak_ode_hpc.py --config config/config.yaml
+python train_tokamak_ode_hpc.py --config config/config_v3.yaml
 ```
 
 ### Force CPU
@@ -239,16 +271,25 @@ We provide a **canonical GPU wrapper** (`scripts/run_training_gpu.sh`) that load
 
 - Standard run:
 ```bash
-./scripts/run_training_gpu.sh --config config/config.yaml
+./scripts/run_training_gpu.sh --config config/config_v3.yaml
 ```
-- With tmux (recommended):
+- With tmux on a GPU compute node (recommended for the current strict packs):
 ```bash
-tmux new -s tokamak_resume
-./scripts/run_training_gpu.sh --config config/config.yaml
+cd /home/ITER/leek12/research/fusion_ode_identification
+tmux new -s tokamak_v3
+
+# inside tmux
+source venv/bin/activate
+export PYTHONPATH="$PWD"
+./scripts/run_training_gpu.sh --config config/config_v3.yaml
+
 # detach: Ctrl+b then d
 # list sessions: tmux ls
-# reattach: tmux attach -t tokamak_resume
+# reattach: tmux attach -t tokamak_v3
 ```
+`config/config_v3.yaml` uses `shots: "all"`, so it trains on the currently built
+strict packs in `data/`. Do not start this from the login node unless you have
+already entered an allocated GPU session.
 - Run arbitrary Python scripts via `--python`:
 ```bash
 ./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_debug.yaml --shot 27567
@@ -265,19 +306,19 @@ For resumed runs, the log also prints the loaded checkpoint, the baseline best l
 If a long run stops after saving checkpoints, resume from the latest preferred checkpoint (`_best_ema.eqx` first, then `_best.eqx`) and keep the LR/logging step count continuous:
 
 ```bash
-resume_step=$(grep 'New GLOBAL best (val, EMA)' logs/production_run_v1/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
+resume_step=$(grep 'New GLOBAL best (val, EMA)' logs/production_run_v3/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
 if [[ -z "$resume_step" ]]; then
-	resume_step=$(grep 'New GLOBAL best (val)' logs/production_run_v1/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
+	resume_step=$(grep 'New GLOBAL best (val)' logs/production_run_v3/training.log | tail -n 1 | sed -E 's/.*step=([0-9]+)/\1/')
 fi
 
 tmux new -s tokamak_resume
-./scripts/run_training_gpu.sh --config config/config.yaml --resume_latest_best --resume_step_offset "${resume_step:-0}"
+./scripts/run_training_gpu.sh --config config/config_v3.yaml --resume_latest_best --resume_step_offset "${resume_step:-0}"
 ```
 
 To resume from a specific checkpoint instead of the preferred latest best:
 
 ```bash
-./scripts/run_training_gpu.sh --config config/config.yaml --resume_ckpt "models/production_run_v1/tokamak ode model_best.eqx" --resume_step_offset 1400
+./scripts/run_training_gpu.sh --config config/config_v3.yaml --resume_ckpt "models/production_run_v3/tokamak ode model_best.eqx" --resume_step_offset 1400
 ```
 
 Notes:
@@ -291,7 +332,7 @@ Notes:
 This loads the dataset, loads a checkpoint (prefers `_best_ema.eqx` first, then `_best.eqx`, then `_finetuned.eqx` only if `training.lbfgs_finetune: true`), runs evaluation for one shot, and writes PNG/NPZ into `out/`:
 
 ```bash
-./scripts/run_training_gpu.sh --config config/config.yaml --debug_eval_only --debug_eval_shot 27567
+./scripts/run_training_gpu.sh --config config/config_v3.yaml --debug_eval_only --debug_eval_shot 27567
 ```
 
 ### Smoke Checks (Sanity Tests)
@@ -300,10 +341,10 @@ Run lightweight regression checks before/after training:
 
 ```bash
 # BC regression check (edge Te peak-to-peak > threshold)
-./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_debug.yaml --shot 27567
+./scripts/run_training_gpu.sh --python scripts/check_bc.py --config config/config_v3_debug.yaml --shot 27567
 
 # Diffusion operator sanity (const profile → div≈0, BC coupling sign)
-./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config config/config_debug.yaml --shot 27567
+./scripts/run_training_gpu.sh --python scripts/smoke_diffusion_sanity.py --config config/config_v3_debug.yaml --shot 27578
 
 # Time padding strictness (survives float32 downcast)
 ./scripts/run_training_gpu.sh --python scripts/smoke_time_padding_strict.py
@@ -313,13 +354,13 @@ Run lightweight regression checks before/after training:
 
 Generate evaluation plots and metrics for the saved checkpoint (prefers `_best_ema.eqx` if available):
 ```bash
-./scripts/run_training_gpu.sh --python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
+./scripts/run_training_gpu.sh --python scripts/evaluate_model.py --config config/config_v3.yaml --model-id production_run_v3 --data-check
 ```
 
 If you already loaded the modules and activated the venv manually, direct Python evaluation also works:
 
 ```bash
-python scripts/evaluate_model.py --config config/config.yaml --model-id production_run_v1 --data-check
+python scripts/evaluate_model.py --config config/config_v3.yaml --model-id production_run_v3 --data-check
 ```
 Outputs go to `logs/<model_id>/evaluation/` (JSON report + PNG plots).
 

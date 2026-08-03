@@ -17,7 +17,7 @@ import yaml
 from .data import load_data
 from .loss import eval_shot_trajectory_imex
 from .interp import LinearInterpolation
-from .model import HybridField, LatentDynamics, SourceNN
+from .model import HybridField, build_hybrid_model
 from .types import LossCfg, IMEXConfig
 
 jax.config.update("jax_enable_x64", True)
@@ -118,11 +118,11 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
         "huber_delta": float(cfg["training"].get("huber_delta", 5.0)),
         "lambda_src": float(cfg["training"].get("lambda_src", 1e-4)),
         "src_delta": float(cfg["training"].get("src_delta", 5.0)),
-        "lambda_w": float(cfg["training"].get("lambda_w", 1e-5)),
-        "model_error_delta": float(cfg["training"].get("model_error_delta", 10.0)),
         "lambda_z": float(cfg["training"].get("lambda_z", 1e-4)),
         "lambda_zreg": float(cfg["training"].get("lambda_zreg", 1e-4)),
         "lambda_regime": float(cfg["training"].get("lambda_regime", 0.0)),
+        "lambda_dalpha": float(cfg["training"].get("lambda_dalpha", 0.0)),
+        "lambda_pH": float(cfg["training"].get("lambda_pH", 0.0)),
         "throw_solver": bool(cfg["training"].get("throw_solver", False)),
     }
     if solver_throw_override:
@@ -132,11 +132,11 @@ def build_loss_cfg(cfg, solver_throw_override: bool = False) -> LossCfg:
         huber_delta=lcb["huber_delta"],
         lambda_src=lcb["lambda_src"],
         src_delta=lcb["src_delta"],
-        lambda_w=lcb["lambda_w"],
-        model_error_delta=lcb["model_error_delta"],
         lambda_z=lcb["lambda_z"],
         lambda_zreg=lcb["lambda_zreg"],
         lambda_regime=lcb["lambda_regime"],
+        lambda_dalpha=lcb["lambda_dalpha"],
+        lambda_pH=lcb["lambda_pH"],
         throw_solver=lcb["throw_solver"],
     )
     return loss_cfg
@@ -165,27 +165,7 @@ def build_imex_cfg(cfg) -> IMEXConfig:
 
 
 def build_model_template(cfg, key) -> HybridField:
-    layers = int(cfg.get("model", {}).get("layers", 64))
-    depth = int(cfg.get("model", {}).get("depth", 3))
-    latent_gain = float(cfg.get("model", {}).get("latent_gain", 1.0))
-    source_scale = float(cfg.get("model", {}).get("source_scale", 3.0e5))
-    divergence_clip = float(cfg.get("model", {}).get("divergence_clip", 1.0e6))
-
-    key_nn, key_mu = jax.random.split(key)
-
-    return HybridField(
-        nn=SourceNN(key_nn, source_scale=source_scale, layers=layers, depth=depth),
-        latent=LatentDynamics(
-            alpha=jnp.array(1.0, dtype=jnp.float64),
-            beta=jnp.array(1.0, dtype=jnp.float64),
-            gamma=jnp.array(1.0, dtype=jnp.float64),
-            mu_weights=jax.random.normal(key_mu, (3,), dtype=jnp.float64) * 0.01,
-            mu_bias=jnp.array(0.0, dtype=jnp.float64),
-            mu_ref=jnp.array(0.0, dtype=jnp.float64),
-        ),
-        latent_gain=latent_gain,
-        divergence_clip=divergence_clip,
-    )
+    return build_hybrid_model(cfg, key)
 
 
 def make_debug_plot_and_npz(bundle0, ev, out_png: str, out_npz: str, div_inf_ts=None, src_inf_ts=None, div_ts=None, src_ts=None):

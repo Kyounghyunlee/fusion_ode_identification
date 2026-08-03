@@ -35,14 +35,14 @@ training:
   huber_delta: 10.0
   lambda_src: 1.0e-4
   src_delta: 10.0
-  lambda_w: 0.0
-  model_error_delta: 20.0
   lambda_z: 1.0e-4
   lambda_zreg: 1.0e-5
   lambda_regime: 1.0e-3
+  lambda_dalpha: 0.0
+  lambda_pH: 0.0
 
   # ODE solver configuration
-  solver: "imex"   # alternatives: kvaerno5, tsit5, kencarp3, imex
+  solver: "imex"
   rtol: 1.0e-3
   atol: 1.0e-3
 
@@ -75,7 +75,7 @@ training:
   lbfgs_tol: 5.0e-5
 
 output:
-  model_id: "production_run_v1"
+  model_id: "production_run_v2"
   save_dir: "models"
   log_dir: "logs"
   model_name: "tokamak ode model"
@@ -83,5 +83,6 @@ output:
 model:
   layers: 128
   depth: 4
+  latent_design: "cubic"
   latent_gain: 1.0
   source_scale: 3.0e5

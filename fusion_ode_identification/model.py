@@ -1,6 +1,8 @@
 """Model definitions for tokamak electron temperature ODE."""
 # fusion_ode_identification/model.py
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -21,11 +23,77 @@ def smooth_clamp(x, lo, hi, beta: float = 50.0):
     x2 = hi - jax.nn.softplus(beta * (hi - x1)) / beta
     return x2
 
-CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "S_gas", "S_rec", "S_nbi"]
+CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
+LATENT_FEATURE_SIZE = 6
 
 
 def _as64(x):
     return jnp.asarray(x, dtype=jnp.float64)
+
+
+def _moving_average_same(x: jnp.ndarray, width: int) -> jnp.ndarray:
+    width = max(1, int(width))
+    if width <= 1 or x.shape[0] < 3:
+        return _as64(x)
+    pad_left = width // 2
+    pad_right = width - 1 - pad_left
+    x_pad = jnp.concatenate([jnp.repeat(x[:1], pad_left), x, jnp.repeat(x[-1:], pad_right)], axis=0)
+    kernel = jnp.ones((width,), dtype=jnp.float64) / float(width)
+    return jnp.convolve(_as64(x_pad), kernel, mode="valid")
+
+
+def _normalize_range(x: jnp.ndarray, default: float = 0.5) -> jnp.ndarray:
+    x = _as64(x)
+    x_min = jnp.min(x)
+    span = jnp.max(x) - x_min
+    scaled = (x - x_min) / (span + 1.0e-6)
+    return jnp.where(span > 1.0e-6, scaled, jnp.full_like(x, float(default)))
+
+
+def normalize_observed_signal(x: jnp.ndarray) -> jnp.ndarray:
+    return _normalize_range(x)
+
+
+def _time_derivative(x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
+    x = _as64(x)
+    t = _as64(t)
+    if x.shape[0] < 2:
+        return jnp.zeros_like(x)
+    dx = jnp.diff(x)
+    dt = jnp.maximum(jnp.diff(t), 1.0e-6)
+    if x.shape[0] == 2:
+        slope = dx[0] / dt[0]
+        return jnp.array([slope, slope], dtype=jnp.float64)
+    center = (x[2:] - x[:-2]) / jnp.maximum(t[2:] - t[:-2], 1.0e-6)
+    first = dx[0] / dt[0]
+    last = dx[-1] / dt[-1]
+    return jnp.concatenate([jnp.array([first], dtype=jnp.float64), center, jnp.array([last], dtype=jnp.float64)])
+
+
+def build_latent_feature_series(
+    ts: jnp.ndarray,
+    ctrl_norm_ts: jnp.ndarray,
+    dalpha_ts: jnp.ndarray,
+    Te_edge_ts: jnp.ndarray,
+    ne_edge_ts: jnp.ndarray,
+) -> jnp.ndarray:
+    ts = _as64(ts)
+    ctrl_norm_ts = _as64(ctrl_norm_ts)
+    dalpha_norm = normalize_observed_signal(dalpha_ts)
+    Te_edge_norm = normalize_observed_signal(Te_edge_ts)
+    ne_edge_norm = normalize_observed_signal(ne_edge_ts)
+
+    dalpha_s = _moving_average_same(dalpha_norm, 11)
+    Te_edge_s = _moving_average_same(Te_edge_norm, 11)
+    ne_edge_s = _moving_average_same(ne_edge_norm, 11)
+
+    dalpha_hmode_evidence = 1.0 - dalpha_s
+    d_dalpha = -_time_derivative(dalpha_s, ts)
+    d_Te_edge = _time_derivative(Te_edge_s, ts)
+    d_ne_edge = _time_derivative(ne_edge_s, ts)
+    P_nbi = ctrl_norm_ts[:, 0]
+    Ip = ctrl_norm_ts[:, 1]
+    return jnp.stack([dalpha_hmode_evidence, d_dalpha, d_Te_edge, d_ne_edge, P_nbi, Ip], axis=-1)
 
 
 class SourceNN(eqx.Module):
@@ -77,10 +145,98 @@ class LatentDynamics(eqx.Module):
         gamma_eff = jax.nn.softplus(self.gamma)
         return alpha_eff * (mu - self.mu_ref) - beta_eff * z - gamma_eff * z**3
 
+    def barrier_coordinate(self, z: float, latent_gain: float = 1.0) -> float:
+        return jax.nn.sigmoid(_as64(latent_gain) * _as64(z))
+
+    def regime_logit(self, z: float, latent_gain: float = 1.0) -> float:
+        return _as64(latent_gain) * _as64(z)
+
+    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float, latent_gain: float = 1.0) -> float:
+        del control_norm, Te_edge, ne_edge
+        return self.barrier_coordinate(z, latent_gain=latent_gain)
+
+
+class BarrierLatentDynamics(eqx.Module):
+    target_extra_weights_raw: jnp.ndarray
+    target_bias: jnp.ndarray
+    evidence_gain_raw: jnp.ndarray
+    tau_lh_raw: jnp.ndarray
+    tau_hl_raw: jnp.ndarray
+    regime_gain: jnp.ndarray
+
+    def __init__(self, key):
+        del key
+        self.target_extra_weights_raw = jnp.full((LATENT_FEATURE_SIZE - 1,), -5.0, dtype=jnp.float64)
+        self.target_bias = jnp.array(0.0, dtype=jnp.float64)
+        self.evidence_gain_raw = jnp.array(5.5, dtype=jnp.float64)
+        self.tau_lh_raw = jnp.array(-3.0, dtype=jnp.float64)
+        self.tau_hl_raw = jnp.array(-2.2, dtype=jnp.float64)
+        self.regime_gain = jnp.array(1.0, dtype=jnp.float64)
+
+    def __call__(self, z: float, latent_features: jnp.ndarray) -> float:
+        feat = _as64(latent_features)
+        zeta = _as64(z)
+        z_b = self.barrier_coordinate(zeta)
+        dalpha_evidence = jnp.clip(feat[0], 0.0, 1.0)
+        extra = feat[1:]
+        extra_drive = jnp.dot(jax.nn.softplus(self.target_extra_weights_raw), extra)
+        evidence_gain = jax.nn.softplus(self.evidence_gain_raw) + 1.0
+        target_logit = evidence_gain * (dalpha_evidence - 0.5) + 0.1 * extra_drive + self.target_bias
+        target_logit = jnp.clip(target_logit, -8.0, 8.0)
+        target_barrier = jax.nn.sigmoid(target_logit)
+        tau_lh = jax.nn.softplus(self.tau_lh_raw) + 5.0e-3
+        tau_hl = jax.nn.softplus(self.tau_hl_raw) + 5.0e-3
+        tau = jnp.where(target_barrier >= z_b, tau_lh, tau_hl)
+        return (target_logit - zeta) / tau
+
+    def barrier_coordinate(self, z: float, latent_gain: float = 1.0) -> float:
+        del latent_gain
+        return jax.nn.sigmoid(_as64(z))
+
+    def regime_logit(self, z: float, latent_gain: float = 1.0) -> float:
+        del latent_gain
+        return self.regime_gain * _as64(z)
+
+    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float, latent_gain: float = 1.0) -> float:
+        del control_norm, Te_edge, ne_edge, latent_gain
+        return 1.0 - self.barrier_coordinate(z)
+
+
+def build_hybrid_model(cfg, key) -> "HybridField":
+    model_cfg = cfg.get("model", {})
+    layers = int(model_cfg.get("layers", 64))
+    depth = int(model_cfg.get("depth", 3))
+    latent_gain = float(model_cfg.get("latent_gain", 1.0))
+    source_scale = float(model_cfg.get("source_scale", 3.0e5))
+    divergence_clip = float(model_cfg.get("divergence_clip", 1.0e6))
+    latent_design = str(model_cfg.get("latent_design", "cubic")).lower()
+
+    key_nn, key_latent = jax.random.split(key)
+    if latent_design == "cubic":
+        latent = LatentDynamics(
+            alpha=jnp.array(1.0, dtype=jnp.float64),
+            beta=jnp.array(1.0, dtype=jnp.float64),
+            gamma=jnp.array(1.0, dtype=jnp.float64),
+            mu_weights=jax.random.normal(key_latent, (3,), dtype=jnp.float64) * 0.01,
+            mu_bias=jnp.array(0.0, dtype=jnp.float64),
+            mu_ref=jnp.array(0.0, dtype=jnp.float64),
+        )
+    elif latent_design == "barrier_v1":
+        latent = BarrierLatentDynamics(key_latent)
+    else:
+        raise ValueError(f"Unknown model.latent_design={latent_design!r}")
+
+    return HybridField(
+        nn=SourceNN(key_nn, source_scale=source_scale, layers=layers, depth=depth),
+        latent=latent,
+        latent_gain=latent_gain,
+        divergence_clip=divergence_clip,
+    )
+
 
 class HybridField(eqx.Module):
     nn: SourceNN
-    latent: LatentDynamics
+    latent: Any
     latent_gain: jnp.ndarray
 
     Te_scale: float = 1000.0
@@ -95,7 +251,7 @@ class HybridField(eqx.Module):
     def __init__(
         self,
         nn: SourceNN,
-        latent: LatentDynamics,
+        latent: Any,
         latent_gain: float = 1.0,
         chi_core: float = 0.6,
         chi_edge_base: float = 2.0,
@@ -117,8 +273,20 @@ class HybridField(eqx.Module):
         rhs = jnp.where(jnp.isfinite(rhs), rhs, 0.0)
         return rhs
 
+    def uses_barrier_latent(self) -> bool:
+        return isinstance(self.latent, BarrierLatentDynamics)
+
+    def barrier_coordinate(self, z):
+        return self.latent.barrier_coordinate(z, latent_gain=self.latent_gain)
+
+    def compute_regime_logit(self, z):
+        return self.latent.regime_logit(z, latent_gain=self.latent_gain)
+
+    def compute_aux_dalpha_hat(self, z, control_norm, Te_edge, ne_edge):
+        return self.latent.aux_dalpha_hat(z, control_norm, Te_edge, ne_edge, latent_gain=self.latent_gain)
+
     def _chi_profile(self, rho, z):
-        chi_edge = self.chi_edge_base - self.chi_edge_drop * jax.nn.sigmoid(self.latent_gain * z)
+        chi_edge = self.chi_edge_base - self.chi_edge_drop * self.barrier_coordinate(z)
         chi_edge = jnp.clip(chi_edge, 0.1, 5.0)
         w_ped = jax.nn.sigmoid((rho - self.ped_center) / self.ped_width)
         return self.chi_core + w_ped * (chi_edge - self.chi_core)
@@ -251,8 +419,26 @@ class HybridField(eqx.Module):
         Vprime = jnp.clip(_as64(Vprime_vals), 1e-6, None)
         chi = self._chi_profile(rho, z)
 
-        # Optional precomputed geometry: args = (rho, Vprime, ctrl_norm, ne, dr, Vprime_face, Vprime_cell, denom)
-        if len(args) >= 8:
+        # Optional precomputed geometry.
+        # Legacy fast args: (rho, Vprime, ctrl_norm, ne, dr, Vprime_face, Vprime_cell, denom)
+        # Barrier-latent fast args: (rho, Vprime, ctrl_norm, ne, latent_inputs, dr, Vprime_face, Vprime_cell, denom)
+        if len(args) >= 9:
+            dr = args[5]
+            Vprime_face = args[6]
+            Vprime_cell = args[7]
+            denom = args[8]
+            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(
+                rho,
+                Vprime,
+                chi,
+                dt,
+                theta,
+                dr=dr,
+                Vprime_face=Vprime_face,
+                Vprime_cell=Vprime_cell,
+                denom=denom,
+            )
+        elif len(args) >= 8:
             dr = args[4]
             Vprime_face = args[5]
             Vprime_cell = args[6]
@@ -288,7 +474,9 @@ class HybridField(eqx.Module):
         """
         Compute dz/dt for explicit latent evolution in IMEX.
         """
-        # New fast args: (rho, Vprime, control_norm, ne_vals)
+        # New fast args: (rho, Vprime, control_norm, ne_vals, latent_inputs)
+        if len(args) >= 5:
+            return self.latent(z, _as64(args[4]))
         if len(args) >= 4:
             control_norm = args[2]
             control_norm = jnp.clip(_as64(control_norm), -10.0, 10.0)

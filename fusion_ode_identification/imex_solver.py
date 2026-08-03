@@ -416,6 +416,7 @@ class IMEXIntegrator(eqx.Module):
         ctrl_norm_ts: jnp.ndarray,
         ne_ts: jnp.ndarray,
         args: tuple,
+        latent_features_ts: Optional[jnp.ndarray] = None,
         active_mask: Optional[jnp.ndarray] = None,
     ) -> IMEXSolution:
         """
@@ -453,10 +454,13 @@ class IMEXIntegrator(eqx.Module):
         Te_edge_ts = jnp.asarray(Te_edge_ts)
         ctrl_norm_ts = jnp.asarray(ctrl_norm_ts)
         ne_ts = jnp.asarray(ne_ts)
+        if latent_features_ts is None:
+            latent_features_ts = ctrl_norm_ts
+        latent_features_ts = jnp.asarray(latent_features_ts)
 
         def interval_scan(carry, xs):
-            t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv, active = xs
-            y_curr, t_curr, Te_edge_curr_iv, ctrl_curr_iv, ne_curr_iv = carry
+            t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv, latent_next_iv, active = xs
+            y_curr, t_curr, Te_edge_curr_iv, ctrl_curr_iv, ne_curr_iv, latent_curr_iv = carry
 
             def do_active(_):
                 dt = (t_next - t_curr) / substeps_i32
@@ -473,32 +477,33 @@ class IMEXIntegrator(eqx.Module):
                     Te_edge_next = (1.0 - w1) * Te_edge_curr_iv + w1 * Te_edge_next_iv
                     ctrl_curr = (1.0 - w0) * ctrl_curr_iv + w0 * ctrl_next_iv
                     ne_curr = (1.0 - w0) * ne_curr_iv + w0 * ne_next_iv
+                    latent_curr = (1.0 - w0) * latent_curr_iv + w0 * latent_next_iv
 
-                    # IMEX args for this substep: (rho, Vprime, control_norm, ne)
-                    args_step = (args[0], args[1], ctrl_curr, ne_curr) + args[2:]
+                    # IMEX args for this substep: (rho, Vprime, control_norm, ne, latent_inputs)
+                    args_step = (args[0], args[1], ctrl_curr, ne_curr, latent_curr) + args[2:]
                     y_new = self.step(t, y, dt, model, Te_edge_curr, Te_edge_next, args_step)
                     return (y_new, t_new)
 
                 y_final, _t_final = jax.lax.fori_loop(0, self.substeps, one_substep, (y_curr, t_curr))
                 # Keep carry structure identical to do_inactive.
-                return (y_final, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv), y_final
+                return (y_final, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv, latent_next_iv), y_final
 
             def do_inactive(_):
                 # Freeze dynamics in padded region: advance time but keep state.
-                return (y_curr, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv), y_curr
+                return (y_curr, t_next, Te_edge_next_iv, ctrl_next_iv, ne_next_iv, latent_next_iv), y_curr
 
             return jax.lax.cond(active, do_active, do_inactive, operand=None)
 
         # Initial state
         # We assume saveat[0] corresponds to y0
-        init_carry = (y0, saveat[0], Te_edge_ts[0], ctrl_norm_ts[0], ne_ts[0])
+        init_carry = (y0, saveat[0], Te_edge_ts[0], ctrl_norm_ts[0], ne_ts[0], latent_features_ts[0])
         
         # Scan over remaining save points
         # If saveat has length 1, this returns empty arrays, which is handled correctly
-        (y_end, t_end, _Te_edge_end, _ctrl_end, _ne_end), ys_rest = jax.lax.scan(
+        (y_end, t_end, _Te_edge_end, _ctrl_end, _ne_end, _latent_end), ys_rest = jax.lax.scan(
             interval_scan,
             init_carry,
-            (saveat[1:], Te_edge_ts[1:], ctrl_norm_ts[1:], ne_ts[1:], active_mask),
+            (saveat[1:], Te_edge_ts[1:], ctrl_norm_ts[1:], ne_ts[1:], latent_features_ts[1:], active_mask),
         )
         
         # Concatenate initial state with results
