@@ -30,12 +30,15 @@ training:
   src_delta: 10.0
   lambda_z: 1.0e-4
   lambda_zreg: 1.0e-5
-  # Regime supervision is a first-class objective for the cusp latent
-  # (the barrier_v1 setup used 1e-3 and relied on the D-alpha pin instead).
-  lambda_regime: 5.0e-2
+  # Regime supervision is a first-class objective for the cusp latent.
+  # The profile misfit sits at O(700) in these units; weights below keep the
+  # regime/observation terms at a few percent of the total, which step-1000
+  # diagnostics showed is required for the drive to ever reach the fold
+  # (at 5e-2 the BCE contributed ~0.04 and the latent never transitioned).
+  lambda_regime: 20.0
   # The D-alpha term supervises a learned observation head, not the latent
-  # directly, so it no longer needs to dominate the loss.
-  lambda_dalpha: 1.0
+  # directly (no proxy pinning).
+  lambda_dalpha: 20.0
   lambda_pH: 0.0
 
   solver: "imex"
