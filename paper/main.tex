@@ -1,6 +1,6 @@
 \documentclass[11pt]{article}
 
-\usepackage[a4paper, margin=2.6cm]{geometry}
+\usepackage[a4paper, margin=2.5cm]{geometry}
 \usepackage{amsmath, amssymb, amsthm}
 \usepackage{bm}
 \usepackage{graphicx}
@@ -9,24 +9,31 @@
 \usepackage[dvipsnames]{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{positioning, arrows.meta}
+\usepackage{placeins}   % \FloatBarrier
 \usepackage[colorlinks=true, linkcolor=MidnightBlue, citecolor=MidnightBlue, urlcolor=MidnightBlue]{hyperref}
 \usepackage[round]{natbib}
 \usepackage{microtype}
 
-\input{results}
+\input{results}   % machine-generated result macros (scripts/update_paper_numbers.py)
 
-% ---- symbols ----
-\newcommand{\R}{\mathbb{R}}
-\newcommand{\dd}{\mathrm{d}}
-\newcommand{\state}{u}                 % transported field
-\newcommand{\lat}{\zeta}               % latent regime coordinate
-\newcommand{\drive}{a}                 % normal-form drive
-\newcommand{\ctrl}{\bm{w}}             % exogenous inputs
-\newcommand{\emiss}{y}                 % scalar emission observable
+% ---- notation (see Table 1) ----
+\newcommand{\Te}{T_{\mathrm{e}}}
+\newcommand{\nel}{n_{\mathrm{e}}}
+\newcommand{\lat}{z}
+\newcommand{\dr}{\alpha}
+\newcommand{\ctrlq}{\bm{q}}
+\newcommand{\ctxm}{\bm{m}}
+\newcommand{\inr}{\bm{r}}
+\newcommand{\yD}{y_{\mathrm{D}\alpha}}
 \newcommand{\pH}{p_{\mathrm{H}}}
+\newcommand{\bact}{b}
+\newcommand{\chie}{\chi_{\mathrm{e}}}
+\newcommand{\thIMEX}{\theta_{\mathrm{IMEX}}}
+\newcommand{\mLH}{m_{\mathrm{LH}}}
+\newcommand{\mHL}{m_{\mathrm{HL}}}
 
-\title{Data-driven identification of low-dimensional regime dynamics\\
-for the L--H transition in a magnetically confined plasma}
+\title{Control-oriented identification of low-dimensional L--H regime\\
+dynamics from public MAST data}
 \author{Kyounghyun Lee}
 \date{\today}
 
@@ -34,551 +41,668 @@ for the L--H transition in a magnetically confined plasma}
 \maketitle
 
 \begin{abstract}
-The transition between the low- and high-confinement regimes (L- and H-mode)
-of a tokamak plasma is abrupt, strongly nonlinear, and central to the
-operation of future fusion devices, yet real-time-capable models that
-\emph{quantify} the regime and the proximity to transition are scarce. We
-propose a hybrid reduced-order model in which a one-dimensional thermal
-transport equation with a regime-dependent transport coefficient is coupled
-to a scalar latent state governed by the full unfolding of the cubic normal
-form, $\tau\,\dot\lat = \drive(\ctrl) + c_1\lat + c_2\lat^{2} - \lat^{3}$.
-The coefficients are left free: whether the identified regime dynamics are
-bistable (folds, hysteresis) or monostable (a sharp but memoryless
-threshold) is decided by the data, not assumed. The drive $\drive$ depends
-only on measured actuators in fixed physical units, so the model is causal
-and directly usable in a real-time setting; the D$_\alpha$ emission that
-conventionally diagnoses the transition never enters the dynamics and only
-supervises a learned observation head. All components are identified
-end-to-end from public MAST measurements by reverse-mode differentiation
-through an implicit--explicit integrator. The identified model assigns a
-calibrated regime probability $\pH(t)$ at every instant, locates transition
-times to a few tens of milliseconds, holds beam-free and below-threshold
-discharges in the low-confinement state, and --- when the identified dynamics are bistable ---
-yields closed-form fold margins that measure the distance to forced and
-spontaneous transitions in actuator units. On this corpus the data select a
-bistable field: the identified normal form implies a forced-transition
-power threshold of $\approx\SI{1.9}{MW}$ and loss of the high-confinement
-state below $\approx\SI{1.1}{MW}$ --- a hysteresis of
-$\approx\SI{0.8}{MW}$ obtained without imposing bistability.
+Operating a tokamak in the high-confinement regime requires knowing, in
+real time, which confinement state the plasma is in and how far it is from
+a transition. Integrated transport simulators organize profile evolution
+but do not represent the abrupt, possibly path-dependent regime change;
+static classifiers detect it but supply no dynamics, margins, or
+continuous-time state. We identify, from \nShots{} public MAST discharges,
+a compact gray-box model: a phenomenological flux-coordinate
+temperature-diffusion backbone whose edge transport coefficient is
+modulated by a scalar regime coordinate governed by the depressed cubic
+$\tau\dot\lat = \dr(\inr) + \beta\lat - \lat^{3}$, with the topology
+parameter $\beta$ left free so that one-equilibrium and three-equilibrium
+dynamics compete on held-out evidence rather than by assumption. All
+components are identified jointly by reverse-mode differentiation through
+a verified implicit--explicit finite-volume integrator; inputs enter in
+fixed physical units and causally, so the identified regime state can be
+replayed in streaming fashion. On session-grouped held-out discharges the
+model attains a median per-shot event AUC of \resAUCmed{}
+(95\% CI \resAUCci) and median transition-timing error \resTTmed{}, while
+confirmed non-transitioning discharges remain in the low state.
+The best-fit dynamics are bistable ($\beta = \resBeta$,
+$P(\beta>0) \approx \resPbetaPos$ under a local Laplace approximation);
+we report the implied conditional fold margins and equivalent
+injected-power thresholds with uncertainty, and state precisely what
+evidence separates structural bistability from finite-rate lag.
+% TODO: finalize abstract numbers after locked-test evaluation.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-Magnetically confined plasmas exhibit two robustly distinct transport
-regimes. Above a heating-power threshold, the turbulent transport in a
-narrow layer at the plasma edge is abruptly suppressed and an edge
-\emph{transport barrier} forms: density and temperature profiles steepen
-into a pedestal, global confinement roughly doubles, and the edge light
-emission from neutral-particle recycling drops sharply. This is the
-L--H transition \citep{wagner1982}; the high-confinement state (H-mode) is
-the reference operating scenario for ITER-class devices, so knowing
-\emph{which regime the plasma is in} and \emph{how far it is from
-switching} --- quantitatively, in real time --- is an operational
-requirement, not a curiosity.
+The transition of a magnetically confined plasma from low (L) to high (H)
+confinement is one of the sharpest macroscopic bifurcation-like phenomena
+in laboratory physics: above a heating-power threshold, edge turbulence is
+suppressed within milliseconds, an edge transport barrier forms, and
+global confinement improves substantially \citep{wagner1982}. ITER-class
+devices plan to operate in H-mode, so a regime estimate --- and a
+quantitative distance to the transition --- is an operational input to
+plasma control, not only an object of physics interest.
 
-From a dynamical-systems standpoint the phenomenology is suggestive: the
-transition is fast compared with the profile evolution, exhibits a power
-threshold, and back-transitions (H$\to$L) are reported at lower power than
-forward transitions, hinting at hysteresis
-\citep{connor2000, scheffer2009earlywarning}. Reduced predator--prey-type
-models of the interaction between turbulence, shear flows, and pressure
-gradients reproduce such behavior qualitatively
-\citep{kim2003}, but they are seldom identified quantitatively against
-experimental data, and machine-learning classifiers that detect the
-transition from diagnostics are typically acausal, black-box, and give no
-distance-to-transition information.
+From a dynamical-systems standpoint the phenomenology is suggestive but
+under-determined. There is a power threshold; back-transitions are
+reported at lower power than forward transitions, which suggests
+hysteresis; and dithering phases near threshold suggest more complex local
+dynamics \citep{connor2000}. Reduced models of the turbulence--shear-flow
+interaction reproduce this behavior qualitatively \citep{kim2003}, but
+they are rarely identified quantitatively against experimental data, and
+apparent hysteresis under time-varying forcing can also be produced by
+ordinary finite-rate lag or by omitted slow variables. Whether experimental
+trajectories \emph{require} a multistable description is therefore an
+empirical question.
 
-This paper takes a middle route. We identify, from public experimental
-data, a hybrid model with three interpretable parts: a conservative
-one-dimensional transport backbone for the electron temperature; a scalar
-latent regime state $\lat(t)$ whose dynamics are the \emph{full unfolding
-of the cubic normal form}; and a learned observation head that links the
-latent state to the measured emission proxy. Crucially, we do not impose
-bistability. The normal-form coefficients are free, and the identified
-vector field may come out bistable (in which case transitions are fold
-crossings and hysteresis is intrinsic) or monostable (a sharp threshold
-response without memory). The question ``is the L--H transition a
-bifurcation?'' is thereby moved from an assumption to a measurable property
-of the identified dynamics.
+The modeling landscape offers, at one end, local turbulence calculations
+(high fidelity, far too expensive for control), and at the other, static
+or sequence-model classifiers of diagnostic signals (fast, but acausal in
+their preprocessing, opaque, and silent about margins and dynamics).
+Between them sit integrated one-dimensional transport solvers ---
+ASTRA, JETTO, TRANSP, the control-oriented RAPTOR \citep{felici2011}, and
+recently TORAX \citep{citrin2024torax}, which implements finite-volume
+transport in JAX with differentiable solves aimed at optimization and
+control workflows. This work borrows from TORAX the conceptual position
+--- differentiable, physics-structured transport as the backbone for
+gradient-based workflows --- but is narrower and more empirical: we do not
+attempt a complete core simulator; we identify \emph{edge regime dynamics
+and transition margins} from experimental data, a component such
+simulators currently lack.
 
-Contributions:
+The gap, then, is a model that is simultaneously
+(i) causal and cheap enough for real-time use,
+(ii) expressive enough to represent an abrupt, possibly hysteretic regime
+change,
+(iii) identifiable from the modest number of well-diagnosed discharges a
+single device provides, and
+(iv) interpretable through stability quantities (equilibria, folds,
+margins) that a controller can consume.
+Neural ordinary differential equations \citep{chen2018neuralode} and
+universal differential equations \citep{rackauckas2020universal} provide
+the identification machinery; what they do not provide by themselves is
+structure, and structure is what makes the result interpretable and
+falsifiable.
+
+Our approach is a structured (gray-box) neural differential model with
+three parts: a conservative-form temperature-diffusion backbone with a
+regime-dependent edge transport coefficient; a scalar latent regime
+coordinate governed by the \emph{depressed cubic} normal form, whose free
+topology parameter lets the data choose between monostable and bistable
+dynamics; and a learned observation head that links the latent state to
+the D$_\alpha$ emission proxy used for weak supervision. The neural
+components are confined to the residual source closure and the observation
+map; the latent vector field itself is a four-parameter polynomial.
+
+The research question is:
+\emph{can a compact, causal, continuous-time gray-box model identified
+from experimental MAST discharges jointly predict edge-temperature
+evolution and regime transitions, while yielding interpretable and
+statistically defensible stability margins suitable for control-oriented
+use?}
+
+Contributions, each tied to a results subsection:
 \begin{enumerate}
-\item a causal, real-time-capable reduced-order model of regime dynamics,
-      driven exclusively by actuators in fixed physical units
-      (\S\ref{sec:model});
-\item an end-to-end identification pipeline --- data curation with strict
-      quality gates, weak-label extraction, and differentiable
-      implicit--explicit integration --- applied to 60+ public MAST
-      discharges (\S\ref{sec:data}, \S\ref{sec:ident});
-\item a quantitative regime-assessment methodology: calibrated regime
-      probability, per-discharge classification metrics, transition-time
-      error, and, when the identified dynamics are bistable, closed-form
-      fold margins in actuator units (\S\ref{sec:assess});
-\item empirical results on MAST, including the identified normal-form
-      coefficients and the answer the data gives to the bistability
-      question (\S\ref{sec:results}).
+\item experimental identification of regime-aware gray-box differential
+      dynamics from public MAST data, with verified numerics
+      (\S\ref{sec:res-verif}, \S\ref{sec:res-profiles});
+\item an explicit, falsifiable comparison between monostable and bistable
+      latent dynamics under identical conditions, with uncertainty
+      (\S\ref{sec:res-modelcomp});
+\item conversion of the fitted vector field into conditional static fold
+      margins and equivalent-power thresholds with uncertainty
+      (\S\ref{sec:res-folds});
+\item a causal, streaming-compatible evaluation protocol for
+      control-oriented regime assessment (\S\ref{sec:res-events},
+      \S\ref{sec:res-runtime}).
 \end{enumerate}
 
-\section{Physical background and how it shapes the model}
+\section{Physical and dynamical background}
 \label{sec:physics}
 
-\paragraph{The system.} A tokamak confines a hot plasma on nested toroidal
-magnetic surfaces. Transport of heat across those surfaces (radially,
-coordinate $\rho \in [0,1]$) is dominated by turbulence and is orders of
-magnitude faster than collisional theory predicts. The experiment measures
-radial profiles of electron temperature and density at discrete times
-(Thomson scattering), together with dense time series of the actuators ---
-injected neutral-beam heating power $P$, plasma current $I_p$, and fueling
-(reflected in the mean density $\bar n_e$) --- and of the D$_\alpha$ line
-emission produced by recycling neutrals at the edge.
+\paragraph{Device and measurements.} MAST was a mega-ampere spherical
+tokamak operated at Culham until 2013. The public MAST archive
+\citep{mastopendata} provides, per discharge: Thomson-scattering electron
+temperature and density profiles ($\sim$\SI{4}{ms} cadence, $\sim$130
+radial points, reliably measured mainly in an outer annulus); summary
+traces of neutral-beam injected power $P$, plasma current $I_p$, and
+line/profile-averaged density at \SI{1}{ms} cadence; filtered D$_\alpha$
+photodiode signals; and equilibrium reconstructions from which the
+flux-surface geometry is derived. The radial coordinate $\rho \in [0,1]$
+used throughout is the normalized coordinate supplied with the Level-2
+profile data (a normalized minor-radius/flux label; the same convention
+enters training and evaluation consistently).
+% TODO: confirm the exact flux convention string from the dataset metadata.
 
-\paragraph{The L--H transition.} When the heating power crosses a
-threshold, sheared plasma flows at the edge suppress the local turbulence;
-the effective thermal diffusivity in a thin edge layer drops, and a steep
-pedestal grows there. The D$_\alpha$ emission collapses at the transition
---- less turbulent transport means less particle exhaust and less
-recycling light --- which makes it the standard experimental transition
-indicator. In H-mode, quasi-periodic edge instabilities
-(edge-localized modes, ELMs) appear as short D$_\alpha$ bursts on top of
-the low quiescent level. The physical picture that emerges --- a fast edge
-subsystem switching between two states under slow actuator forcing --- is
-exactly the setting in which center-manifold arguments justify a
-one-dimensional normal form for the switching degree of freedom
-\citep{kuznetsov2004elements}.
+\paragraph{The L--H transition.} Above a threshold in the power crossing
+the plasma boundary, sheared flows suppress edge turbulence; the effective
+edge heat diffusivity drops and a pedestal forms. The D$_\alpha$ emission
+--- light from recycling neutrals --- collapses at the transition, making
+it the standard event marker; in H-mode, edge-localized modes (ELMs)
+appear as short D$_\alpha$ bursts. MAST studies report threshold
+dependence not only on power but strongly on plasma shape and X-point
+geometry \citep{meyer2011}, which bounds what any model driven by a few
+scalar inputs can capture. Published thresholds are conventionally stated
+in \emph{loss power} (heating minus stored-energy rate and losses); our
+corpus provides injected NBI power, so thresholds derived here are
+\emph{equivalent injected-power} values conditional on the corpus, not
+universal physical thresholds.
 
-\paragraph{How the physics enters the pipeline.} Each element of the
-phenomenology is mapped to a model component:
-(i) turbulence suppression in a thin edge layer $\to$ a transport
-coefficient $\chi(\rho,\lat)$ whose \emph{edge} value decreases with the
-barrier coordinate (Fig.~\ref{fig:chi});
-(ii) fast switching under slow forcing $\to$ a scalar normal-form latent
-driven by the actuators;
-(iii) the D$_\alpha$ collapse $\to$ a learned observation map from the
-latent state to the emission proxy, used for supervision only;
-(iv) ELM bursts contaminating the proxy $\to$ label extraction from the
-\emph{lower envelope} of the signal (\S\ref{sec:labels});
-(v) the power threshold $\to$ the drive $\drive(\ctrl)$ is constrained
-monotone in $P$ and uses fixed physical units, so a threshold in drive is
-a threshold in watts.
+\paragraph{A conditional reduction argument.} If, near the transition, the
+high-dimensional edge dynamics possess one slow real mode while the
+remaining modes keep a stable spectral gap, and if the external inputs
+vary slowly relative to those fast modes, then a center-manifold reduction
+motivates a scalar coordinate governed by a low-order polynomial vector
+field near the bifurcation \citep{kuznetsov2004elements}. A generic
+saddle-node is locally quadratic; the \emph{depressed cubic} used here is
+the minimal polynomial family that can represent either one equilibrium
+branch or a pair of folds with two stable branches, switching between the
+two topologies through a single parameter. It is a testable model class
+motivated by these local assumptions --- not a theorem about the plasma.
 
-\section{Data}
+\paragraph{Static bistability versus dynamic memory.} A monostable
+first-order system with relaxation time $\tau$ already produces lag and
+loop area under time-varying forcing; a bistable system additionally
+possesses quasi-static memory: two stable states coexist at fixed input
+between the folds. When the drive crosses a fold at a finite rate the
+transition occurs after a \emph{dynamic bifurcation delay}, so a
+zero static margin marks the disappearance of the quasi-static low state,
+not necessarily the instant the observed transition completes. The
+evaluation in \S\ref{sec:res-modelcomp} is designed around exactly this
+distinction.
+
+\section{Data and cohort construction}
 \label{sec:data}
 
-\paragraph{Source.} All data are from the public MAST archive
-\citep{mastopendata}, accessed as Level-2 datasets over anonymous object
-storage; discharge metadata and session-log annotations were queried
-through the accompanying catalogue API. From each discharge we use:
-the Thomson-scattering electron temperature and density profiles
-($\sim$\SI{4}{ms} cadence, $\sim$130 spatial points, of which the reliably
-measured region is an outer annulus $\rho \gtrsim 0.85$);
-the summary actuator traces ($P$, $I_p$, $\bar n_e$) at \SI{1}{ms}
-cadence; the D$_\alpha$ photodiode traces; and the equilibrium
-reconstruction, from which the flux-surface volume factor $V'(\rho)$ in
-the transport operator is computed.
+\paragraph{Source and access.} All data are from the UKAEA MAST open-data
+archive (Level-2 datasets over anonymous object storage; catalogue and
+session-log metadata via the accompanying API), accessed August 2026
+\citep{mastopendata}. The data license requires acknowledgement of the
+data providers; see the availability statement.
 
-\paragraph{Corpus.} The corpus contains \nShots{} discharges from the
-2010--2013 campaigns: a contiguous experimental session (27567--27587)
-plus discharges selected from the catalogue whose session-log annotations
-describe clear transitions, back-transitions, or dithering phases.
-\nTrans{} discharges contain at least one labeled H segment; \nNoTrans{}
---- including purely ohmically heated (beam-free) ones --- never leave L
-and are retained deliberately as negative examples. Discharges whose
-profile data fail the quality gates below are excluded entirely.
+\paragraph{Shot selection.} The corpus combines
+(i) a contiguous experimental session (27567--27587),
+(ii) discharges whose session-log annotations describe clear transitions,
+back-transitions, or dithering,
+(iii) dedicated L--H threshold campaigns (25141--25156 and 25206--25214,
+X-point-height threshold studies, including discharges analyzed in
+\citealp{meyer2011}), and
+(iv) the 29934--29961 campaign.
+Selection criteria were fixed before model evaluation: required channels
+present (Thomson profiles, NBI power, $I_p$, density, D$_\alpha$,
+equilibrium), adequate pre- and post-transition observation, and passage
+of the profile quality gates below. Appendix~D lists every considered
+shot with its exclusion reason or final role.
+% TODO: regenerate manifest table from data/split.json + QA summary.
 
-\paragraph{Quality screening.} Raw channels are frequently corrupted, and
-admitting them destabilizes both the rollout and the labels. Per
-time-slice, profiles need a minimum number of finite channels and radial
-span, and impulsive outliers are removed by a rolling median-absolute-
-deviation test. Per radial channel, we require a minimum median level
-(\SI{50}{eV}), bounded relative jumps and span, and minimum time coverage;
+\paragraph{Quality screening.} Raw channels are frequently corrupted.
+Per time slice, profiles need a minimum number of finite channels and
+radial span; impulsive outliers are removed by a rolling
+median-absolute-deviation test. Per radial channel we require a minimum
+median level, bounded relative jumps and span, and minimum time coverage;
 a discharge is admitted only if at least four stable edge channels
-survive. The representative density is a trimmed mean over the trusted
-outer annulus.
+survive.
 
-\subsection{Weak regime labels}
+\paragraph{Grouped roles.} Shots are grouped into experimental sessions by
+contiguity of shot number; whole sessions are assigned to training
+(\nTrain{} shots), validation/model selection (\nVal{}), or a locked
+final test set (\nTest{}) by a deterministic hash, so neighboring shots
+sharing machine setup can never straddle a split boundary. The test
+sessions were evaluated once, after all modeling choices were frozen.
+
+\subsection{Weak regime labels and audit}
 \label{sec:labels}
 
-Supervision for the regime state comes from segment labels computed
-automatically from the D$_\alpha$ trace (Fig.~\ref{fig:labeler}); they are
-deliberately conservative and enter the loss only through a low-weight
-classification term.
+Labels are computed from the D$_\alpha$ lower envelope (rolling 15th
+percentile, \SI{15}{ms}): within a gate requiring an established discharge
+($|I_p|$ above 60\% of its 95th percentile, density above 20\%), the
+envelope distribution is split by a variance-maximizing threshold with
+guards against degenerate splits; candidate H segments must persist
+$\geq$ \SI{20}{ms}, be preceded by an in-gate L reference, and step down
+sharply at entry (\SI{25}{ms} contrast windows), which rejects slow
+drifts. Multiple H segments per shot are allowed. Samples near switches
+and outside the gate are excluded from scoring.
 
-Because ELM bursts are short positive spikes, the transition signature
-lives in the \emph{lower envelope} of the signal: we track a rolling 15th
-percentile over \SI{15}{ms} windows. Within a gate that requires an
-established discharge (current above 60\% of its flat-top value, density
-above 20\% of its peak --- excluding the ramp phases, where low emission
-reflects low recycling rather than confinement), the envelope distribution
-is split by a variance-maximizing (Otsu) threshold, guarded against
-degenerate splits. A candidate H segment is accepted only if it
-(i) persists $\geq$ \SI{20}{ms} (no label flicker),
-(ii) is preceded by an L reference inside the gate (no ``H at gate
-opening''), and
-(iii) steps down sharply across its entry (mean drop $\geq 0.10$ of the
-normalized range between \SI{25}{ms} windows), which rejects slow drifts
-on density-ramp discharges. Multiple H segments per discharge are allowed,
-so back-transitions are labeled. Samples near each switch are labeled as a
-transition window and excluded from classification scoring, as are all
-samples outside the gate. Where the session log gives an annotated
-transition time, the labels agree to $\sim$\SI{20}{ms}.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.8\linewidth]{figures/fig_labeler}
-  \caption{Anatomy of the weak labels for one discharge. The emission
-  proxy $\emiss(t)$ (orange) is contaminated by short bursts; the rolling
-  lower envelope (green) isolates the baseline whose step-down is the
-  transition signature. The gated variance-maximizing threshold (dashed)
-  and dwell/sharpness guards produce the shaded H segment; the dotted line
-  is the resulting transition time.}
-  \label{fig:labeler}
-\end{figure}
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.72\linewidth]{figures/fig_data}
-  \caption{Example discharge as seen by the model. Top: emission proxy
-  $\emiss(t)$ with the labeled H segment shaded. Middle: exogenous inputs
-  $\ctrl(t)$ in fixed physical scales (MW, MA, $10^{19}\,$m$^{-3}$).
-  Bottom: weak segment labels; ``--'' marks the excluded formation and
-  termination phases.}
-  \label{fig:data}
-\end{figure}
+Labels are audited against the independent session-log annotations
+retrieved from the catalogue for every shot (Appendix~D). Discharges are
+assigned to three evidence cohorts: \emph{confirmed transitions} (label
+and session log agree), \emph{confirmed negatives} (both support L
+throughout), and \emph{ambiguous} (extractor and log disagree, or gas
+puffing/ELM behavior makes the proxy unreliable). Only confirmed
+negatives support the negative-control claim in
+\S\ref{sec:res-events}; ambiguous cases are reported separately and are
+never treated as ground truth.
+% TODO: cohort counts from data/label_audit.json.
 
 \section{Model}
 \label{sec:model}
 
-Figure~\ref{fig:pipeline} summarizes the architecture and data flow.
+\subsection{States, inputs, outputs, and causal structure}
+\label{sec:model-io}
 
-\begin{figure}[t]
-  \centering
-  \begin{tikzpicture}[
-      font=\small,
-      node distance=5mm and 9mm,
-      box/.style={draw=black!55, rounded corners=2pt, align=center,
-                  inner sep=5pt, minimum height=9mm},
-      data/.style={box, fill=black!4},
-      model/.style={box, fill=blue!7},
-      loss/.style={box, fill=orange!10},
-      arr/.style={-{Stealth[length=2.2mm]}, black!60},
-    ]
-    \node[data] (act) {actuators $\ctrl(t)$\\ $P,\ I_p,\ \bar n_e$};
-    \node[model, right=of act] (latent) {normal form\\
-      $\tau\dot\lat = \drive(\ctrl) + c_1\lat + c_2\lat^2 - \lat^3$};
-    \node[model, right=of latent] (pde) {transport PDE\\
-      $\partial_t \state = \nabla\!\cdot\!\big(\chi(\rho,\lat)\nabla \state\big) + s_\theta$};
-    \node[data, right=of pde] (te) {profiles $\state(\rho_i,t_j)$\\ (Thomson)};
-    \node[model, below=of latent] (heads) {heads: $\pH = \sigma(k\lat + k_0)$,\\
-      $\hat\emiss = h_\psi(\pH, \ctrl, \state_{\mathrm{edge}}, n_{\mathrm{edge}})$};
-    \node[loss, below=of pde] (losses) {losses: profile misfit,\\
-      regime BCE, $\hat\emiss$ misfit};
-    \node[data, below=of heads] (obs) {labels $\ell(t)$, proxy $\emiss(t)$\\ (D$_\alpha$)};
-    \draw[arr] (act) -- (latent);
-    \draw[arr] (latent) -- node[above]{$\lat$} (pde);
-    \draw[arr] (pde) -- (te);
-    \draw[arr] (latent) -- (heads);
-    \draw[arr] (heads) -- (losses);
-    \draw[arr] (te) |- (losses);
-    \draw[arr] (obs) -| (losses);
-  \end{tikzpicture}
-  \caption{Pipeline. Actuators drive the latent regime state; the latent
-  closes the transport equation through $\chi(\rho,\lat)$ and is read out
-  through the calibrated probability $\pH$ and the learned emission head.
-  Measurements (right and bottom) enter only through the loss; in
-  particular the emission proxy never drives the dynamics. All blocks are
-  differentiated through end-to-end.}
-  \label{fig:pipeline}
-\end{figure}
+Table~\ref{tab:notation} lists the notation. The model state is the
+interior temperature profile $\Te(\rho, t)$ plus the scalar regime
+coordinate $\lat(t)$. The causal input vector is
+$\inr = [\ctrlq; \ctxm]$ with $\ctrlq = [P]$ the commanded neutral-beam
+power and $\ctxm = [|I_p|, \bar\nel]$ measured context (plasma current
+magnitude and profile-averaged density); density is a plasma response, not
+an actuator, and is labeled accordingly. Inputs enter in fixed physical
+units (MW, MA, $10^{19}\,$m$^{-3}$); no per-shot statistics are used, so
+the same actuator setting produces the same drive in every discharge and
+in deployment. Additional measured boundary data consumed by the transport
+backbone --- the initial profile, the measured density profile, the
+equilibrium geometry, and the edge boundary trace --- are stated in
+\S\ref{sec:model-pde}; only the \emph{latent regime ODE} is driven purely
+by $\inr$.
 
-\subsection{Transport backbone}
-\label{sec:backbone}
+\begin{table}[t]
+\centering\small
+\caption{Notation. Source column: M = measured, C = commanded, L =
+learned, D = derived. ``Online'' = causally available in a real-time
+setting.}
+\label{tab:notation}
+\begin{tabular}{llllc}
+\toprule
+Symbol & Meaning & Unit & Source & Online \\
+\midrule
+$\rho$ & normalized flux-surface label & -- & M (equilibrium) & yes \\
+$\Te(\rho,t)$ & electron temperature profile & eV & M / model state & partial \\
+$\nel(\rho,t)$ & electron density (representative scalar, broadcast) & m$^{-3}$ & M & partial \\
+$\ctrlq = [P]$ & injected NBI power & MW & C & yes \\
+$\ctxm = [|I_p|, \bar\nel]$ & measured context & MA, $10^{19}$m$^{-3}$ & M & yes \\
+$\lat(t)$ & regime coordinate & -- & model state & yes \\
+$\bact(t)$ & barrier activation $\sigma(k_b \lat + b_b)$ & -- & D & yes \\
+$\pH(t)$ & soft regime coordinate (calibration measured) & -- & D & yes \\
+$\dr(\inr)$ & scalar drive & -- & L (affine) & yes \\
+$\beta$, $\tau$ & topology parameter, latent time scale & --, s & L & -- \\
+$\chie(\rho,\bact)$ & effective edge heat diffusivity & m$^2$/s & L (3 scalars) & -- \\
+$s_\theta$ & residual source closure & eV/s & L (network) & -- \\
+$\yD$ & D$_\alpha$ proxy (supervision only) & a.u. & M & no (not needed) \\
+$h_\psi$ & observation map for $\yD$ & -- & L (network) & -- \\
+$\thIMEX$ & IMEX implicitness parameter (0.7) & -- & fixed & -- \\
+$\mLH, \mHL$ & static fold margins & drive units & D & yes \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-The electron temperature $\state(\rho,t)$ on the normalized flux radius
-$\rho \in [0,1]$ obeys a conservative diffusion law with a learned
-residual source,
+\subsection{Transport backbone (phenomenological)}
+\label{sec:model-pde}
+
+The backbone is a \emph{phenomenological flux-coordinate
+temperature-diffusion model}: it evolves $\Te$ directly,
 \begin{equation}
-\partial_t \state
-= \frac{1}{V'(\rho)} \, \partial_\rho\!\left( V'(\rho)\, \chi(\rho, \lat)\,
-\partial_\rho \state \right) + s_{\theta}\!\left(\rho, \state, n, \ctrl, \lat\right),
+\partial_t \Te
+= \frac{1}{V'(\rho)}\, \partial_\rho\!\left( V'(\rho)\, \chie(\rho, \lat)\,
+\partial_\rho \Te \right) + s_{\theta}(\rho, \Te, \ne, \inr),
 \label{eq:pde}
 \end{equation}
-with symmetry (zero-flux) condition at the axis $\rho = 0$ and the
-measured edge value imposed as a Dirichlet trace at $\rho = 1$. The
-geometric weight $V'$ comes from the equilibrium reconstruction; the
-density profile $n$ is measured. The residual source $s_\theta$ is a small
-tanh network (four hidden layers of 128, zero-initialized output) that
-absorbs heating deposition, radiation, and closure errors; a magnitude
-penalty keeps it subordinate to the conservative operator.
+with $V' = dV/d\rho$ from the equilibrium reconstruction. This is not a
+complete electron energy balance: density factors, heat capacity, and
+coordinate-motion terms are absorbed into the effective coefficient
+$\chie$ and the residual source $s_\theta$, and the physical
+interpretation of $\chie$ is restricted accordingly. Boundary conditions:
+zero flux at the axis; at the edge, the measured outermost reliable
+temperature is imposed as a time-varying Dirichlet trace. The edge trace
+is measured data and is stated as such: it is available online only at
+the diagnostic cadence, and its influence is assessed in the ablations
+(Appendix~F). The initial profile $\Te(\rho, t_0)$ is the first
+QA-passing Thomson profile (interpolated where masked); the domain is
+$[0,1]$ but supervision is restricted to measured samples in the reliable
+outer annulus, so core transport is explicitly \emph{not} identified.
 
-Discretely, \eqref{eq:pde} is a finite-volume scheme on a uniform grid
-($N = 65$): face fluxes $F_{i+1/2} = -V'_{i+1/2}\chi_{i+1/2}
-(\state_{i+1}-\state_i)/\Delta\rho$, interior updates by flux differences,
-axis handled by a zero left face flux and the edge by eliminating the
-boundary node into the right-hand side. The implicit operator is
-tridiagonal and solved by the Thomas algorithm.
+\subsection{Regime-dependent transport coefficient}
+\label{sec:model-chi}
 
-\paragraph{Regime coupling.} The transport coefficient is a monotone
-edge-layer profile whose edge value is suppressed by the barrier
-coordinate $\pH \in [0,1]$ (defined in \S\ref{sec:latent}):
 \begin{equation}
-\chi(\rho, \lat) = \chi_0 + \sigma\!\left(\tfrac{\rho - \rho_c}{w}\right)
-\left[\chi_1 - \Delta\chi\,\pH(\lat) - \chi_0\right],
+\chie(\rho, \bact) = \chi_{\mathrm{core}}
++ S_{\mathrm{edge}}(\rho)\,\big[(1-\bact)\,\chi_{\mathrm{edge,L}}
++ \bact\,\chi_{\mathrm{edge,H}} - \chi_{\mathrm{core}}\big],
+\qquad
+S_{\mathrm{edge}}(\rho) = \sigma\!\Big(\tfrac{\rho - \rho_\chi}{\ell_\chi}\Big),
 \label{eq:chi}
 \end{equation}
-with $\rho_c = 0.85$, $w = 0.08$ (Fig.~\ref{fig:chi}). High $\pH$
-suppresses edge transport and steepens the stationary edge profile ---
-the pedestal --- so the latent state is identified not only from the
-emission proxy but also through its effect on the measured temperature
-profiles.
+with $\chi_{\mathrm{core}} > 0$ and
+$\chi_{\mathrm{edge,L}} > \chi_{\mathrm{edge,H}} > 0$ enforced by
+construction (softplus and positive-gap parameterizations), and fixed
+layer geometry $\rho_\chi = 0.85$, $\ell_\chi = 0.08$ (sensitivity in
+Appendix~F). The barrier activation $\bact \in [0,1]$ is the only channel
+through which the regime affects the profile: the residual source is
+deliberately blind to $\lat$, so a pedestal can only be produced by edge
+transport suppression --- an ablation-testable interpretability
+constraint (\S\ref{sec:res-ablations}).
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.5\linewidth]{figures/fig_chi}
-  \caption{Transport-coefficient family \eqref{eq:chi}. The regime state
-  acts only in the edge layer: at $\pH = 1$ the edge diffusivity is
-  suppressed, producing the steep stationary edge gradient characteristic
-  of the high-confinement regime.}
-  \label{fig:chi}
-\end{figure}
+\subsection{Canonical latent regime dynamics}
+\label{sec:model-latent}
 
-\subsection{Latent regime dynamics: the unfolded cubic normal form}
-\label{sec:latent}
-
-The regime coordinate evolves according to
 \begin{equation}
-\tau\,\dot\lat = \drive(\ctrl) + c_1\,\lat + c_2\,\lat^{2} - \lat^{3},
+\tau\,\dot\lat = \dr(\inr) + \beta\,\lat - \lat^{3},
+\qquad
+\dr(\inr) = \kappa_P P + \kappa_I |I_p| + \kappa_n \bar\nel + \kappa_0,
 \label{eq:nf}
 \end{equation}
-the full unfolding of the cubic normal form: every structurally stable
-scalar vector field with at most three equilibria can be brought to this
-form, so \eqref{eq:nf} is not a bistability assumption but the most
-general low-dimensional ansatz consistent with a fast switching degree of
-freedom. The character of the identified dynamics is decided by the data
-through the discriminant $\Delta = c_2^2 + 3c_1$:
-\begin{itemize}
-\item $\Delta > 0$: the equilibrium drive $g(\lat) = \lat^3 - c_2\lat^2 -
-      c_1\lat$ is non-monotone; for
-      $\drive \in (\drive_{\mathrm{f}}^{-},\, \drive_{\mathrm{f}}^{+})$
-      (the fold values, the local extrema of $g$) the system is bistable,
-      transitions are saddle-node events, and hysteresis is intrinsic;
-\item $\Delta \leq 0$: $g$ is monotone, there is a unique equilibrium for
-      every drive, and the transition is a fast but memoryless threshold
-      response.
-\end{itemize}
-The drive is an affine map of the physically scaled actuators,
-$\drive(\ctrl) = \kappa_P P + \kappa_I I_p + \kappa_n \bar n_e +
-\kappa_0$ with $\kappa_P \geq 0$ (monotonicity in heating power) and $P$,
-$I_p$, $\bar n_e$ in MW, MA, and $10^{19}\,$m$^{-3}$. Fixed units are
-essential: with per-discharge statistical normalization, the same beam
-power maps to different drive values in different discharges and no
-shared threshold can exist. They also make the model causal --- no
-whole-discharge statistics enter --- which is what permits real-time use.
-
-\subsection{Observation model and regime probability}
-\label{sec:obs}
-
-The calibrated regime probability doubles as the barrier coordinate:
+with $\tau = \tau_{\min} + \mathrm{softplus}(\cdot)$
+($\tau_{\min} = \SI{5}{ms}$, below the observation cadence),
+$\kappa_P \geq 0$ (monotonicity in heating power), the remaining drive
+coefficients unconstrained, and $\beta$ \emph{free}. A quadratic term is
+omitted because it is coordinate-redundant: shifting $\lat$ removes it,
+with the shift absorbed by the drive intercept and the observation
+offsets (Appendix~A). The character of the fitted dynamics is decided by
+$\beta$: for $\beta \leq 0$ the equilibrium map is monotone and there is
+one equilibrium branch (with $\beta = 0$ a non-hyperbolic boundary case
+exhibiting critical slowing); for $\beta > 0$ two folds exist at
 \begin{equation}
-\pH(t) = \sigma\!\big(k\,\lat(t) + k_0\big),
-\label{eq:ph}
+\dr_{\mathrm{f}}^{\pm} = \pm 2 (\beta/3)^{3/2},
+\qquad
+\Delta_\dr = \dr_{\mathrm{f}}^{+} - \dr_{\mathrm{f}}^{-} = 4 (\beta/3)^{3/2},
+\label{eq:folds}
 \end{equation}
-with learned gain and offset. The emission proxy is predicted by a small
-learned head,
-$\hat{\emiss} = \sigma\big(h_{\psi}(\pH, \ctrl, \state_{\mathrm{edge}},
-n_{\mathrm{edge}})\big)$
-(one hidden layer of 16). The measured $\emiss$ appears only in the loss
-term for $\hat\emiss$: it never enters \eqref{eq:nf}. This breaks the
-circularity of proxy-following formulations --- where the latent is pinned
-to a transformation of $\emiss$ and ``classification from the latent'' is
-just classification from the proxy --- and it makes the inferred regime
-state falsifiable: the actuator-driven latent must \emph{predict} the
-proxy collapse, and on discharges without transitions it must decline to.
+and the system is bistable for
+$\dr \in (\dr_{\mathrm{f}}^{-}, \dr_{\mathrm{f}}^{+})$. The conditional
+static margins are
+$\mLH(t) = \dr_{\mathrm{f}}^{+} - \dr(\inr(t))$ and
+$\mHL(t) = \dr(\inr(t)) - \dr_{\mathrm{f}}^{-}$. An equivalent
+injected-power margin $\mLH / \kappa_P$ is meaningful only with the other
+covariates held fixed. Derivations, the potential representation
+$V(\lat) = \lat^4/4 - \beta\lat^2/2 - \dr\lat$, linearized relaxation
+rates, and the dynamic-delay caveat are collected in Appendix~A.
 
-\section{Identification}
-\label{sec:ident}
+\subsection{Barrier activation, regime output, and observation map}
+\label{sec:model-obs}
 
-\paragraph{Differentiable solver.} Diffusion makes \eqref{eq:pde} stiff
-($|\lambda_{\max}| \sim \chi/\Delta\rho^2$), so we integrate with an
-implicit--explicit $\theta$-method: the linear diffusion operator is
-implicit ($\theta = 0.7$, tridiagonal Thomas solve), while the residual
-source and the latent \eqref{eq:nf} advance explicitly. Five substeps are
-taken per Thomson interval with static loop bounds, so the entire rollout
-is reverse-mode differentiable under JIT compilation; integration is
-frozen beyond each discharge's valid window so padding cannot destabilize
-the solve.
+$\bact = \sigma(k_b \lat + b_b)$ with $k_b > 0$ closes the transport
+coupling. We report the same quantity as the soft regime coordinate
+$\pH$; whether it behaves as a calibrated probability is \emph{measured}
+(reliability curve, Brier score, ECE on held-out shots,
+\S\ref{sec:res-events}) rather than assumed. The D$_\alpha$ proxy is
+predicted by a small learned head
+$\hat\yD = \sigma(h_\psi(\bact, \inr, T_{\mathrm{e,edge}},
+n_{\mathrm{e,edge}}))$; the measured $\yD$ appears only in the loss.
+This removes direct dynamical leakage of the proxy into the latent state;
+it does not remove the statistical dependence of the \emph{evaluation}
+on D$_\alpha$-derived labels, which is why the label audit of
+\S\ref{sec:labels} matters.
 
-\paragraph{Objective.} With $\Theta$ the full parameter set (source
-network, $\chi$ parameters, normal-form coefficients, heads), the
-per-discharge loss is
+\subsection{Initialization and online interface}
+\label{sec:model-init}
+
+$\lat(t_0)$ is set to the lowest equilibrium of \eqref{eq:nf} at the
+initial drive (all gated discharges begin in L; discharges beginning in H
+are out of scope). No per-shot free initial condition is learned. In
+deployment the same rule initializes the state at gate opening; the model
+then runs open loop --- there is currently no observer correcting drift,
+and we label the system an \emph{open-loop regime predictor} accordingly.
+
+\section{Numerical method and identification}
+\label{sec:numerics}
+
+\subsection{Finite-volume semi-discretization}
+Uniform grid $\rho_i = i/(N-1)$, $N = 65$; node-centered cells with faces
+midway between nodes (the axis cell has half width). Face fluxes
+$F_{i+1/2} = -V'_{i+1/2} \chi_{i+1/2} (T_{\mathrm{e},i+1} - T_{\mathrm{e},i})/\Delta\rho$;
+interior updates by flux differences over cell volumes
+$v_i = V'_i \Delta\rho$ ($v_0 = V'(\Delta\rho/4)\Delta\rho/2$); zero
+axis-face flux; the Dirichlet edge value is eliminated into the
+right-hand side. The resulting operator is tridiagonal. A defect found by
+the verification suite --- face-averaged $V'$ used for cell volumes and a
+full-width axis cell --- stalled spatial convergence and was corrected
+(Appendix~C).
+
+\subsection{Exact IMEX update and differentiability}
+With $L(\lat_n)$ the diffusion operator at the frozen current latent state
+and $\bm{b}_n$ the boundary contribution, each substep advances
+\begin{align}
+[I - \thIMEX\,\Delta t\, L(\lat_n)]\, \bm{T}_{n+1}
+&= [I + (1-\thIMEX)\,\Delta t\, L(\lat_n)]\, \bm{T}_n
+ + \Delta t\, \bm{s}_\theta(\bm{T}_n, \cdot)
+ + \Delta t\, \bm{b}(\thIMEX; t_n, t_{n+1}),
+\label{eq:imex-T}\\
+\lat_{n+1} &= \lat_n + \Delta t\, F(\lat_n, \inr_n)/1,
+\label{eq:imex-z}
+\end{align}
+i.e., $\thIMEX$-weighted implicit diffusion (Thomas solve), explicit
+source and explicit-Euler latent update, inputs linearly interpolated
+within each observation interval, five substeps per Thomson interval.
+The scheme is first order in time for $\thIMEX \neq 1/2$; for the linear
+test equation its amplification factor
+$R(s) = [1 + (1-\thIMEX)s]/[1 - \thIMEX s]$ is A-stable for
+$\thIMEX \geq 1/2$ with stiff-limit damping
+$-(1-\thIMEX)/\thIMEX \approx -0.43$ at $\thIMEX = 0.7$ (damped, not
+L-stable). Implicit treatment removes the explicit parabolic step
+restriction $\Delta t \lesssim \Delta\rho^2/\chi$; it does not remove the
+physical time-scale separation. Loop bounds are static, so reverse-mode
+differentiation proceeds through the discrete solver (discrete adjoint by
+autodiff; no continuous adjoint is used). Gradient correctness is
+verified against central finite differences (Appendix~C).
+
+\subsection{Loss definitions}
+All task losses are averages of order-one quantities with fixed scales
+($s_T = \SI{100}{eV}$, $s_s = \SI{1e4}{eV/s}$):
 \begin{equation}
 \mathcal{L} =
-\sum_{i,j} W_{ij}\, \phi_{\delta}\!\big(\hat\state(\rho_i, t_j) - \state_{ij}\big)
-+ \lambda_s \textstyle\sum \phi_{\delta_s}(s_\theta)
+\underbrace{\tfrac{1}{N_T}\textstyle\sum W_{ij}\,
+\phi_1\!\big(\tfrac{\hat T_{\mathrm{e},ij} - T_{\mathrm{e},ij}}{s_T}\big)}_{\text{profile}}
++ \lambda_s \overline{\phi_1(s_\theta / s_s)}
 + \lambda_1 \overline{\lat^2} + \lambda_2 \overline{\dot\lat^2}
-+ \lambda_r\, \mathrm{BCE}\big(\pH, \ell\big)
-+ \lambda_y\, \overline{\big(\hat\emiss - \tilde\emiss\big)^2},
++ \lambda_r\, \overline{\mathrm{BCE}(\pH, \ell)}
++ \lambda_y\, \overline{(\hat\yD - \tilde\yD)^2},
 \label{eq:loss}
 \end{equation}
-where $\phi_\delta$ is the pseudo-Huber function, $W$ inverse-coverage
-weights that equalize sparsely and densely observed channels (only
-measured samples in the trusted annulus are scored), $\ell$ the weak
-segment labels scored on clean L/H samples only, and $\tilde\emiss$ the
-range-normalized proxy. The profile term sits at $O(700)$ in these units;
-$\lambda_r = \lambda_y = 20$ keeps the regime and observation terms at a
-few percent of the total, which is required for the 14-parameter latent
-to receive usable gradient against the $10^5$-parameter source network.
+with $\phi_\delta(x) = \delta^2(\sqrt{1 + (x/\delta)^2} - 1)$ the
+pseudo-Huber function, $W$ inverse-coverage weights over measured samples
+in the reliable annulus, $\ell$ the weak labels scored on clean L/H
+samples, and $\tilde\yD$ the range-normalized proxy (a training-target
+normalization only; model inputs are never normalized per shot).
+Weights: $\lambda_s = 0.1$, $\lambda_1 = \lambda_2 = 10^{-3}$,
+$\lambda_r = 0.5$, $\lambda_y = 2$; sensitivity in Appendix~F.
 
-\paragraph{Training protocol.} 20\% of discharges are held out; the
-validation loss includes the regime and observation terms, so checkpoint
-selection favors regime fidelity as well as profile fit. AdamW
-(peak learning rate $2\times10^{-4}$, cosine decay, gradient clipping,
-weight decay $3\times10^{-5}$), batches of 8 discharges,
-\resTrainSteps{} steps --- validation saturates well before this ---
-with an exponential moving average of the weights tracked as an alternative
-checkpoint. Training runs in double precision on a 14-core CPU in
-\resTrainTime{}; a consumer GPU offers no advantage at this batch size
-because the pipeline is float64 throughout.
+\subsection{Optimization and model selection}
+AdamW (peak $2\times10^{-4}$, cosine decay, global-norm clipping,
+weight decay $3\times10^{-5}$), batches of 8 discharges sampled uniformly
+from the training sessions, double precision, early stopping on the
+grouped-validation loss (patience 8 evaluations at 50-step spacing,
+relative threshold $10^{-3}$). The validation loss contains all terms of
+\eqref{eq:loss}, so checkpoint selection reflects regime fidelity as well
+as profile fit. Parameter counts: residual source network
+\resNsource{} parameters; observation head \resNhead{}; latent vector
+field and readout 8 scalars; transport coefficient 3 scalars.
+% TODO: fill parameter counts from artifacts.
 
-\section{Quantitative regime assessment}
-\label{sec:assess}
+\subsection{Numerical verification}
+Appendix~C reports: analytic decay-mode error, grid refinement
+($N = 17$--$129$), substep refinement (1--20 per interval), discrete flux
+balance (machine-precision residual), positivity, and autodiff-vs-finite-
+difference gradient checks (relative error $\leq 10^{-9}$). End-to-end
+observed convergence is first order, consistent with the
+$\thIMEX = 0.7$ splitting, with absolute profile errors two orders of
+magnitude below the model--data misfit at the operating resolution.
 
-The identified model is assessed on four levels, all computed from
-$\pH(t)$ and the normal-form quantities; none require manual inspection.
+\section{Evaluation design}
+\label{sec:evaldesign}
 
-\begin{enumerate}
-\item \textbf{Classification.} Per discharge, $\pH$ is scored against the
-      clean L/H label samples: accuracy and F1 at the $\pH = 0.5$
-      threshold, threshold-free AUC (rank statistic), and the Brier score
-      (calibration-sensitive). Transition windows and out-of-gate samples
-      are excluded.
-\item \textbf{Transition timing.} The model transition time is the first
-      sustained upcrossing of $\pH = 0.5$; its error against the labeled
-      transition time is reported per discharge.
-\item \textbf{Negative control.} On discharges without a labeled H
-      segment, $\pH$ must stay below $0.5$ throughout --- a direct test
-      that the actuator-driven latent does not invent transitions.
-\item \textbf{Normal-form diagnostics.} The identified $(c_1, c_2)$ answer
-      the bistability question via $\Delta = c_2^2 + 3c_1$. If $\Delta >
-      0$, the folds $\drive_{\mathrm{f}}^{\pm}$ exist and the margins
-      \begin{equation}
-      \mu_{\mathrm{LH}}(t) = \drive_{\mathrm{f}}^{+} - \drive(\ctrl(t)),
-      \qquad
-      \mu_{\mathrm{HL}}(t) = \drive(\ctrl(t)) - \drive_{\mathrm{f}}^{-},
-      \label{eq:margins}
-      \end{equation}
-      measure the instantaneous distance (in drive units, hence
-      convertible to watts through $\kappa_P$) to the forced transition
-      and to the loss of the H state. Basin membership relative to the
-      saddle gives the sharp (non-probabilistic) regime assignment.
-\end{enumerate}
+Primary endpoints, fixed before the locked-test evaluation:
+(i) held-out per-shot event AUC of $\pH$ against clean-label samples;
+(ii) event detection precision/recall and matched timing error for
+L$\to$H and H$\to$L separately (one-to-one matching, \SI{40}{ms}
+tolerance, 5-sample dwell);
+(iii) profile MAE in the reliable annulus (free-run rollout, no
+measurement reset);
+(iv) negative-control false-positive rate on \emph{confirmed} negatives;
+(v) the free-vs-monostable comparison: grouped-validation loss and event
+metrics of $\beta$-free vs $\beta \leq 0$ fits under otherwise identical
+conditions, with seed spread and Laplace uncertainty on $\beta$.
+Secondary: calibration (reliability curve, Brier, ECE), per-cohort
+breakdowns, and runtime. Uncertainty: per-shot bootstrap for medians;
+Laplace curvature and seed spread for low-dimensional parameters; both
+approximations are stated as such.
 
 \section{Results}
 \label{sec:results}
 
-\paragraph{Identified dynamics: the data select bistability.}
-The identified coefficients are $c_1 = \resCone$, $c_2 = \resCtwo$, and
-$\tau = \resTau$~ms. The discriminant $\Delta = c_2^2 + 3c_1 = 1.38 > 0$:
-although nothing in the model enforces it, the identified vector field is
-bistable, with folds at $\drive_{\mathrm{f}}^{-} = \resFoldLow$ and
-$\drive_{\mathrm{f}}^{+} = \resFoldHigh$. Mapped through the identified
-drive (whose dominant coefficient is $\kappa_P = 0.32$ per MW), the upper
-fold corresponds to a forced L$\to$H transition at
-$\approx \resPthr$~MW of injected power at corpus-typical current and
-density, and the lower fold to loss of the H state below
-$\approx \resPback$~MW --- an identified hysteresis of
-$\approx \resHyst$~MW. The relaxation time $\tau$ matches the observed
-few-tens-of-ms transition duration. Figure~\ref{fig:bifurcation} shows the
-identified equilibrium manifold with an inferred trajectory overlaid;
-Figure~\ref{fig:fit} shows the profile fit and barrier trajectory for one
-discharge (annulus MAE \resMAE{} eV over the corpus).
+% TODO: this section is populated by scripts/update_paper_numbers.py from
+% experiments/*.json after the experiment queue and the single locked-test
+% evaluation. Subsection placeholders below define the required content.
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.6\linewidth]{figures/fig_bifurcation}
-  \caption{Identified normal-form equilibrium manifold (solid: stable;
-  dashed: saddle) with the inferred trajectory
-  $(\drive(\ctrl(t)), \lat(t))$ of one discharge overlaid, colored by
-  time.}
-  \label{fig:bifurcation}
-\end{figure}
+\subsection{Numerical verification and reproducibility}
+\label{sec:res-verif}
+% fig: fig_convergence; verification table in Appendix C.
+The solver verification suite passes (Appendix~C); the baseline result of
+the previous draft was reproduced from the frozen tag before any change
+(Appendix~G).
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.66\linewidth]{figures/fig_fit}
-  \caption{Measured (dots) and modeled (line) edge temperature at three
-  radii, and the inferred barrier coordinate $\pH(t)$, for one discharge.}
-  \label{fig:fit}
-\end{figure}
+\subsection{Dataset and label audit}
+\label{sec:res-audit}
+% cohort table from data/label_audit.json; label sensitivity appendix.
+\emph{TODO: cohort counts, agreement statistics with session logs, label
+parameter sensitivity.}
 
-\paragraph{Regime assessment.} Over the \nTrans{} discharges with a
-labeled H segment, the median per-discharge AUC is \resAUCmed{} (pooled
-mean \resAUCmean), median accuracy \resAccMed, median F1 \resFoneMed, and
-the median absolute transition-time error is \resTTmed{} ms
-(Fig.~\ref{fig:classification}).
+\subsection{Held-out profile prediction}
+\label{sec:res-profiles}
+% fig: fig_profile_heatmap (measured / predicted / residual), fig_fit.
+\emph{TODO: annulus MAE/RMSE with bootstrap CI on validation and locked
+test; comparison to persistence and transport-only baselines; residual
+heatmaps for a predeclared median shot.}
 
-\paragraph{Negative control.} Of the \nNoTrans{} discharges without a
-labeled H segment, both beam-free (purely resistively heated) discharges
-and all discharges with $\leq\SI{2.2}{MW}$ of beam power are classified L
-throughout, as they must be. The model disagrees with the label on six
-discharges, all with $\geq\SI{2.7}{MW}$ --- above its identified
-threshold. Notably, for at least two of these the session log records a
-real H phase that the conservative label extractor missed (an ELMy
-H-mode whose emission baseline never dropped, and a transition during
-strong gas puffing); on those the model corrects the label rather than
-erring. The remaining disagreements are discharges near threshold that
-did not transition, exposing the main limitation of an affine drive:
-the true threshold depends on plasma conditions beyond the three
-actuators used here.
+\subsection{Held-out regime and event prediction; calibration}
+\label{sec:res-events}
+% fig: fig_classification (success + near-threshold + back-transition +
+% failure), fig_aggregate (distributions), fig_reliability.
+\emph{TODO: per-shot AUC distribution, event precision/recall/timing for
+both directions, confirmed-negative false-positive rate, ambiguous cases
+listed separately, reliability/Brier/ECE.}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.66\linewidth]{figures/fig_classification}
-  \caption{Regime probability $\pH(t)$ for four discharges; shaded bands
-  are the labeled H segments.}
-  \label{fig:classification}
-\end{figure}
+\subsection{Monostable versus bistable}
+\label{sec:res-modelcomp}
+% table: free vs nonpositive-beta vs lag vs static vs ablations.
+\emph{TODO: paired grouped-validation comparison with seed spread;
+$P(\beta > 0)$; statement calibrated to the evidence.}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.68\linewidth]{figures/fig_margins}
-  \caption{Fold margins \eqref{eq:margins} along the discharge of
-  Fig.~\ref{fig:bifurcation} (shown when the identified dynamics are
-  bistable). $\mu_{\mathrm{LH}}$ reaching zero forces the L$\to$H
-  transition; $\mu_{\mathrm{HL}} > 0$ maintains the H state.}
-  \label{fig:margins}
-\end{figure}
+\subsection{Fold margins and conditional thresholds}
+\label{sec:res-folds}
+% fig: fig_bifurcation, fig_margins, fig_threshold_surface.
+\emph{TODO: $\beta$, $\tau$, folds with Laplace + seed uncertainty;
+equivalent injected-power thresholds at stated covariate slices; explicit
+warning about extrapolation and loss-power vs injected-power.}
+
+\subsection{Ablations and failure cases}
+\label{sec:res-ablations}
+\emph{TODO: $\Delta\chi$ off, source off, no-D$\alpha$, no-regime-loss;
+failure shots selected by predeclared rule (worst validation event
+timing).}
+
+\subsection{Runtime and streaming replay}
+\label{sec:res-runtime}
+\emph{TODO: causal streaming replay latency (state update + outputs),
+hardware, warm-up vs steady state.}
+
+\FloatBarrier
 
 \section{Discussion}
 \label{sec:discussion}
 
-\paragraph{Toward real-time control.} Every model input is a causally
-available measurement in fixed units, the latent update \eqref{eq:nf} is
-a single scalar ODE step, and $\pH$ and the margins \eqref{eq:margins} are
-closed-form --- the regime assessor runs in microseconds per step,
-compatible with plasma-control-system rates. A regulator holding
-$\mu_{\mathrm{HL}}$ positive with a prescribed margin maintains
-high confinement with a quantified robustness budget; scheduling the drive
-through $\drive_{\mathrm{f}}^{+}$ forces the transition at a chosen time.
-If the identified dynamics are instead monostable, the same interface
-degrades gracefully: the threshold remains, only the memory (hysteresis)
-term disappears, and $\pH$ remains the calibrated regime estimate.
+\emph{TODO after results: what the data require (topology), whether
+profiles independently constrain the latent, comparison of the
+conditional equivalent-power threshold with published MAST loss-power
+thresholds and why they differ, what high-power non-transitions imply
+about missing shape/loss-power covariates, scalar-state limits
+(dithering), transport-source identifiability, label uncertainty, and the
+observer/closed-loop work needed before any control-ready claim. The
+static fold margin is a candidate scheduling variable whose control
+utility remains to be validated; finite-rate delay, uncertainty, and
+actuator limits all intervene.}
 
-\paragraph{Limitations.} The segment labels are weak and derive from the
-same proxy the observation head predicts (though never from the latent's
-inputs); label quality caps the classification ceiling, and dithering
-phases are labeled crudely. The supervised region of the profile is a
-thin edge annulus, so core transport is unconstrained. A single scalar
-latent cannot represent oscillatory transition precursors (dithering limit
-cycles); a two-dimensional normal form with a Hopf sector is the natural
-extension. The identified threshold is a property of this corpus (one
-device, one current/density neighborhood); transfer requires a nonlinear
-drive map, for which the affine form is the first term. Finally, the
-range normalization of the supervision targets is per-discharge and hence
-acausal; this affects training only, not deployment, but a fully causal
-training pipeline would tighten the real-time claim.
+\section{Conclusion}
+\label{sec:conclusion}
+
+\emph{TODO after results: research question, method, strongest held-out
+finding with uncertainty, exact strength of the bistability statement,
+and the next validation step (independent-device replay; observer;
+closed-loop simulation with separated plant/model).}
+
+\paragraph{Data and code availability.} All data are from the UKAEA MAST
+open-data archive \citep{mastopendata} and are acknowledged per the data
+license. Code, configuration, split manifest, seeds, and the experiment
+ledger reproducing every number and figure are available in the project
+repository.
+% TODO: insert exact UKAEA acknowledgement wording from license page.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}
+
+\appendix
+
+\section{Canonical form: derivations}
+\label{app:canonical}
+
+\paragraph{Removal of the quadratic term.} For
+$\tau\dot\zeta = a + c_1\zeta + c_2\zeta^2 - \zeta^3$, substituting
+$\zeta = \lat + c_2/3$ gives
+$\tau\dot\lat = \alpha + \beta\lat - \lat^3$ with
+$\beta = c_1 + c_2^2/3$ and
+$\alpha = a + c_1 c_2/3 + 2c_2^3/27$. Because the drive has a free
+intercept and the observation maps free offsets, $(a, c_1, c_2)$ and
+$(\alpha, \beta, 0)$ parameterize identical model families; $c_2$ is not
+an independently identifiable physical coefficient. All analysis uses the
+depressed form.
+
+\paragraph{Equilibria and stability.} At constant $\dr$, equilibria solve
+$\dr = g(\lat) = \lat^3 - \beta\lat$; the linearized eigenvalue at an
+equilibrium $\lat_*$ is $\lambda = (\beta - 3\lat_*^2)/\tau$: stable for
+$\lambda < 0$. For $\beta < 0$, $g' > 0$ everywhere and a unique
+hyperbolic equilibrium exists for every drive. For $\beta = 0$ the
+equilibrium at $\dr = 0$ is non-hyperbolic (critical slowing). For
+$\beta > 0$, folds sit at $\lat^{\mathrm{f}}_{\pm} = \pm\sqrt{\beta/3}$
+with drive values \eqref{eq:folds}; between them, two stable outer
+equilibria and one unstable middle equilibrium coexist.
+
+\paragraph{Potential form.} $\tau\dot\lat = -\partial V/\partial\lat$ with
+$V(\lat) = \lat^4/4 - \beta\lat^2/2 - \dr\lat$; wells merge and vanish at
+the folds. $V$ is a Lyapunov function of the reduced model, not a plasma
+free energy.
+
+\paragraph{Dynamic delay.} Under a drive ramp $\dr(t)$ crossing
+$\dr_{\mathrm{f}}^{+}$ at finite rate, the escape of $\lat$ from the
+disappearing well occurs after a delay scaling like the classical
+saddle-node passage time; therefore $\mLH = 0$ marks loss of the
+quasi-static state, not the completion time of the observed transition.
+
+\section{Transport model details}
+\label{app:transport}
+\emph{TODO: full derivation of the phenomenological equation with every
+absorbed factor listed; face interpolation of $\chi$; boundary rows;
+handling of the measured edge trace and its online availability.}
+
+\section{Numerical verification}
+\label{app:numerics}
+Verification artifacts: \texttt{logs/solver\_verification/}. Convergence
+figure: Fig.~\ref{fig:convergence}. \emph{TODO: full tables.}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.8\linewidth]{figures/fig_convergence}
+  \caption{Grid (left) and substep (right) refinement on the analytic
+  decay problem at physical magnitude. Observed end-to-end order
+  $\approx 1$, consistent with the $\thIMEX = 0.7$ splitting; the
+  absolute error at operating resolution ($N = 65$, 5 substeps) is two
+  orders of magnitude below the model--data misfit.}
+  \label{fig:convergence}
+\end{figure}
+
+\section{Data manifest and label audit}
+\label{app:manifest}
+\emph{TODO: generated table of every considered shot: session, role,
+channels, QA outcome, label events, session-log annotation, cohort.}
+
+\section{Hyperparameters and environment}
+\label{app:hparams}
+\emph{TODO: full configuration dump, seeds, environment lock hash,
+hardware, runtimes.}
+
+\section{Extended results}
+\label{app:extresults}
+\emph{TODO: all held-out shots; calibration details; ablation and
+sensitivity tables; failure gallery.}
+
+\section{Reproducibility}
+\label{app:repro}
+Baseline tag \texttt{baseline-nf-v1}; experiment ledger
+\texttt{experiments/ledger.md}; every manuscript number is generated from
+saved artifacts by \texttt{scripts/update\_paper\_numbers.py}.
 
 \end{document}
