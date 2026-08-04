@@ -91,7 +91,10 @@ def main():
     os.makedirs(model_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
     logging.getLogger().addHandler(logging.FileHandler(os.path.join(log_dir, "training.log"), mode="w"))
-    shutil.copyfile(args.config, os.path.join(log_dir, "config.yaml"))
+    # Persist the EFFECTIVE config (with CLI overrides applied) so that
+    # evaluation rebuilds the exact model structure that was trained.
+    with open(os.path.join(log_dir, "config.yaml"), "w") as f:
+        yaml.safe_dump(config, f)
 
     device = jax.devices()[0]
     logging.info(f"Device: {device} (platform={device.platform})")
