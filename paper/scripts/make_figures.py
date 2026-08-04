@@ -84,7 +84,7 @@ def fig_data_example(pack_path, out):
     axes[1].plot(t, d["P_nbi"] / 1e6, color=BLUE, label=r"$w_1$ (power)")
     axes[1].plot(t, np.abs(d["Ip"]) / 1e6, color=AQUA, label=r"$w_2$ (current)")
     axes[1].plot(t, d["nebar"] / 1e19, color=YELLOW, label=r"$w_3$ (density)")
-    axes[1].set_ylabel(r"inputs $\bm{w}$ (norm.)")
+    axes[1].set_ylabel(r"inputs $\mathbf{w}$ (scaled)")
     axes[1].legend(frameon=False, ncol=3, loc="upper left", handlelength=1.2,
                    columnspacing=0.9, borderaxespad=0.0)
 
@@ -116,11 +116,13 @@ def fig_bifurcation(bif, out):
             (stable_hi if r > 0 else stable_lo).append((a, r))
 
     fig, ax = plt.subplots(figsize=(4.2, 3.2))
-    for arr, ls, lbl in ((stable_lo, "-", "stable (L)"), (stable_hi, "-", "stable (H)"), (unstable, "--", "saddle")):
+    for arr, ls, lbl in ((stable_lo, "-", "stable branches"), (stable_hi, "-", None), (unstable, "--", "saddle")):
         arr = np.array(arr)
         if arr.size:
             ax.plot(arr[:, 0], arr[:, 1], ls, color=GRAY if ls == "--" else BLUE,
                     lw=1.1 if ls == "-" else 0.9, label=lbl)
+    ax.annotate("H", (0, np.sqrt(b)), textcoords="offset points", xytext=(-10, 4), color=BLUE)
+    ax.annotate("L", (0, -np.sqrt(b)), textcoords="offset points", xytext=(6, -10), color=BLUE)
     for af in (+a_fold, -a_fold):
         ax.axvline(af, color=LIGHT, lw=0.7)
     ax.annotate(r"$a_{\mathrm{f}}$", (a_fold, ax.get_ylim()[0]), textcoords="offset points",
@@ -133,7 +135,7 @@ def fig_bifurcation(bif, out):
     sc = ax.scatter(a_t, z_t, c=ts, cmap="Oranges", s=4, lw=0, zorder=3)
     cbar = fig.colorbar(sc, ax=ax, pad=0.02, aspect=28)
     cbar.set_label(r"$t$ [s]")
-    ax.set_xlabel(r"drive $a(\bm{w})$")
+    ax.set_xlabel(r"drive $a(\mathbf{w})$")
     ax.set_ylabel(r"latent $\zeta$")
     ax.legend(frameon=False, loc="upper left")
     fig.savefig(out)
@@ -155,7 +157,7 @@ def fig_classification(eval_dir, shots, out):
         ax.plot(ts, _sigmoid(logits), color=BLUE)
         ax.axhline(0.5, color=LIGHT, lw=0.6)
         ax.set_ylim(-0.05, 1.05)
-        ax.set_ylabel(rf"$p_H$" + "\n" + rf"\#{shot}")
+        ax.set_ylabel(f"$p_H$\n{shot}")
     axes[-1].set_xlabel(r"$t$ [s]")
     fig.align_ylabels(axes)
     fig.savefig(out)
@@ -165,9 +167,10 @@ def fig_classification(eval_dir, shots, out):
 def fig_margins(bif, shot, out):
     """Fold margins along a discharge."""
     ts = bif["ts"]
+    a_t, a_fold = bif["a_t"], float(bif["a_fold"])
     fig, ax = plt.subplots(figsize=(5.2, 2.2))
-    ax.plot(ts, bif["margin_LH"], color=BLUE, label=r"$\mu_{\mathrm{LH}}$")
-    ax.plot(ts, bif["margin_HL"], color=ORANGE, label=r"$\mu_{\mathrm{HL}}$")
+    ax.plot(ts, a_fold - a_t, color=BLUE, label=r"$\mu_{\mathrm{LH}}$")
+    ax.plot(ts, a_t + a_fold, color=ORANGE, label=r"$\mu_{\mathrm{HL}}$")
     ax.axhline(0.0, color=GRAY, lw=0.6, ls=":")
     _shade_regime(ax, ts, bif["regime_ts"])
     ax.set_xlabel(r"$t$ [s]")
@@ -189,12 +192,22 @@ def main():
 
     bif_files = sorted(glob.glob(os.path.join(eval_dir, "bifurcation_shot_*.npz")))
     shots = [int(os.path.basename(p).split("_")[-1].split(".")[0]) for p in bif_files]
-    # prefer shots with a labeled H phase for the showcase figures
+    # showcase = transitioning shots ranked by classification F1
+    report_path = os.path.join(eval_dir, "evaluation_report.json")
+    f1_by_shot = {}
+    if os.path.exists(report_path):
+        with open(report_path) as f:
+            rep_all = json.load(f)
+        for sid, m in rep_all.get("shot_metrics", {}).items():
+            rc = m.get("regime_classification", {}) or {}
+            if rc.get("n_H", 0) > 0:
+                f1_by_shot[int(sid)] = rc.get("f1", 0.0)
     showcase = []
     for s in shots:
         bif = load_bif(eval_dir, s)
         if bif is not None and np.any(bif["regime_ts"] > 2.5):
             showcase.append(s)
+    showcase.sort(key=lambda s: -(f1_by_shot.get(s, 0.0)))
     example = args.shot or (showcase[0] if showcase else (shots[0] if shots else None))
     if example is None:
         raise SystemExit("No evaluation artifacts found; run scripts/evaluate_model.py first.")
