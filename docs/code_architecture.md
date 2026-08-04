@@ -110,7 +110,7 @@ terms, so checkpoints are selected for regime quality too.
 
 ```bash
 JAX_PLATFORMS=cpu python scripts/smoke_time_padding_strict.py
-JAX_PLATFORMS=cpu python scripts/smoke_diffusion_sanity.py --config config/config_cusp.yaml --shot 27578
-JAX_PLATFORMS=cpu python scripts/check_bc.py --config config/config_cusp.yaml --shot 27567
-JAX_PLATFORMS=cpu python train.py --config config/config_cusp.yaml --total-steps 20
+JAX_PLATFORMS=cpu python scripts/smoke_diffusion_sanity.py --config config/config.yaml --shot 27578
+JAX_PLATFORMS=cpu python scripts/check_bc.py --config config/config.yaml --shot 27567
+JAX_PLATFORMS=cpu python train.py --config config/config.yaml --total-steps 20
 ```

@@ -102,51 +102,66 @@ def transition_time_error(
     }
 
 
-def cusp_bifurcation_diagnostics(
+def normal_form_diagnostics(
     latent,
     latent_features_ts: np.ndarray,
     zs: np.ndarray,
 ) -> Optional[Dict[str, np.ndarray]]:
-    """Closed-form bifurcation diagnostics for the cusp latent.
+    """Closed-form diagnostics for the unfolded cubic latent.
 
-    Returns time series of the drive a(t), the fold amplitude a_fold, the
-    normalized bifurcation margin, and which attractor basin the state
-    occupies. Returns None for non-cusp latents.
+    For tau * dz/dt = a(u) + c1*z + c2*z^2 - z^3, the equilibrium drive is
+    g(z) = z^3 - c2*z^2 - c1*z. If c2^2 + 3*c1 > 0, g has two critical
+    points and the identified vector field is bistable for
+    a in (a_fold_low, a_fold_high); otherwise it is monostable and the folds
+    are reported as NaN. Whether the data selects a bistable field is an
+    RESULT of identification, not an assumption.
     """
-    if not hasattr(latent, "a_fold"):
+    if not hasattr(latent, "c1"):
         return None
     import jax
     import jax.numpy as jnp
 
     feats = jnp.asarray(latent_features_ts)
     a_t = np.asarray(jax.vmap(latent.drive)(feats))
-    b = float(latent.b_eff())
-    a_fold = float(latent.a_fold())
+    c1 = float(latent.c1)
+    c2 = float(latent.c2)
     tau = float(latent.tau_eff())
 
-    # Equilibria of a + b z - z^3 = 0 for each t; classify basin of z(t).
+    disc = c2 * c2 + 3.0 * c1
+    if disc > 0:
+        z_crit = np.array([(c2 - np.sqrt(disc)) / 3.0, (c2 + np.sqrt(disc)) / 3.0])
+        g = z_crit**3 - c2 * z_crit**2 - c1 * z_crit
+        a_fold_low, a_fold_high = float(np.min(g)), float(np.max(g))
+        bistable = True
+    else:
+        a_fold_low = a_fold_high = float("nan")
+        bistable = False
+
+    # Equilibria of a + c1 z + c2 z^2 - z^3 = 0 per sample; basin of z(t).
     zs = np.asarray(zs)
     basin = np.zeros_like(zs)  # +1 upper (H), -1 lower (L)
     z_saddle = np.full_like(zs, np.nan)
     for i, a in enumerate(a_t):
-        roots = np.roots([-1.0, 0.0, b, float(a)])
+        roots = np.roots([-1.0, c2, c1, float(a)])
         real = np.sort(roots[np.abs(roots.imag) < 1e-9].real)
         if len(real) == 3:
             z_saddle[i] = real[1]
             basin[i] = 1.0 if zs[i] > real[1] else -1.0
         elif len(real) >= 1:
-            # Monostable: the single attractor's sign defines the regime.
-            basin[i] = 1.0 if real[np.argmax(np.abs(real))] > 0 else -1.0
+            basin[i] = 1.0 if real[0] > 0 else -1.0
 
     return {
         "a_t": a_t,
-        "a_fold": a_fold,
-        "b": b,
+        "c1": c1,
+        "c2": c2,
         "tau": tau,
-        # margin > 0: bistable; margin_LH < 0: L branch destroyed (forced H).
-        "margin_LH": a_fold - a_t,   # distance of drive below the L->H fold
-        "margin_HL": a_t + a_fold,   # distance of drive above the H->L fold
+        "bistable": bistable,
+        "a_fold_low": a_fold_low,    # H branch lost below this drive
+        "a_fold_high": a_fold_high,  # L branch lost above this drive
+        # margins are NaN when the identified field is monostable
+        "margin_LH": a_fold_high - a_t,
+        "margin_HL": a_t - a_fold_low,
         "z_saddle": z_saddle,
         "basin": basin,
-        "bistable_fraction": float(np.mean(np.abs(a_t) < a_fold)),
+        "bistable_fraction": float(np.mean((a_t > a_fold_low) & (a_t < a_fold_high))) if bistable else 0.0,
     }

@@ -4,7 +4,7 @@ Replaces the legacy pmap-based HPC script: JAX >= 0.11 removed the primitives
 it relied on, and this project now targets a single-GPU/CPU workstation.
 
 Usage:
-    python train.py --config config/config_cusp.yaml
+    python train.py --config config/config.yaml
     JAX_PLATFORMS=cpu python train.py --config ... --total-steps 50
 """
 
@@ -51,7 +51,7 @@ def build_lr_schedule(tr: dict):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default="config/config_cusp.yaml")
+    ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--total-steps", type=int, default=None, help="Override training.total_steps")
     ap.add_argument("--resume_ckpt", type=str, default=None)
     ap.add_argument("--resume_step_offset", type=int, default=0)

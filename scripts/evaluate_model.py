@@ -85,11 +85,7 @@ def _sanitize_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
     return name
 
-from fusion_ode_identification.model import (
-    build_cusp_drive_features,
-    build_hybrid_model,
-    build_latent_feature_series,
-)
+from fusion_ode_identification.model import build_hybrid_model
 from fusion_ode_identification.data import load_data
 from fusion_ode_identification.types import ShotBundle, IMEXConfig
 from fusion_ode_identification.imex_solver import IMEXIntegrator
@@ -97,7 +93,7 @@ from fusion_ode_identification.interp import LinearInterpolation
 from fusion_ode_identification.regime_metrics import (
     regime_classification_metrics,
     transition_time_error,
-    cusp_bifurcation_diagnostics,
+    normal_form_diagnostics,
 )
 
 jax.config.update("jax_enable_x64", True)
@@ -234,12 +230,7 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = bundle.ne_vals[:, -1]
-    if model.uses_barrier_latent():
-        latent_features_ts = build_latent_feature_series(bundle.ts_t, ctrl_norm_ts, bundle.dalpha_ts, bundle.Te_edge, ne_edge_ts)
-    elif model.uses_cusp_latent():
-        latent_features_ts = build_cusp_drive_features(ctrl_vals_ts)
-    else:
-        latent_features_ts = ctrl_norm_ts
+    latent_features_ts = ctrl_norm_ts
 
     rho = bundle.rho
     Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
@@ -845,13 +836,16 @@ def main():
 
         bifurcation_summary = None
         ctrl_interp_diag = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
-        drive_features_diag = build_cusp_drive_features(ctrl_interp_diag.evaluate(bundle.ts_t))
-        bif = cusp_bifurcation_diagnostics(model.latent, np.asarray(drive_features_diag), np.asarray(zs))
+        drive_features_diag = (ctrl_interp_diag.evaluate(bundle.ts_t) - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
+        bif = normal_form_diagnostics(model.latent, np.asarray(drive_features_diag), np.asarray(zs))
         if bif is not None:
             bifurcation_summary = {
-                "b": bif["b"],
+                "c1": bif["c1"],
+                "c2": bif["c2"],
                 "tau_s": bif["tau"],
-                "a_fold": bif["a_fold"],
+                "bistable": bool(bif["bistable"]),
+                "a_fold_low": bif["a_fold_low"],
+                "a_fold_high": bif["a_fold_high"],
                 "drive_min": float(np.min(bif["a_t"])),
                 "drive_max": float(np.max(bif["a_t"])),
                 "bistable_fraction": bif["bistable_fraction"],
@@ -862,14 +856,28 @@ def main():
                 ts=ts_np,
                 z=np.asarray(zs),
                 a_t=bif["a_t"],
-                a_fold=bif["a_fold"],
-                b=bif["b"],
+                c1=bif["c1"],
+                c2=bif["c2"],
+                a_fold_low=bif["a_fold_low"],
+                a_fold_high=bif["a_fold_high"],
                 z_saddle=bif["z_saddle"],
                 basin=bif["basin"],
                 regime_ts=regime_ts_np,
                 regime_logits=regime_logits_np,
                 dalpha_ts=np.asarray(bundle.dalpha_ts),
             )
+
+        # Compact fit artifact for downstream figures (paper/scripts).
+        np.savez(
+            os.path.join(eval_dir, f"fit_shot_{bundle.shot_id}.npz"),
+            ts=ts_np,
+            rho=np.asarray(bundle.rho),
+            Te_model=np.asarray(Te_model),
+            Te_obs=np.asarray(bundle.ts_Te_raw),
+            mask=np.asarray(bundle.mask),
+            z_barrier=np.asarray(z_barrier),
+            dalpha_ts=np.asarray(bundle.dalpha_ts),
+        )
 
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)

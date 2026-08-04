@@ -75,10 +75,10 @@ session logbook where available (e.g. 27759: 0.244 s vs "247 ms").
 
 ```bash
 # production (CPU, ~2-3 h for 6000 steps)
-JAX_PLATFORMS=cpu python train.py --config config/config_cusp.yaml
+JAX_PLATFORMS=cpu python train.py --config config/config.yaml
 
 # quick debug run
-JAX_PLATFORMS=cpu python train.py --config config/config_cusp.yaml --total-steps 50
+JAX_PLATFORMS=cpu python train.py --config config/config.yaml --total-steps 50
 ```
 
 Device note (RTX 5080 + 14-core CPU, float64): CPU and GPU tie at batch 8
@@ -91,7 +91,7 @@ Resume with `--resume_ckpt <path> --resume_step_offset <step>`.
 ## Evaluation
 
 ```bash
-python scripts/evaluate_model.py --config config/config_cusp.yaml --model-id cusp_run_v1
+python scripts/evaluate_model.py --config config/config.yaml --model-id cusp_run_v1
 ```
 
 Writes to `logs/<model_id>/evaluation/`:

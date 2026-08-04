@@ -9,7 +9,7 @@ from typing import List, Tuple
 import jax.numpy as jnp
 import numpy as np
 
-from .model import CONTROL_NAMES
+from .model import CONTROL_NAMES, CONTROL_SCALES
 from .types import ShotBundle
 
 
@@ -288,8 +288,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             axis=-1,
         )
         dalpha_ts = np.interp(ts_t, ctrl_t_full, dalpha_full, left=dalpha_full[0], right=dalpha_full[-1])
-        ctrl_means = ctrl_vals_ts.mean(axis=0)
-        ctrl_stds = ctrl_vals_ts.std(axis=0)
+        # Fixed physical scales (causal: no per-shot statistics enter the model).
+        ctrl_means = np.zeros(ctrl_vals_ts.shape[-1])
+        ctrl_stds = np.array(CONTROL_SCALES, dtype=float)[: ctrl_vals_ts.shape[-1]]
 
         raw_shots.append(
             dict(
@@ -324,19 +325,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     reliable_cov_min = float(data_cfg.get("reliable_cov_min", 0.10))
     reliable_rho_min = float(data_cfg.get("reliable_rho_min", 0.80))
 
-    model_cfg = config.get("model", {})
-    latent_design = str(model_cfg.get("latent_design", "cubic")).lower()
-    if "z0" in data_cfg:
-        z0_default = float(data_cfg["z0"])
-    elif latent_design == "barrier_v1":
-        initial_barrier = float(data_cfg.get("latent_initial_barrier", model_cfg.get("initial_barrier", 0.05)))
-        initial_barrier = float(np.clip(initial_barrier, 1.0e-4, 1.0 - 1.0e-4))
-        z0_default = float(np.log(initial_barrier / (1.0 - initial_barrier)))
-    elif latent_design == "cusp":
-        # Start on the lower (L-regime) branch of the cusp; z* ~ -sqrt(b) ~ -1 at init.
-        z0_default = -1.0
-    else:
-        z0_default = 0.0
+    # Every discharge starts in the low-confinement state: initialize the
+    # latent near the lower attractor of the normal form.
+    z0_default = float(data_cfg.get("z0", -1.0))
 
     edge_mode = str(data_cfg.get("edge_bc_mode", "use_last_observed")).lower()
 
@@ -446,16 +437,6 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         Vprime_rom = np.clip(Vprime_rom, 1e-6, None)
 
         z0_shot = z0_default
-        if latent_design == "barrier_v1" and "z0" not in data_cfg:
-            dalpha_np = np.asarray(shot["dalpha_ts"], dtype=float)
-            finite = np.isfinite(dalpha_np)
-            if np.any(finite):
-                vals = dalpha_np[finite]
-                span = float(np.max(vals) - np.min(vals))
-                if span > 1.0e-9:
-                    h_evidence0 = 1.0 - float((dalpha_np[0] - np.min(vals)) / (span + 1.0e-6))
-                    h_evidence0 = float(np.clip(h_evidence0, 0.02, 0.98))
-                    z0_shot = float(np.log(h_evidence0 / (1.0 - h_evidence0)))
 
         bundles_list.append({
             "ts_t": ts_t,
