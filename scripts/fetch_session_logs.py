@@ -19,7 +19,12 @@ def main():
         int(os.path.basename(p).split("_")[0]) for p in glob.glob("data/*_torax_training.npz")
     )
     out = {}
+    if os.path.exists("data/session_logs.json"):
+        with open("data/session_logs.json") as f:
+            out = json.load(f)
     for s in shots:
+        if str(s) in out:
+            continue
         try:
             r = requests.get(API, params={"filters": f"shot_id$eq:{s}", "size": 1}, timeout=30)
             items = r.json().get("items", [])
