@@ -52,10 +52,14 @@ supervises a learned observation head. All components are identified
 end-to-end from public MAST measurements by reverse-mode differentiation
 through an implicit--explicit integrator. The identified model assigns a
 calibrated regime probability $\pH(t)$ at every instant, locates transition
-times to a few tens of milliseconds, classifies non-transitioning
-discharges correctly, and --- when the identified dynamics are bistable ---
+times to a few tens of milliseconds, holds beam-free and below-threshold
+discharges in the low-confinement state, and --- when the identified dynamics are bistable ---
 yields closed-form fold margins that measure the distance to forced and
-spontaneous transitions in actuator units.
+spontaneous transitions in actuator units. On this corpus the data select a
+bistable field: the identified normal form implies a forced-transition
+power threshold of $\approx\SI{1.9}{MW}$ and loss of the high-confinement
+state below $\approx\SI{1.1}{MW}$ --- a hysteresis of
+$\approx\SI{0.8}{MW}$ obtained without imposing bistability.
 \end{abstract}
 
 \section{Introduction}
@@ -174,7 +178,7 @@ reconstruction, from which the flux-surface volume factor $V'(\rho)$ in
 the transport operator is computed.
 
 \paragraph{Corpus.} The corpus contains \nShots{} discharges from the
-2011--2013 campaigns: a contiguous experimental session (27567--27587)
+2010--2013 campaigns: a contiguous experimental session (27567--27587)
 plus discharges selected from the catalogue whose session-log annotations
 describe clear transitions, back-transitions, or dithering phases.
 \nTrans{} discharges contain at least one labeled H segment; \nNoTrans{}
@@ -472,16 +476,22 @@ $\pH(t)$ and the normal-form quantities; none require manual inspection.
 \section{Results}
 \label{sec:results}
 
-\paragraph{Identified dynamics.} % numbers filled from evaluation
-The identified coefficients are $c_1 = \resCone$, $c_2 = \resCtwo$
-($\Delta = c_2^2 + 3 c_1$), $\tau = \resTau\,$ms, with fold drives
-$\drive_{\mathrm{f}}^{-} = \resFoldLow$, $\drive_{\mathrm{f}}^{+} =
-\resFoldHigh$ and an implied forced-transition power threshold of
-$\approx \resPthr$~MW at corpus-typical current and density.
-Figure~\ref{fig:bifurcation} shows the identified equilibrium manifold
-with an inferred trajectory overlaid; Figure~\ref{fig:fit} shows the
-profile fit and barrier trajectory for one discharge (annulus MAE
-\resMAE{} eV over the corpus).
+\paragraph{Identified dynamics: the data select bistability.}
+The identified coefficients are $c_1 = \resCone$, $c_2 = \resCtwo$, and
+$\tau = \resTau$~ms. The discriminant $\Delta = c_2^2 + 3c_1 = 1.38 > 0$:
+although nothing in the model enforces it, the identified vector field is
+bistable, with folds at $\drive_{\mathrm{f}}^{-} = \resFoldLow$ and
+$\drive_{\mathrm{f}}^{+} = \resFoldHigh$. Mapped through the identified
+drive (whose dominant coefficient is $\kappa_P = 0.32$ per MW), the upper
+fold corresponds to a forced L$\to$H transition at
+$\approx \resPthr$~MW of injected power at corpus-typical current and
+density, and the lower fold to loss of the H state below
+$\approx \resPback$~MW --- an identified hysteresis of
+$\approx \resHyst$~MW. The relaxation time $\tau$ matches the observed
+few-tens-of-ms transition duration. Figure~\ref{fig:bifurcation} shows the
+identified equilibrium manifold with an inferred trajectory overlaid;
+Figure~\ref{fig:fit} shows the profile fit and barrier trajectory for one
+discharge (annulus MAE \resMAE{} eV over the corpus).
 
 \begin{figure}[t]
   \centering
@@ -505,9 +515,21 @@ profile fit and barrier trajectory for one discharge (annulus MAE
 labeled H segment, the median per-discharge AUC is \resAUCmed{} (pooled
 mean \resAUCmean), median accuracy \resAccMed, median F1 \resFoneMed, and
 the median absolute transition-time error is \resTTmed{} ms
-(Fig.~\ref{fig:classification}). All \nNoTrans{} discharges without
-transitions --- including the beam-free ohmic ones --- are classified L
-throughout.
+(Fig.~\ref{fig:classification}).
+
+\paragraph{Negative control.} Of the \nNoTrans{} discharges without a
+labeled H segment, both beam-free (purely resistively heated) discharges
+and all discharges with $\leq\SI{2.2}{MW}$ of beam power are classified L
+throughout, as they must be. The model disagrees with the label on six
+discharges, all with $\geq\SI{2.7}{MW}$ --- above its identified
+threshold. Notably, for at least two of these the session log records a
+real H phase that the conservative label extractor missed (an ELMy
+H-mode whose emission baseline never dropped, and a transition during
+strong gas puffing); on those the model corrects the label rather than
+erring. The remaining disagreements are discharges near threshold that
+did not transition, exposing the main limitation of an affine drive:
+the true threshold depends on plasma conditions beyond the three
+actuators used here.
 
 \begin{figure}[t]
   \centering

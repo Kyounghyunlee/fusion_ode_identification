@@ -190,11 +190,9 @@ def fig_fit(eval_dir, shot, out):
         return
     d = np.load(p)
     ts, rho, Tm, To, mask = d["ts"], d["rho"], d["Te_model"], d["Te_obs"], d["mask"]
-    # pick three best-covered interior radii spread across the annulus
+    # the three best-covered interior radii, displayed inner to outer
     cov = mask[:, :-1].mean(axis=0)
-    good = np.argsort(cov)[::-1][:12]
-    good = np.sort(good)
-    picks = [good[0], good[len(good) // 2], good[-1]] if len(good) >= 3 else list(good)
+    picks = sorted(np.argsort(cov)[::-1][:3].tolist())
 
     fig, axes = plt.subplots(len(picks) + 1, 1, figsize=(5.2, 1.15 * (len(picks) + 1)), sharex=True)
     for ax, j in zip(axes[:-1], picks):

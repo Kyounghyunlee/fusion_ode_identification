@@ -742,11 +742,11 @@ def main():
         },
     )
     imex_cfg = IMEXConfig(
-        theta=float(imex_dict["theta"]),
-        dt_base=float(imex_dict["dt_base"]),
-        max_steps=int(imex_dict["max_steps"]),
-        rtol=float(imex_dict["rtol"]),
-        atol=float(imex_dict["atol"]),
+        theta=float(imex_dict.get("theta", 0.7)),
+        dt_base=float(imex_dict.get("dt_base", 1e-3)),
+        max_steps=int(imex_dict.get("max_steps", 50000)),
+        rtol=float(imex_dict.get("rtol", 1e-4)),
+        atol=float(imex_dict.get("atol", 1e-6)),
         substeps=int(imex_dict.get("substeps", 1)),
     )
     

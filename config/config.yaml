@@ -44,6 +44,8 @@ output:
   save_dir: "models"
   log_dir: "logs"
   model_name: "normal_form_model"
+  # Short schedules: the raw best checkpoint beats the lagging EMA.
+  checkpoint_preference: "best,best_ema"
 
 model:
   layers: 128
