@@ -13,19 +13,13 @@ From the repository root:
 python -m preprocessing.build_training_pack \
   --discover \
   --qa-grade fail \
-  --qa-summary data/sanity_summary_v3.csv \
-  --qa-plots data/plots/strict_iter3
+  --qa-summary data/sanity_summary.csv \
+  --qa-plots data/plots/qa
 ```
 
-The validated strict rebuild produced 18 packs:
-
-```text
-27567 27568 27569 27570 27573 27574 27575 27576 27577
-27578 27579 27580 27581 27582 27584 27585 27586 27587
-```
-
-Shots `27571`, `27572`, and `27594` are not written by the strict defaults
-because too few stable edge rho columns survive. This is intentional.
+The current corpus is 63 packs (52 with a labeled L-H transition, 11
+L-only). Shots whose profile data keep fewer than four stable edge rho
+columns are not written; this is intentional.
 
 ## Raw Inputs
 
@@ -86,9 +80,9 @@ treated as supervised data.
 Useful QA artifacts:
 
 ```text
-data/sanity_summary_v3.csv
-data/plots/strict_iter3/rho_coverage_heatmap.png
-data/plots/strict_iter3/rho_086_kept_columns.png
+data/sanity_summary.csv
+data/plots/qa/rho_coverage_heatmap.png
+data/plots/qa/rho_086_kept_columns.png
 ```
 
 ## Scalar Controls

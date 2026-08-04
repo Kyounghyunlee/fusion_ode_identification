@@ -1,24 +1,43 @@
-\begin{thebibliography}{3}
+\begin{thebibliography}{6}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
 
+\bibitem[Connor and Wilson(2000)]{connor2000}
+J.~W. Connor and H.~R. Wilson.
+\newblock A review of theories of the {L-H} transition.
+\newblock \emph{Plasma Physics and Controlled Fusion}, 42\penalty0
+  (1):\penalty0 R1--R74, 2000.
+
+\bibitem[Kim and Diamond(2003)]{kim2003}
+Eun-jin Kim and P.~H. Diamond.
+\newblock Zonal flows and transient dynamics of the {L-H} transition.
+\newblock \emph{Physical Review Letters}, 90:\penalty0 185006, 2003.
+
 \bibitem[Kuznetsov(2004)]{kuznetsov2004elements}
 Yuri~A. Kuznetsov.
 \newblock \emph{Elements of Applied Bifurcation Theory}.
 \newblock Springer, New York, 3 edition, 2004.
 
-\bibitem[Strogatz(2018)]{strogatz2018nonlinear}
-Steven~H. Strogatz.
-\newblock \emph{Nonlinear Dynamics and Chaos: With Applications to Physics,
-  Biology, Chemistry, and Engineering}.
-\newblock CRC Press, 2 edition, 2018.
+\bibitem[Scheffer et~al.(2009)Scheffer, Bascompte, Brock, Brovkin, Carpenter,
+  Dakos, Held, van Nes, Rietkerk, and Sugihara]{scheffer2009earlywarning}
+Marten Scheffer, Jordi Bascompte, William~A. Brock, Victor Brovkin, Stephen~R.
+  Carpenter, Vasilis Dakos, Hermann Held, Egbert~H. van Nes, Max Rietkerk, and
+  George Sugihara.
+\newblock Early-warning signals for critical transitions.
+\newblock \emph{Nature}, 461:\penalty0 53--59, 2009.
 
 \bibitem[{UK Atomic Energy Authority}(2024)]{mastopendata}
 {UK Atomic Energy Authority}.
 \newblock {MAST} open data.
 \newblock \url{https://opendata.ukaea.uk/mast-data/}, 2024.
+
+\bibitem[Wagner et~al.(1982)]{wagner1982}
+F.~Wagner et~al.
+\newblock Regime of improved confinement and high beta in neutral-beam-heated
+  divertor discharges of the {ASDEX} tokamak.
+\newblock \emph{Physical Review Letters}, 49:\penalty0 1408--1412, 1982.
 
 \end{thebibliography}

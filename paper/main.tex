@@ -7,23 +7,26 @@
 \usepackage{booktabs}
 \usepackage{siunitx}
 \usepackage[dvipsnames]{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta}
 \usepackage[colorlinks=true, linkcolor=MidnightBlue, citecolor=MidnightBlue, urlcolor=MidnightBlue]{hyperref}
 \usepackage[round]{natbib}
 \usepackage{microtype}
+
+\input{results}
 
 % ---- symbols ----
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\dd}{\mathrm{d}}
 \newcommand{\state}{u}                 % transported field
 \newcommand{\lat}{\zeta}               % latent regime coordinate
-\newcommand{\barrier}{\beta}           % barrier coordinate in [0,1]
 \newcommand{\drive}{a}                 % normal-form drive
 \newcommand{\ctrl}{\bm{w}}             % exogenous inputs
 \newcommand{\emiss}{y}                 % scalar emission observable
 \newcommand{\pH}{p_{\mathrm{H}}}
 
-\title{Identification of a bistable normal form for regime transitions\\
-in a driven dissipative transport system}
+\title{Data-driven identification of low-dimensional regime dynamics\\
+for the L--H transition in a magnetically confined plasma}
 \author{Kyounghyun Lee}
 \date{\today}
 
@@ -31,274 +34,527 @@ in a driven dissipative transport system}
 \maketitle
 
 \begin{abstract}
-Spatially extended dissipative systems under strong forcing can switch abruptly
-between distinct macroscopic transport regimes. We propose a hybrid
-reduced-order model in which a one-dimensional diffusion equation with a
-state-dependent transport coefficient is coupled to a scalar latent variable
-governed by the cusp normal form
-$\tau\,\dot\lat = \drive(\ctrl) + b\,\lat - \lat^{3}$.
-The two stable branches of the cusp define the two transport regimes; the
-transition and its hysteresis are saddle-node bifurcations of the latent
-dynamics, and the distance of the exogenous drive from the fold provides a
-quantitative, closed-form margin to transition. All model components --- the
-transport coefficient, a residual source term, the drive map, and an
-observation map from the latent state to a measured emission proxy --- are
-identified end-to-end from experimental time series by differentiating through
-an implicit--explicit integrator. Unlike proxy-following approaches, the
-latent dynamics are driven exclusively by exogenous actuation, so the inferred
-regime state is falsifiable against held-out observables. The identified model
-assigns a calibrated regime probability at every instant, locates transition
-times without supervision beyond weak segment labels, and yields
-bifurcation diagrams that summarize when a transition can be forced or undone.
+The transition between the low- and high-confinement regimes (L- and H-mode)
+of a tokamak plasma is abrupt, strongly nonlinear, and central to the
+operation of future fusion devices, yet real-time-capable models that
+\emph{quantify} the regime and the proximity to transition are scarce. We
+propose a hybrid reduced-order model in which a one-dimensional thermal
+transport equation with a regime-dependent transport coefficient is coupled
+to a scalar latent state governed by the full unfolding of the cubic normal
+form, $\tau\,\dot\lat = \drive(\ctrl) + c_1\lat + c_2\lat^{2} - \lat^{3}$.
+The coefficients are left free: whether the identified regime dynamics are
+bistable (folds, hysteresis) or monostable (a sharp but memoryless
+threshold) is decided by the data, not assumed. The drive $\drive$ depends
+only on measured actuators in fixed physical units, so the model is causal
+and directly usable in a real-time setting; the D$_\alpha$ emission that
+conventionally diagnoses the transition never enters the dynamics and only
+supervises a learned observation head. All components are identified
+end-to-end from public MAST measurements by reverse-mode differentiation
+through an implicit--explicit integrator. The identified model assigns a
+calibrated regime probability $\pH(t)$ at every instant, locates transition
+times to a few tens of milliseconds, classifies non-transitioning
+discharges correctly, and --- when the identified dynamics are bistable ---
+yields closed-form fold margins that measure the distance to forced and
+spontaneous transitions in actuator units.
 \end{abstract}
 
 \section{Introduction}
 \label{sec:intro}
 
-% Placeholder: motivation from dynamical systems viewpoint.
-Abrupt transitions between metastable states are a recurring motif in
-nonequilibrium systems: bistability, hysteresis, and critical slowing down
-near folds are generic features predicted by normal-form theory
-\citep{kuznetsov2004elements, strogatz2018nonlinear}. In the experimental
-system considered here, a driven dissipative transport process switches
-between a low-transport-barrier regime (\emph{state L}) and a
-high-transport-barrier regime (\emph{state H}) as the external drive
-increases, with the reverse switch occurring at a lower drive --- the
-signature of hysteresis. A quantitative, model-based answer to the question
-\emph{``which regime is the system in, and how far is it from switching?''}
-is a prerequisite for control.
+Magnetically confined plasmas exhibit two robustly distinct transport
+regimes. Above a heating-power threshold, the turbulent transport in a
+narrow layer at the plasma edge is abruptly suppressed and an edge
+\emph{transport barrier} forms: density and temperature profiles steepen
+into a pedestal, global confinement roughly doubles, and the edge light
+emission from neutral-particle recycling drops sharply. This is the
+L--H transition \citep{wagner1982}; the high-confinement state (H-mode) is
+the reference operating scenario for ITER-class devices, so knowing
+\emph{which regime the plasma is in} and \emph{how far it is from
+switching} --- quantitatively, in real time --- is an operational
+requirement, not a curiosity.
 
-Our contributions are:
-(i) a hybrid mechanistic--statistical model in which the regime is a latent
-coordinate of a cusp normal form, giving the L/H classification a precise
-mathematical meaning (basin membership of a bistable vector field);
-(ii) end-to-end identification through a differentiable implicit--explicit
-solver; and
-(iii) closed-form bifurcation diagnostics --- fold margins
-$\mu_{\mathrm{LH}}(t)$ and $\mu_{\mathrm{HL}}(t)$ --- that quantify
-proximity to forced and spontaneous transitions.
+From a dynamical-systems standpoint the phenomenology is suggestive: the
+transition is fast compared with the profile evolution, exhibits a power
+threshold, and back-transitions (H$\to$L) are reported at lower power than
+forward transitions, hinting at hysteresis
+\citep{connor2000, scheffer2009earlywarning}. Reduced predator--prey-type
+models of the interaction between turbulence, shear flows, and pressure
+gradients reproduce such behavior qualitatively
+\citep{kim2003}, but they are seldom identified quantitatively against
+experimental data, and machine-learning classifiers that detect the
+transition from diagnostics are typically acausal, black-box, and give no
+distance-to-transition information.
+
+This paper takes a middle route. We identify, from public experimental
+data, a hybrid model with three interpretable parts: a conservative
+one-dimensional transport backbone for the electron temperature; a scalar
+latent regime state $\lat(t)$ whose dynamics are the \emph{full unfolding
+of the cubic normal form}; and a learned observation head that links the
+latent state to the measured emission proxy. Crucially, we do not impose
+bistability. The normal-form coefficients are free, and the identified
+vector field may come out bistable (in which case transitions are fold
+crossings and hysteresis is intrinsic) or monostable (a sharp threshold
+response without memory). The question ``is the L--H transition a
+bifurcation?'' is thereby moved from an assumption to a measurable property
+of the identified dynamics.
+
+Contributions:
+\begin{enumerate}
+\item a causal, real-time-capable reduced-order model of regime dynamics,
+      driven exclusively by actuators in fixed physical units
+      (\S\ref{sec:model});
+\item an end-to-end identification pipeline --- data curation with strict
+      quality gates, weak-label extraction, and differentiable
+      implicit--explicit integration --- applied to 60+ public MAST
+      discharges (\S\ref{sec:data}, \S\ref{sec:ident});
+\item a quantitative regime-assessment methodology: calibrated regime
+      probability, per-discharge classification metrics, transition-time
+      error, and, when the identified dynamics are bistable, closed-form
+      fold margins in actuator units (\S\ref{sec:assess});
+\item empirical results on MAST, including the identified normal-form
+      coefficients and the answer the data gives to the bistability
+      question (\S\ref{sec:results}).
+\end{enumerate}
+
+\section{Physical background and how it shapes the model}
+\label{sec:physics}
+
+\paragraph{The system.} A tokamak confines a hot plasma on nested toroidal
+magnetic surfaces. Transport of heat across those surfaces (radially,
+coordinate $\rho \in [0,1]$) is dominated by turbulence and is orders of
+magnitude faster than collisional theory predicts. The experiment measures
+radial profiles of electron temperature and density at discrete times
+(Thomson scattering), together with dense time series of the actuators ---
+injected neutral-beam heating power $P$, plasma current $I_p$, and fueling
+(reflected in the mean density $\bar n_e$) --- and of the D$_\alpha$ line
+emission produced by recycling neutrals at the edge.
+
+\paragraph{The L--H transition.} When the heating power crosses a
+threshold, sheared plasma flows at the edge suppress the local turbulence;
+the effective thermal diffusivity in a thin edge layer drops, and a steep
+pedestal grows there. The D$_\alpha$ emission collapses at the transition
+--- less turbulent transport means less particle exhaust and less
+recycling light --- which makes it the standard experimental transition
+indicator. In H-mode, quasi-periodic edge instabilities
+(edge-localized modes, ELMs) appear as short D$_\alpha$ bursts on top of
+the low quiescent level. The physical picture that emerges --- a fast edge
+subsystem switching between two states under slow actuator forcing --- is
+exactly the setting in which center-manifold arguments justify a
+one-dimensional normal form for the switching degree of freedom
+\citep{kuznetsov2004elements}.
+
+\paragraph{How the physics enters the pipeline.} Each element of the
+phenomenology is mapped to a model component:
+(i) turbulence suppression in a thin edge layer $\to$ a transport
+coefficient $\chi(\rho,\lat)$ whose \emph{edge} value decreases with the
+barrier coordinate (Fig.~\ref{fig:chi});
+(ii) fast switching under slow forcing $\to$ a scalar normal-form latent
+driven by the actuators;
+(iii) the D$_\alpha$ collapse $\to$ a learned observation map from the
+latent state to the emission proxy, used for supervision only;
+(iv) ELM bursts contaminating the proxy $\to$ label extraction from the
+\emph{lower envelope} of the signal (\S\ref{sec:labels});
+(v) the power threshold $\to$ the drive $\drive(\ctrl)$ is constrained
+monotone in $P$ and uses fixed physical units, so a threshold in drive is
+a threshold in watts.
+
+\section{Data}
+\label{sec:data}
+
+\paragraph{Source.} All data are from the public MAST archive
+\citep{mastopendata}, accessed as Level-2 datasets over anonymous object
+storage; discharge metadata and session-log annotations were queried
+through the accompanying catalogue API. From each discharge we use:
+the Thomson-scattering electron temperature and density profiles
+($\sim$\SI{4}{ms} cadence, $\sim$130 spatial points, of which the reliably
+measured region is an outer annulus $\rho \gtrsim 0.85$);
+the summary actuator traces ($P$, $I_p$, $\bar n_e$) at \SI{1}{ms}
+cadence; the D$_\alpha$ photodiode traces; and the equilibrium
+reconstruction, from which the flux-surface volume factor $V'(\rho)$ in
+the transport operator is computed.
+
+\paragraph{Corpus.} The corpus contains \nShots{} discharges from the
+2011--2013 campaigns: a contiguous experimental session (27567--27587)
+plus discharges selected from the catalogue whose session-log annotations
+describe clear transitions, back-transitions, or dithering phases.
+\nTrans{} discharges contain at least one labeled H segment; \nNoTrans{}
+--- including purely ohmically heated (beam-free) ones --- never leave L
+and are retained deliberately as negative examples. Discharges whose
+profile data fail the quality gates below are excluded entirely.
+
+\paragraph{Quality screening.} Raw channels are frequently corrupted, and
+admitting them destabilizes both the rollout and the labels. Per
+time-slice, profiles need a minimum number of finite channels and radial
+span, and impulsive outliers are removed by a rolling median-absolute-
+deviation test. Per radial channel, we require a minimum median level
+(\SI{50}{eV}), bounded relative jumps and span, and minimum time coverage;
+a discharge is admitted only if at least four stable edge channels
+survive. The representative density is a trimmed mean over the trusted
+outer annulus.
+
+\subsection{Weak regime labels}
+\label{sec:labels}
+
+Supervision for the regime state comes from segment labels computed
+automatically from the D$_\alpha$ trace (Fig.~\ref{fig:labeler}); they are
+deliberately conservative and enter the loss only through a low-weight
+classification term.
+
+Because ELM bursts are short positive spikes, the transition signature
+lives in the \emph{lower envelope} of the signal: we track a rolling 15th
+percentile over \SI{15}{ms} windows. Within a gate that requires an
+established discharge (current above 60\% of its flat-top value, density
+above 20\% of its peak --- excluding the ramp phases, where low emission
+reflects low recycling rather than confinement), the envelope distribution
+is split by a variance-maximizing (Otsu) threshold, guarded against
+degenerate splits. A candidate H segment is accepted only if it
+(i) persists $\geq$ \SI{20}{ms} (no label flicker),
+(ii) is preceded by an L reference inside the gate (no ``H at gate
+opening''), and
+(iii) steps down sharply across its entry (mean drop $\geq 0.10$ of the
+normalized range between \SI{25}{ms} windows), which rejects slow drifts
+on density-ramp discharges. Multiple H segments per discharge are allowed,
+so back-transitions are labeled. Samples near each switch are labeled as a
+transition window and excluded from classification scoring, as are all
+samples outside the gate. Where the session log gives an annotated
+transition time, the labels agree to $\sim$\SI{20}{ms}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.8\linewidth]{figures/fig_labeler}
+  \caption{Anatomy of the weak labels for one discharge. The emission
+  proxy $\emiss(t)$ (orange) is contaminated by short bursts; the rolling
+  lower envelope (green) isolates the baseline whose step-down is the
+  transition signature. The gated variance-maximizing threshold (dashed)
+  and dwell/sharpness guards produce the shaded H segment; the dotted line
+  is the resulting transition time.}
+  \label{fig:labeler}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{figures/fig_data}
+  \caption{Example discharge as seen by the model. Top: emission proxy
+  $\emiss(t)$ with the labeled H segment shaded. Middle: exogenous inputs
+  $\ctrl(t)$ in fixed physical scales (MW, MA, $10^{19}\,$m$^{-3}$).
+  Bottom: weak segment labels; ``--'' marks the excluded formation and
+  termination phases.}
+  \label{fig:data}
+\end{figure}
 
 \section{Model}
 \label{sec:model}
 
+Figure~\ref{fig:pipeline} summarizes the architecture and data flow.
+
+\begin{figure}[t]
+  \centering
+  \begin{tikzpicture}[
+      font=\small,
+      node distance=5mm and 9mm,
+      box/.style={draw=black!55, rounded corners=2pt, align=center,
+                  inner sep=5pt, minimum height=9mm},
+      data/.style={box, fill=black!4},
+      model/.style={box, fill=blue!7},
+      loss/.style={box, fill=orange!10},
+      arr/.style={-{Stealth[length=2.2mm]}, black!60},
+    ]
+    \node[data] (act) {actuators $\ctrl(t)$\\ $P,\ I_p,\ \bar n_e$};
+    \node[model, right=of act] (latent) {normal form\\
+      $\tau\dot\lat = \drive(\ctrl) + c_1\lat + c_2\lat^2 - \lat^3$};
+    \node[model, right=of latent] (pde) {transport PDE\\
+      $\partial_t \state = \nabla\!\cdot\!\big(\chi(\rho,\lat)\nabla \state\big) + s_\theta$};
+    \node[data, right=of pde] (te) {profiles $\state(\rho_i,t_j)$\\ (Thomson)};
+    \node[model, below=of latent] (heads) {heads: $\pH = \sigma(k\lat + k_0)$,\\
+      $\hat\emiss = h_\psi(\pH, \ctrl, \state_{\mathrm{edge}}, n_{\mathrm{edge}})$};
+    \node[loss, below=of pde] (losses) {losses: profile misfit,\\
+      regime BCE, $\hat\emiss$ misfit};
+    \node[data, below=of heads] (obs) {labels $\ell(t)$, proxy $\emiss(t)$\\ (D$_\alpha$)};
+    \draw[arr] (act) -- (latent);
+    \draw[arr] (latent) -- node[above]{$\lat$} (pde);
+    \draw[arr] (pde) -- (te);
+    \draw[arr] (latent) -- (heads);
+    \draw[arr] (heads) -- (losses);
+    \draw[arr] (te) |- (losses);
+    \draw[arr] (obs) -| (losses);
+  \end{tikzpicture}
+  \caption{Pipeline. Actuators drive the latent regime state; the latent
+  closes the transport equation through $\chi(\rho,\lat)$ and is read out
+  through the calibrated probability $\pH$ and the learned emission head.
+  Measurements (right and bottom) enter only through the loss; in
+  particular the emission proxy never drives the dynamics. All blocks are
+  differentiated through end-to-end.}
+  \label{fig:pipeline}
+\end{figure}
+
 \subsection{Transport backbone}
-Let $\state(\rho, t)$ denote the transported scalar field on the normalized
-domain $\rho \in [0, 1]$ with Neumann condition at $\rho = 0$ and a measured
-Dirichlet trace at $\rho = 1$. The field obeys a conservative diffusion law
-with a learned residual source $s_{\theta}$,
+\label{sec:backbone}
+
+The electron temperature $\state(\rho,t)$ on the normalized flux radius
+$\rho \in [0,1]$ obeys a conservative diffusion law with a learned
+residual source,
 \begin{equation}
 \partial_t \state
 = \frac{1}{V'(\rho)} \, \partial_\rho\!\left( V'(\rho)\, \chi(\rho, \lat)\,
 \partial_\rho \state \right) + s_{\theta}\!\left(\rho, \state, n, \ctrl, \lat\right),
 \label{eq:pde}
 \end{equation}
-where $V'$ is a fixed geometric weight and $n$ an auxiliary measured field.
-The transport coefficient is a monotone boundary-layer profile whose edge
-value is modulated by the latent regime coordinate $\lat$,
+with symmetry (zero-flux) condition at the axis $\rho = 0$ and the
+measured edge value imposed as a Dirichlet trace at $\rho = 1$. The
+geometric weight $V'$ comes from the equilibrium reconstruction; the
+density profile $n$ is measured. The residual source $s_\theta$ is a small
+tanh network (four hidden layers of 128, zero-initialized output) that
+absorbs heating deposition, radiation, and closure errors; a magnitude
+penalty keeps it subordinate to the conservative operator.
+
+Discretely, \eqref{eq:pde} is a finite-volume scheme on a uniform grid
+($N = 65$): face fluxes $F_{i+1/2} = -V'_{i+1/2}\chi_{i+1/2}
+(\state_{i+1}-\state_i)/\Delta\rho$, interior updates by flux differences,
+axis handled by a zero left face flux and the edge by eliminating the
+boundary node into the right-hand side. The implicit operator is
+tridiagonal and solved by the Thomas algorithm.
+
+\paragraph{Regime coupling.} The transport coefficient is a monotone
+edge-layer profile whose edge value is suppressed by the barrier
+coordinate $\pH \in [0,1]$ (defined in \S\ref{sec:latent}):
 \begin{equation}
 \chi(\rho, \lat) = \chi_0 + \sigma\!\left(\tfrac{\rho - \rho_c}{w}\right)
-\left[\chi_1 - \Delta\chi\,\barrier(\lat) - \chi_0\right],
-\qquad
-\barrier(\lat) = \sigma\!\left(\tfrac{3\lat}{\sqrt{b}}\right),
+\left[\chi_1 - \Delta\chi\,\pH(\lat) - \chi_0\right],
 \label{eq:chi}
 \end{equation}
-so that the H regime ($\lat > 0$) suppresses transport in the boundary layer
-and steepens the stationary profile there.
+with $\rho_c = 0.85$, $w = 0.08$ (Fig.~\ref{fig:chi}). High $\pH$
+suppresses edge transport and steepens the stationary edge profile ---
+the pedestal --- so the latent state is identified not only from the
+emission proxy but also through its effect on the measured temperature
+profiles.
 
-\subsection{Latent regime dynamics: the cusp normal form}
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.5\linewidth]{figures/fig_chi}
+  \caption{Transport-coefficient family \eqref{eq:chi}. The regime state
+  acts only in the edge layer: at $\pH = 1$ the edge diffusivity is
+  suppressed, producing the steep stationary edge gradient characteristic
+  of the high-confinement regime.}
+  \label{fig:chi}
+\end{figure}
+
+\subsection{Latent regime dynamics: the unfolded cubic normal form}
+\label{sec:latent}
+
 The regime coordinate evolves according to
 \begin{equation}
-\tau\,\dot\lat = \drive(\ctrl) + b\,\lat - \lat^{3},
-\qquad b > 0,
-\label{eq:cusp}
+\tau\,\dot\lat = \drive(\ctrl) + c_1\,\lat + c_2\,\lat^{2} - \lat^{3},
+\label{eq:nf}
 \end{equation}
-with drive $\drive(\ctrl) = \bm{\kappa}^{\top}\ctrl + \kappa_0$ an affine map
-of the exogenous inputs only (injected power, current, mean density). For
-$\lvert \drive \rvert < \drive_{\mathrm{f}} = 2 (b/3)^{3/2}$ the vector field
-\eqref{eq:cusp} is bistable: stable equilibria
-$\lat_{\mathrm{L}}^{*} < 0 < \lat_{\mathrm{H}}^{*}$ are separated by a saddle
-$\lat_{\mathrm{s}}$. Sweeping $\drive$ through $+\drive_{\mathrm{f}}$
-annihilates the L branch in a saddle-node bifurcation (forced L$\to$H
-transition); sweeping back through $-\drive_{\mathrm{f}}$ annihilates the H
-branch (H$\to$L back-transition). Hysteresis is therefore intrinsic rather
-than imposed. We define the \emph{fold margins}
-\begin{equation}
-\mu_{\mathrm{LH}}(t) = \drive_{\mathrm{f}} - \drive(\ctrl(t)),
-\qquad
-\mu_{\mathrm{HL}}(t) = \drive(\ctrl(t)) + \drive_{\mathrm{f}},
-\label{eq:margins}
-\end{equation}
-which measure the distance of the instantaneous drive from the two folds and
-constitute the control-relevant output of the identified model.
+the full unfolding of the cubic normal form: every structurally stable
+scalar vector field with at most three equilibria can be brought to this
+form, so \eqref{eq:nf} is not a bistability assumption but the most
+general low-dimensional ansatz consistent with a fast switching degree of
+freedom. The character of the identified dynamics is decided by the data
+through the discriminant $\Delta = c_2^2 + 3c_1$:
+\begin{itemize}
+\item $\Delta > 0$: the equilibrium drive $g(\lat) = \lat^3 - c_2\lat^2 -
+      c_1\lat$ is non-monotone; for
+      $\drive \in (\drive_{\mathrm{f}}^{-},\, \drive_{\mathrm{f}}^{+})$
+      (the fold values, the local extrema of $g$) the system is bistable,
+      transitions are saddle-node events, and hysteresis is intrinsic;
+\item $\Delta \leq 0$: $g$ is monotone, there is a unique equilibrium for
+      every drive, and the transition is a fast but memoryless threshold
+      response.
+\end{itemize}
+The drive is an affine map of the physically scaled actuators,
+$\drive(\ctrl) = \kappa_P P + \kappa_I I_p + \kappa_n \bar n_e +
+\kappa_0$ with $\kappa_P \geq 0$ (monotonicity in heating power) and $P$,
+$I_p$, $\bar n_e$ in MW, MA, and $10^{19}\,$m$^{-3}$. Fixed units are
+essential: with per-discharge statistical normalization, the same beam
+power maps to different drive values in different discharges and no
+shared threshold can exist. They also make the model causal --- no
+whole-discharge statistics enter --- which is what permits real-time use.
 
 \subsection{Observation model and regime probability}
-The latent state is linked to a measured emission proxy $\emiss(t)$ (bright in
-state L, quiescent in state H) through a learned map
-$\hat{\emiss} = h_{\psi}\!\left(\barrier(\lat), \ctrl, \state_{\mathrm{edge}},
-n_{\mathrm{edge}}\right)$. Crucially, $\emiss$ never enters the latent
-dynamics \eqref{eq:cusp}; it only supervises the observation head, which
-breaks the circularity of proxy-following formulations. The instantaneous
-regime probability is the calibrated logistic
+\label{sec:obs}
+
+The calibrated regime probability doubles as the barrier coordinate:
 \begin{equation}
-\pH(t) = \sigma\!\left(k\,\lat(t) / \sqrt{b}\right),
+\pH(t) = \sigma\!\big(k\,\lat(t) + k_0\big),
 \label{eq:ph}
 \end{equation}
-and the mathematically sharp classification is basin membership:
-the system is in regime H at time $t$ iff $\lat(t)$ lies in the basin of
-attraction of $\lat^{*}_{\mathrm{H}}\big(\drive(t)\big)$.
+with learned gain and offset. The emission proxy is predicted by a small
+learned head,
+$\hat{\emiss} = \sigma\big(h_{\psi}(\pH, \ctrl, \state_{\mathrm{edge}},
+n_{\mathrm{edge}})\big)$
+(one hidden layer of 16). The measured $\emiss$ appears only in the loss
+term for $\hat\emiss$: it never enters \eqref{eq:nf}. This breaks the
+circularity of proxy-following formulations --- where the latent is pinned
+to a transformation of $\emiss$ and ``classification from the latent'' is
+just classification from the proxy --- and it makes the inferred regime
+state falsifiable: the actuator-driven latent must \emph{predict} the
+proxy collapse, and on discharges without transitions it must decline to.
 
 \section{Identification}
 \label{sec:ident}
 
-\paragraph{Data.} Publicly released measurement campaigns from a toroidal
-confinement experiment (MAST) \citep{mastopendata}; each discharge provides
-profile measurements $\state(\rho_i, t_j)$ in the outer domain, exogenous
-inputs $\ctrl(t)$, and the emission proxy $\emiss(t)$ at millisecond
-resolution. The corpus contains 36 discharges: 26 with at least one L$\to$H
-transition (several with back-transitions or dithering phases) and 10 that
-remain in state L throughout, retained deliberately as negative examples.
-Discharges are screened by strict per-channel quality gates (median level,
-bounded jumps and span, minimum time coverage), which is essential: raw
-channels are frequently corrupted, and admitting them destabilizes both the
-rollout and the labels.
+\paragraph{Differentiable solver.} Diffusion makes \eqref{eq:pde} stiff
+($|\lambda_{\max}| \sim \chi/\Delta\rho^2$), so we integrate with an
+implicit--explicit $\theta$-method: the linear diffusion operator is
+implicit ($\theta = 0.7$, tridiagonal Thomas solve), while the residual
+source and the latent \eqref{eq:nf} advance explicitly. Five substeps are
+taken per Thomson interval with static loop bounds, so the entire rollout
+is reverse-mode differentiable under JIT compilation; integration is
+frozen beyond each discharge's valid window so padding cannot destabilize
+the solve.
 
-\paragraph{Weak segment labels.} Because $\emiss$ is bright in state L and
-quiescent in state H but heavily contaminated by short bursts, labels are
-computed from its \emph{lower envelope} (rolling 15th percentile, \SI{15}{ms}
-window). Within a gate that excludes the formation and termination phases of
-each discharge, the envelope distribution is split by a variance-maximizing
-threshold; a candidate H segment is accepted only if
-(i) it persists for at least \SI{20}{ms},
-(ii) it is preceded by an L reference inside the gate, and
-(iii) the envelope steps down sharply across its entry
-(\SI{25}{ms} contrast windows), which rejects slow drifts.
-Detected transition times agree with independent session-log annotations to
-within $\sim$\SI{20}{ms} on the discharges where such annotations exist.
-
-\paragraph{Objective.} With $\Theta = (\theta, \psi, \bm{\kappa}, b, \tau,
-k, \chi\text{-parameters})$, the per-discharge loss is
+\paragraph{Objective.} With $\Theta$ the full parameter set (source
+network, $\chi$ parameters, normal-form coefficients, heads), the
+per-discharge loss is
 \begin{equation}
 \mathcal{L} =
-\underbrace{\sum_{i,j} W_{ij}\, \phi_{\delta}\!\big(\hat\state(\rho_i, t_j) - \state_{ij}\big)}_{\text{profile misfit}}
-+ \lambda_s \sum \phi_{\delta_s}(s_\theta)
+\sum_{i,j} W_{ij}\, \phi_{\delta}\!\big(\hat\state(\rho_i, t_j) - \state_{ij}\big)
++ \lambda_s \textstyle\sum \phi_{\delta_s}(s_\theta)
 + \lambda_1 \overline{\lat^2} + \lambda_2 \overline{\dot\lat^2}
 + \lambda_r\, \mathrm{BCE}\big(\pH, \ell\big)
-+ \lambda_y\, \overline{\big(h_\psi - \tilde\emiss\big)^2},
++ \lambda_y\, \overline{\big(\hat\emiss - \tilde\emiss\big)^2},
 \label{eq:loss}
 \end{equation}
 where $\phi_\delta$ is the pseudo-Huber function, $W$ inverse-coverage
-weights that equalize sparsely and densely observed channels, $\ell$ the weak
-segment labels (scored only on clean L/H samples), and $\tilde\emiss$ the
-range-normalized emission proxy. We use $\lambda_r = 5\times 10^{-2}$ and
-$\lambda_y = 1$; in particular the emission term supervises the
-\emph{observation head}, not the latent directly. Gradients of
-\eqref{eq:loss} are obtained by reverse-mode differentiation through a
-$\theta$-method implicit--explicit integrator ($\theta = 0.7$, five substeps
-per observation interval) whose implicit stage is a tridiagonal (Thomas)
-solve of the diffusion operator; the latent and source terms are explicit.
-Model selection uses a held-out validation set of discharges whose loss
-includes the regime and emission terms, so checkpoints are selected for
-regime fidelity as well as profile fit.
+weights that equalize sparsely and densely observed channels (only
+measured samples in the trusted annulus are scored), $\ell$ the weak
+segment labels scored on clean L/H samples only, and $\tilde\emiss$ the
+range-normalized proxy. The profile term sits at $O(700)$ in these units;
+$\lambda_r = \lambda_y = 20$ keeps the regime and observation terms at a
+few percent of the total, which is required for the 14-parameter latent
+to receive usable gradient against the $10^5$-parameter source network.
+
+\paragraph{Training protocol.} 20\% of discharges are held out; the
+validation loss includes the regime and observation terms, so checkpoint
+selection favors regime fidelity as well as profile fit. AdamW
+(peak learning rate $2\times10^{-4}$, cosine decay, gradient clipping,
+weight decay $3\times10^{-5}$), batches of 8 discharges,
+\resTrainSteps{} steps --- validation saturates well before this ---
+with an exponential moving average of the weights tracked as an alternative
+checkpoint. Training runs in double precision on a 14-core CPU in
+\resTrainTime{}; a consumer GPU offers no advantage at this batch size
+because the pipeline is float64 throughout.
+
+\section{Quantitative regime assessment}
+\label{sec:assess}
+
+The identified model is assessed on four levels, all computed from
+$\pH(t)$ and the normal-form quantities; none require manual inspection.
+
+\begin{enumerate}
+\item \textbf{Classification.} Per discharge, $\pH$ is scored against the
+      clean L/H label samples: accuracy and F1 at the $\pH = 0.5$
+      threshold, threshold-free AUC (rank statistic), and the Brier score
+      (calibration-sensitive). Transition windows and out-of-gate samples
+      are excluded.
+\item \textbf{Transition timing.} The model transition time is the first
+      sustained upcrossing of $\pH = 0.5$; its error against the labeled
+      transition time is reported per discharge.
+\item \textbf{Negative control.} On discharges without a labeled H
+      segment, $\pH$ must stay below $0.5$ throughout --- a direct test
+      that the actuator-driven latent does not invent transitions.
+\item \textbf{Normal-form diagnostics.} The identified $(c_1, c_2)$ answer
+      the bistability question via $\Delta = c_2^2 + 3c_1$. If $\Delta >
+      0$, the folds $\drive_{\mathrm{f}}^{\pm}$ exist and the margins
+      \begin{equation}
+      \mu_{\mathrm{LH}}(t) = \drive_{\mathrm{f}}^{+} - \drive(\ctrl(t)),
+      \qquad
+      \mu_{\mathrm{HL}}(t) = \drive(\ctrl(t)) - \drive_{\mathrm{f}}^{-},
+      \label{eq:margins}
+      \end{equation}
+      measure the instantaneous distance (in drive units, hence
+      convertible to watts through $\kappa_P$) to the forced transition
+      and to the loss of the H state. Basin membership relative to the
+      saddle gives the sharp (non-probabilistic) regime assignment.
+\end{enumerate}
 
 \section{Results}
 \label{sec:results}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.72\linewidth]{figures/fig_data}
-  \caption{Example discharge. Top: emission proxy $\emiss(t)$; the shaded band
-  is the weakly labeled H segment and the dotted line the labeled transition
-  time. Middle: exogenous inputs in fixed physical scales. Bottom: weak
-  segment labels (L / transition / H; ``--'' marks the excluded formation and
-  termination phases).}
-  \label{fig:data}
-\end{figure}
-
-\paragraph{Identified normal form.} Trained on all 36 discharges (20\%
-held out for model selection), the identified latent parameters are
-$b = 1.00$, $\tau = \SI{23}{ms}$, and fold amplitude
-$\drive_{\mathrm{f}} = 0.386$. In physical units the drive map gives a
-forced-transition threshold ($\drive = +\drive_{\mathrm{f}}$) at
-$\approx \SI{2.7}{MW}$ of injected power at the corpus-typical current and
-density --- an interpretable, testable prediction of the identified model,
-not an imposed constant. The relaxation time $\tau$ matches the observed
-\SIrange{20}{40}{ms} rise of the transition, and the profile misfit in the
-supervised outer annulus is \SI{73}{eV} (29\% relative).
+\paragraph{Identified dynamics.} % numbers filled from evaluation
+The identified coefficients are $c_1 = \resCone$, $c_2 = \resCtwo$
+($\Delta = c_2^2 + 3 c_1$), $\tau = \resTau\,$ms, with fold drives
+$\drive_{\mathrm{f}}^{-} = \resFoldLow$, $\drive_{\mathrm{f}}^{+} =
+\resFoldHigh$ and an implied forced-transition power threshold of
+$\approx \resPthr$~MW at corpus-typical current and density.
+Figure~\ref{fig:bifurcation} shows the identified equilibrium manifold
+with an inferred trajectory overlaid; Figure~\ref{fig:fit} shows the
+profile fit and barrier trajectory for one discharge (annulus MAE
+\resMAE{} eV over the corpus).
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.6\linewidth]{figures/fig_bifurcation}
-  \caption{Identified cusp equilibrium manifold (solid: stable branches;
+  \caption{Identified normal-form equilibrium manifold (solid: stable;
   dashed: saddle) with the inferred trajectory
-  $\big(\drive(\ctrl(t)), \lat(t)\big)$ of one discharge overlaid, colored by
-  time. The state tracks the L branch, is carried past the fold
-  $\drive_{\mathrm{f}}$ by the rising drive, and jumps to the H branch ---
-  a saddle-node transition, not a fitted threshold.}
+  $(\drive(\ctrl(t)), \lat(t))$ of one discharge overlaid, colored by
+  time.}
   \label{fig:bifurcation}
 \end{figure}
 
-\paragraph{Quantitative regime assessment.} Scoring the calibrated
-probability $\pH(t)$ against the weak labels on clean L/H samples:
-over the 26 discharges containing a labeled H segment, the median per-shot
-AUC is $0.95$ (mean $0.85$ pooled over all 36), median accuracy $0.87$, and
-the median error between the model's first sustained $\pH = 0.5$ upcrossing
-and the labeled transition time is \SI{28}{ms} (mean \SI{45}{ms}).
-All 10 non-transitioning discharges --- including purely resistively heated
-ones --- are classified L throughout ($\pH$ never crosses $0.5$), which is
-the falsifiability test that proxy-following formulations fail by
-construction: here the latent is driven only by the actuators, yet it
-declines to invent transitions where none occur.
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.66\linewidth]{figures/fig_fit}
+  \caption{Measured (dots) and modeled (line) edge temperature at three
+  radii, and the inferred barrier coordinate $\pH(t)$, for one discharge.}
+  \label{fig:fit}
+\end{figure}
+
+\paragraph{Regime assessment.} Over the \nTrans{} discharges with a
+labeled H segment, the median per-discharge AUC is \resAUCmed{} (pooled
+mean \resAUCmean), median accuracy \resAccMed, median F1 \resFoneMed, and
+the median absolute transition-time error is \resTTmed{} ms
+(Fig.~\ref{fig:classification}). All \nNoTrans{} discharges without
+transitions --- including the beam-free ohmic ones --- are classified L
+throughout.
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.66\linewidth]{figures/fig_classification}
-  \caption{Regime probability $\pH(t)$ (blue) for four discharges; shaded
-  bands are the weakly labeled H segments. The probability rises through the
-  labeled transitions and remains near its branch value between them.}
+  \caption{Regime probability $\pH(t)$ for four discharges; shaded bands
+  are the labeled H segments.}
   \label{fig:classification}
 \end{figure}
 
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.68\linewidth]{figures/fig_margins}
-  \caption{Fold margins along the discharge of Fig.~\ref{fig:bifurcation}.
-  $\mu_{\mathrm{LH}} = \drive_{\mathrm{f}} - \drive(t)$ (blue) hits zero at
-  the observed transition --- the L branch is annihilated --- while
-  $\mu_{\mathrm{HL}} = \drive(t) + \drive_{\mathrm{f}}$ (orange) stays
-  positive until the drive is removed, after which the H branch is lost and
-  the state returns to L.}
+  \caption{Fold margins \eqref{eq:margins} along the discharge of
+  Fig.~\ref{fig:bifurcation} (shown when the identified dynamics are
+  bistable). $\mu_{\mathrm{LH}}$ reaching zero forces the L$\to$H
+  transition; $\mu_{\mathrm{HL}} > 0$ maintains the H state.}
   \label{fig:margins}
 \end{figure}
 
 \section{Discussion}
 \label{sec:discussion}
 
-The fold margins of Fig.~\ref{fig:margins} are the control-relevant output
-of the identification: $\mu_{\mathrm{LH}}(t)$ is the instantaneous distance
-(in drive units, hence convertible to watts) from a forced L$\to$H
-transition, and $\mu_{\mathrm{HL}}(t)$ the distance from losing the H state.
-A regulator that holds $\mu_{\mathrm{HL}}$ positive with a prescribed margin
-maintains the high-confinement regime with a quantified robustness budget;
-conversely, scheduling the drive through $+\drive_{\mathrm{f}}$ at a chosen
-time forces the transition deliberately. Because both quantities are
-closed-form functions of the identified parameters and the measured inputs,
-they are computable in real time.
+\paragraph{Toward real-time control.} Every model input is a causally
+available measurement in fixed units, the latent update \eqref{eq:nf} is
+a single scalar ODE step, and $\pH$ and the margins \eqref{eq:margins} are
+closed-form --- the regime assessor runs in microseconds per step,
+compatible with plasma-control-system rates. A regulator holding
+$\mu_{\mathrm{HL}}$ positive with a prescribed margin maintains
+high confinement with a quantified robustness budget; scheduling the drive
+through $\drive_{\mathrm{f}}^{+}$ forces the transition at a chosen time.
+If the identified dynamics are instead monostable, the same interface
+degrades gracefully: the threshold remains, only the memory (hysteresis)
+term disappears, and $\pH$ remains the calibrated regime estimate.
 
-Limitations. First, the segment labels are weak: they derive from the same
-emission proxy the observation head predicts (although they never enter the
-latent dynamics), transition windows are short, and dithering phases are
-labeled crudely; the classification ceiling is set by label quality.
-Second, the latent-feature normalization of the legacy designs and the
-per-shot standardization of the source-network inputs are non-causal
-(whole-shot statistics); the cusp drive itself uses fixed physical scales
-and is causal, but a fully real-time implementation must also make the
-auxiliary inputs causal. Third, a single scalar mode cannot represent
-oscillatory transition precursors (dithering limit cycles); an extension to
-a two-dimensional normal form with a Hopf sector is natural future work.
-Finally, the identified fold threshold is a property of this corpus
-(one machine, one current/density neighborhood); transfer across operating
-regimes requires letting $\drive(\ctrl)$ be nonlinear in the inputs, for
-which the affine map here is the first term.
+\paragraph{Limitations.} The segment labels are weak and derive from the
+same proxy the observation head predicts (though never from the latent's
+inputs); label quality caps the classification ceiling, and dithering
+phases are labeled crudely. The supervised region of the profile is a
+thin edge annulus, so core transport is unconstrained. A single scalar
+latent cannot represent oscillatory transition precursors (dithering limit
+cycles); a two-dimensional normal form with a Hopf sector is the natural
+extension. The identified threshold is a property of this corpus (one
+device, one current/density neighborhood); transfer requires a nonlinear
+drive map, for which the affine form is the first term. Finally, the
+range normalization of the supervision targets is per-discharge and hence
+acausal; this affects training only, not deployment, but a fully causal
+training pipeline would tighten the real-time claim.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}

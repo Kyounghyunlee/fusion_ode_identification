@@ -102,16 +102,19 @@ def fig_data_example(pack_path, out):
 
 
 def fig_bifurcation(bif, out):
-    """Identified cusp: equilibrium manifold vs drive, trajectory overlaid."""
-    b, a_fold = float(bif["b"]), float(bif["a_fold"])
-    a_grid = np.linspace(-1.9 * a_fold, 1.9 * a_fold, 601)
+    """Identified normal form: equilibrium manifold vs drive, trajectory overlaid."""
+    c1, c2 = float(bif["c1"]), float(bif["c2"])
+    a_fold_low, a_fold_high = float(bif["a_fold_low"]), float(bif["a_fold_high"])
+    a_t = bif["a_t"]
+    span = max(np.max(np.abs(a_t)), abs(a_fold_high) if np.isfinite(a_fold_high) else 0, 0.5)
+    a_grid = np.linspace(-1.4 * span, 1.4 * span, 601)
     stable_lo, stable_hi, unstable = [], [], []
     for a in a_grid:
-        roots = np.roots([-1.0, 0.0, b, a])
+        roots = np.roots([-1.0, c2, c1, a])
         real = np.sort(roots[np.abs(roots.imag) < 1e-9].real)
         if len(real) == 3:
             stable_lo.append((a, real[0])); unstable.append((a, real[1])); stable_hi.append((a, real[2]))
-        else:
+        elif len(real) >= 1:
             r = real[0]
             (stable_hi if r > 0 else stable_lo).append((a, r))
 
@@ -121,14 +124,11 @@ def fig_bifurcation(bif, out):
         if arr.size:
             ax.plot(arr[:, 0], arr[:, 1], ls, color=GRAY if ls == "--" else BLUE,
                     lw=1.1 if ls == "-" else 0.9, label=lbl)
-    ax.annotate("H", (0, np.sqrt(b)), textcoords="offset points", xytext=(-10, 4), color=BLUE)
-    ax.annotate("L", (0, -np.sqrt(b)), textcoords="offset points", xytext=(6, -10), color=BLUE)
-    for af in (+a_fold, -a_fold):
-        ax.axvline(af, color=LIGHT, lw=0.7)
-    ax.annotate(r"$a_{\mathrm{f}}$", (a_fold, ax.get_ylim()[0]), textcoords="offset points",
-                xytext=(3, 4), color=GRAY)
-    ax.annotate(r"$-a_{\mathrm{f}}$", (-a_fold, ax.get_ylim()[0]), textcoords="offset points",
-                xytext=(3, 4), color=GRAY)
+    if np.isfinite(a_fold_low) and np.isfinite(a_fold_high):
+        for af, lbl in ((a_fold_high, r"$a_{\mathrm{f}}^{+}$"), (a_fold_low, r"$a_{\mathrm{f}}^{-}$")):
+            ax.axvline(af, color=LIGHT, lw=0.7)
+            ax.annotate(lbl, (af, ax.get_ylim()[0]), textcoords="offset points",
+                        xytext=(3, 4), color=GRAY)
 
     # overlay identified trajectory (a(t), zeta(t)) colored by time
     a_t, z_t, ts = bif["a_t"], bif["z"], bif["ts"]
@@ -167,15 +167,94 @@ def fig_classification(eval_dir, shots, out):
 def fig_margins(bif, shot, out):
     """Fold margins along a discharge."""
     ts = bif["ts"]
-    a_t, a_fold = bif["a_t"], float(bif["a_fold"])
+    a_t = bif["a_t"]
+    a_fold_low, a_fold_high = float(bif["a_fold_low"]), float(bif["a_fold_high"])
+    if not (np.isfinite(a_fold_low) and np.isfinite(a_fold_high)):
+        return  # identified field is monostable: no fold margins to plot
     fig, ax = plt.subplots(figsize=(5.2, 2.2))
-    ax.plot(ts, a_fold - a_t, color=BLUE, label=r"$\mu_{\mathrm{LH}}$")
-    ax.plot(ts, a_t + a_fold, color=ORANGE, label=r"$\mu_{\mathrm{HL}}$")
+    ax.plot(ts, a_fold_high - a_t, color=BLUE, label=r"$\mu_{\mathrm{LH}}$")
+    ax.plot(ts, a_t - a_fold_low, color=ORANGE, label=r"$\mu_{\mathrm{HL}}$")
     ax.axhline(0.0, color=GRAY, lw=0.6, ls=":")
     _shade_regime(ax, ts, bif["regime_ts"])
     ax.set_xlabel(r"$t$ [s]")
     ax.set_ylabel("fold margin")
     ax.legend(frameon=False, ncol=2)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def fig_fit(eval_dir, shot, out):
+    """Measured vs modeled temperature at three radii + barrier trajectory."""
+    p = os.path.join(eval_dir, f"fit_shot_{shot}.npz")
+    if not os.path.exists(p):
+        return
+    d = np.load(p)
+    ts, rho, Tm, To, mask = d["ts"], d["rho"], d["Te_model"], d["Te_obs"], d["mask"]
+    # pick three best-covered interior radii spread across the annulus
+    cov = mask[:, :-1].mean(axis=0)
+    good = np.argsort(cov)[::-1][:12]
+    good = np.sort(good)
+    picks = [good[0], good[len(good) // 2], good[-1]] if len(good) >= 3 else list(good)
+
+    fig, axes = plt.subplots(len(picks) + 1, 1, figsize=(5.2, 1.15 * (len(picks) + 1)), sharex=True)
+    for ax, j in zip(axes[:-1], picks):
+        obs = np.where(mask[:, j] > 0.5, To[:, j], np.nan)
+        ax.plot(ts, obs, ".", color=ORANGE, ms=2.5, label="measured")
+        ax.plot(ts, Tm[:, j], color=BLUE, lw=1.0, label="model")
+        ax.set_ylabel(rf"$u(\rho={rho[j]:.2f})$")
+    axes[0].legend(frameon=False, ncol=2, loc="upper left")
+    axes[-1].plot(ts, d["z_barrier"], color=BLUE)
+    axes[-1].set_ylabel(r"$p_H$")
+    axes[-1].set_ylim(-0.05, 1.05)
+    axes[-1].set_xlabel(r"$t$ [s]")
+    fig.align_ylabels(axes)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def fig_chi(out, chi_core=0.6, chi_edge_base=2.0, chi_edge_drop=1.0, ped_center=0.85, ped_width=0.08):
+    """Transport-coefficient family chi(rho, p_H)."""
+    rho = np.linspace(0, 1, 400)
+    fig, ax = plt.subplots(figsize=(4.0, 2.6))
+    for pH, shade in ((0.0, 0.25), (0.5, 0.55), (1.0, 1.0)):
+        chi_edge = np.clip(chi_edge_base - chi_edge_drop * pH, 0.1, 5.0)
+        w = 1.0 / (1.0 + np.exp(-(rho - ped_center) / ped_width))
+        chi = chi_core + w * (chi_edge - chi_core)
+        ax.plot(rho, chi, color=BLUE, alpha=shade, label=rf"$p_H={pH:.1f}$")
+    ax.set_xlabel(r"$\rho$")
+    ax.set_ylabel(r"$\chi(\rho, \zeta)$")
+    ax.legend(frameon=False)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def fig_labeler(pack_path, out):
+    """Anatomy of the weak labels: proxy, lower envelope, threshold, segments."""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from preprocessing.build_training_pack import _rolling_quantile, _otsu_threshold, interp_fill_1d
+
+    d = np.load(pack_path, allow_pickle=True)
+    t, y, ip, ne = d["t"], d["D_alpha"].astype(float), d["Ip"], d["nebar"]
+    base = _rolling_quantile(interp_fill_1d(t, y), t, 0.015, 0.15)
+    gate = (np.abs(ip) > 0.6 * np.nanpercentile(np.abs(ip), 95)) & (ne > 0.2 * np.nanpercentile(ne, 95))
+    lo, hi = np.nanpercentile(base[gate], [1, 99])
+    norm = np.clip((base - lo) / (hi - lo), 0, 1)
+    thr = _otsu_threshold(norm[gate])
+    thr_abs = lo + thr * (hi - lo)
+
+    fig, ax = plt.subplots(figsize=(5.2, 2.4))
+    _shade_regime(ax, t, d["regime"])
+    ax.plot(t, y, lw=0.3, color=ORANGE, alpha=0.55, label=r"proxy $y(t)$")
+    ax.plot(t, base, lw=1.1, color=AQUA, label="lower envelope")
+    tg = np.where(gate, thr_abs, np.nan)
+    ax.plot(t, tg, lw=0.9, color=GRAY, ls="--", label="threshold (gated)")
+    tt = float(d["transition_time"])
+    if np.isfinite(tt):
+        ax.axvline(tt, color=GRAY, lw=0.6, ls=":")
+    ax.set_xlabel(r"$t$ [s]")
+    ax.set_ylabel(r"$y(t)$")
+    ax.legend(frameon=False, ncol=3, fontsize=7)
     fig.savefig(out)
     plt.close(fig)
 
@@ -220,6 +299,10 @@ def main():
         fig_margins(bif, example, os.path.join(FIGDIR, "fig_margins.pdf"))
     fig_classification(eval_dir, showcase[:4] if showcase else shots[:4],
                        os.path.join(FIGDIR, "fig_classification.pdf"))
+    fig_fit(eval_dir, example, os.path.join(FIGDIR, "fig_fit.pdf"))
+    fig_chi(os.path.join(FIGDIR, "fig_chi.pdf"))
+    fig_labeler(os.path.join(args.data_dir, f"{example}_torax_training.npz"),
+                os.path.join(FIGDIR, "fig_labeler.pdf"))
 
     report_path = os.path.join(eval_dir, "evaluation_report.json")
     if os.path.exists(report_path):
