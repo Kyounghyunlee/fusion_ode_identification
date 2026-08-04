@@ -85,7 +85,11 @@ def _sanitize_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
     return name
 
-from fusion_ode_identification.model import build_hybrid_model, build_latent_feature_series
+from fusion_ode_identification.model import (
+    build_cusp_drive_features,
+    build_hybrid_model,
+    build_latent_feature_series,
+)
 from fusion_ode_identification.data import load_data
 from fusion_ode_identification.types import ShotBundle, IMEXConfig
 from fusion_ode_identification.imex_solver import IMEXIntegrator
@@ -230,7 +234,12 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = bundle.ne_vals[:, -1]
-    latent_features_ts = build_latent_feature_series(bundle.ts_t, ctrl_norm_ts, bundle.dalpha_ts, bundle.Te_edge, ne_edge_ts) if model.uses_barrier_latent() else ctrl_norm_ts
+    if model.uses_barrier_latent():
+        latent_features_ts = build_latent_feature_series(bundle.ts_t, ctrl_norm_ts, bundle.dalpha_ts, bundle.Te_edge, ne_edge_ts)
+    elif model.uses_cusp_latent():
+        latent_features_ts = build_cusp_drive_features(ctrl_vals_ts)
+    else:
+        latent_features_ts = ctrl_norm_ts
 
     rho = bundle.rho
     Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
@@ -836,12 +845,8 @@ def main():
 
         bifurcation_summary = None
         ctrl_interp_diag = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
-        ctrl_norm_diag = jnp.clip(
-            (ctrl_interp_diag.evaluate(bundle.ts_t) - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6),
-            -10.0,
-            10.0,
-        )
-        bif = cusp_bifurcation_diagnostics(model.latent, np.asarray(ctrl_norm_diag), np.asarray(zs))
+        drive_features_diag = build_cusp_drive_features(ctrl_interp_diag.evaluate(bundle.ts_t))
+        bif = cusp_bifurcation_diagnostics(model.latent, np.asarray(drive_features_diag), np.asarray(zs))
         if bif is not None:
             bifurcation_summary = {
                 "b": bif["b"],

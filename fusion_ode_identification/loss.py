@@ -7,7 +7,12 @@ import jax.numpy as jnp
 from .types import LossCfg, ShotBundle, ShotEval, IMEXConfig
 from .imex_solver import IMEXIntegrator
 from .interp import LinearInterpolation
-from .model import build_latent_feature_series, normalize_observed_signal, smooth_clamp
+from .model import (
+    build_cusp_drive_features,
+    build_latent_feature_series,
+    normalize_observed_signal,
+    smooth_clamp,
+)
 
 
 def pseudo_huber(r, delta):
@@ -45,9 +50,12 @@ def _observation_weight_grid(mask_obs, time_mask=None, reliable_mask=None):
     return mask_use * col_weight[None, :]
 
 
-def _latent_feature_inputs(model, ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts):
+def _latent_feature_inputs(model, ts_t, ctrl_norm_ts, ctrl_vals_ts, dalpha_ts, Te_edge_ts, ne_edge_ts):
     if model.uses_barrier_latent():
         return build_latent_feature_series(ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts)
+    if model.uses_cusp_latent():
+        # The cusp drive needs cross-shot-consistent actuator values.
+        return build_cusp_drive_features(ctrl_vals_ts)
     return ctrl_norm_ts
 
 
@@ -83,7 +91,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
+    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, ctrl_vals_ts, dalpha_full, Te_edge_full, ne_edge_ts)
 
     # Precompute static geometry factors once per shot (used by diffusion operator).
     rho = bundle.rho_rom
@@ -308,7 +316,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
+    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, ctrl_vals_ts, dalpha_full, Te_edge_full, ne_edge_ts)
 
     rho = bundle.rho_rom
     Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)

@@ -26,6 +26,19 @@ def smooth_clamp(x, lo, hi, beta: float = 50.0):
 CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
 LATENT_FEATURE_SIZE = 6
 
+# Fixed physical scales for the cusp drive features (W, A, m^-3, a.u.).
+# The drive map must see the SAME value for the same actuator setting in
+# every shot, otherwise a shared fold threshold cannot exist; per-shot
+# z-scoring (used for the source NN) breaks that, so the cusp latent uses
+# globally scaled raw controls instead.
+CONTROL_SCALES = (1.0e6, 1.0e6, 1.0e19, 1.0)
+
+
+def build_cusp_drive_features(ctrl_vals_ts: jnp.ndarray) -> jnp.ndarray:
+    """Raw controls on the profile time base, in fixed physical units."""
+    scales = jnp.asarray(CONTROL_SCALES, dtype=jnp.float64)
+    return _as64(ctrl_vals_ts) / scales
+
 
 def _as64(x):
     return jnp.asarray(x, dtype=jnp.float64)
@@ -231,8 +244,13 @@ class CuspLatentDynamics(eqx.Module):
 
     def __init__(self, key):
         key_w, key_head = jax.random.split(key)
-        self.drive_weights = jax.random.normal(key_w, (self.N_DRIVE,), dtype=jnp.float64) * 0.05
-        self.drive_bias = jnp.array(0.0, dtype=jnp.float64)
+        # Features are physically scaled (P in MW, Ip in MA, ne in 1e19).
+        # Init so that an unheated flat-top sits below the fold (a ~ -0.5)
+        # and full beam power (~3 MW) reaches it: softplus(-1) * 3 ~ 0.9.
+        self.drive_weights = jnp.array([-1.0, 0.0, 0.0], dtype=jnp.float64) + (
+            jax.random.normal(key_w, (self.N_DRIVE,), dtype=jnp.float64) * 0.01
+        )
+        self.drive_bias = jnp.array(-0.5, dtype=jnp.float64)
         self.b_raw = jnp.array(0.55, dtype=jnp.float64)      # softplus -> b ~ 1.0
         self.tau_raw = jnp.array(-3.9, dtype=jnp.float64)    # softplus + 5e-3 -> tau ~ 25 ms
         self.regime_gain_raw = jnp.array(1.5, dtype=jnp.float64)
@@ -264,8 +282,20 @@ class CuspLatentDynamics(eqx.Module):
         return 2.0 * (b / 3.0) ** 1.5
 
     def drive(self, latent_features: jnp.ndarray) -> jnp.ndarray:
+        """Affine drive over physically scaled actuators (P, Ip, nebar).
+
+        Monotonicity prior: the drive is non-decreasing in injected power
+        (softplus on the power weight); the current and density weights are
+        unconstrained in sign.
+        """
         feat = _as64(latent_features)
-        raw = jnp.dot(self.drive_weights, feat[: self.N_DRIVE]) + self.drive_bias
+        w_power = jax.nn.softplus(self.drive_weights[0])
+        raw = (
+            w_power * feat[0]
+            + self.drive_weights[1] * feat[1]
+            + self.drive_weights[2] * feat[2]
+            + self.drive_bias
+        )
         return softclip(raw, 5.0)
 
     def __call__(self, z: float, latent_features: jnp.ndarray) -> float:
@@ -373,6 +403,9 @@ class HybridField(eqx.Module):
 
     def uses_barrier_latent(self) -> bool:
         return isinstance(self.latent, BarrierLatentDynamics)
+
+    def uses_cusp_latent(self) -> bool:
+        return isinstance(self.latent, CuspLatentDynamics)
 
     def barrier_coordinate(self, z):
         return self.latent.barrier_coordinate(z, latent_gain=self.latent_gain)
