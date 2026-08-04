@@ -660,6 +660,9 @@ def main():
     ap = argparse.ArgumentParser(description="Evaluate trained physics manifold model")
     ap.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     ap.add_argument("--model-id", default=None, help="Override model_id from config")
+    ap.add_argument("--role", default="val", choices=["train", "val", "test", "all"],
+                    help="Which grouped-split role to evaluate (data/split.json); 'test' is the locked set")
+    ap.add_argument("--no-plots", action="store_true", help="Skip per-shot plot generation")
     ap.add_argument("--data-check", action="store_true", help="Print mask coverage summary before eval")
     args = ap.parse_args()
 
@@ -717,6 +720,13 @@ def main():
     print("Loading Data...")
     stacked_bundles, rho_rom, _, _ = load_data(config)
     eval_bundles = build_eval_bundles(stacked_bundles)
+    split_path = config.get("data", {}).get("split", "data/split.json")
+    if args.role != "all" and os.path.exists(split_path):
+        with open(split_path) as f:
+            split_roles = json.load(f)
+        keep = set(split_roles[args.role])
+        eval_bundles = [b for b in eval_bundles if b.shot_id in keep]
+        print(f"[eval] role={args.role}: {len(eval_bundles)} shots")
     if args.data_check:
         cov_stats = summarize_data(eval_bundles)
         print("Mask coverage (mean over grid) and shapes:")
@@ -923,6 +933,8 @@ def main():
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
         rho_vals = np.array(bundle.rho)
+        if args.no_plots:
+            continue
         plot_results(
             bundle.ts_t,
             rho_vals,
@@ -972,7 +984,7 @@ def main():
     }
     
     # Save Report
-    with open(os.path.join(eval_dir, "evaluation_report.json"), "w") as f:
+    with open(os.path.join(eval_dir, f"evaluation_report_{args.role}.json"), "w") as f:
         json.dump(report, f, indent=2)
         
     print(f"Evaluation complete. Results saved to {eval_dir}")

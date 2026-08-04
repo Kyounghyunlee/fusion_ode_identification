@@ -164,3 +164,86 @@ def normal_form_diagnostics(
         "basin": basin,
         "bistable_fraction": float(np.mean((a_t > a_fold_low) & (a_t < a_fold_high))) if bistable else 0.0,
     }
+
+
+def _label_events(ts, regime_ts):
+    """Label switch times: list of (time, +1 for L->H, -1 for H->L).
+
+    Works on the 1/2/3 label code; transition windows (2) are bridged by
+    looking at the nearest clean labels on each side.
+    """
+    reg = np.asarray(regime_ts)
+    clean = np.where((reg > 0.5) & (reg < 1.5), 1, np.where((reg > 2.5) & (reg < 3.5), 3, 0))
+    idx = np.where(clean > 0)[0]
+    events = []
+    for a, b in zip(idx[:-1], idx[1:]):
+        if clean[a] == 1 and clean[b] == 3:
+            events.append((float(0.5 * (ts[a] + ts[b])), +1))
+        elif clean[a] == 3 and clean[b] == 1:
+            events.append((float(0.5 * (ts[a] + ts[b])), -1))
+    return events
+
+
+def _model_events(ts, regime_logits, dwell_n=5):
+    """Sustained p_H = 0.5 crossings, both directions."""
+    p = _sigmoid(np.asarray(regime_logits))
+    above = p > 0.5
+    events = []
+    for i in range(1, len(above)):
+        if above[i] != above[i - 1]:
+            j = min(len(above), i + dwell_n)
+            if np.all(above[i:j] == above[i]):
+                events.append((float(ts[i]), +1 if above[i] else -1))
+    return events
+
+
+def event_metrics(ts, regime_logits, regime_ts, tol_s=0.04, dwell_n=5):
+    """One-to-one event matching within a tolerance window.
+
+    Returns per-direction true/false positives, misses, and signed timing
+    errors of the matched pairs.
+    """
+    lab = _label_events(ts, regime_ts)
+    mod = _model_events(ts, regime_logits, dwell_n=dwell_n)
+    out = {}
+    for direction, tag in ((+1, "LH"), (-1, "HL")):
+        L = [t for t, d in lab if d == direction]
+        M = [t for t, d in mod if d == direction]
+        used = set()
+        matches = []
+        for tl in L:
+            best, best_j = None, None
+            for j, tm in enumerate(M):
+                if j in used or abs(tm - tl) > tol_s:
+                    continue
+                if best is None or abs(tm - tl) < abs(best - tl):
+                    best, best_j = tm, j
+            if best is not None:
+                used.add(best_j)
+                matches.append(best - tl)
+        out[tag] = {
+            "n_label": len(L),
+            "n_model": len(M),
+            "n_matched": len(matches),
+            "misses": len(L) - len(matches),
+            "false_alarms": len(M) - len(matches),
+            "timing_errors_s": matches,
+        }
+    return out
+
+
+def reliability_curve(p, y, n_bins=10):
+    """Reliability diagram data + expected calibration error."""
+    p = np.asarray(p)
+    y = np.asarray(y)
+    edges = np.linspace(0, 1, n_bins + 1)
+    rows = []
+    ece = 0.0
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        m = (p >= lo) & (p < hi) if hi < 1 else (p >= lo) & (p <= hi)
+        if m.sum() == 0:
+            continue
+        conf, acc = float(p[m].mean()), float(y[m].mean())
+        rows.append({"bin_lo": float(lo), "bin_hi": float(hi), "confidence": conf, "frequency": acc, "n": int(m.sum())})
+        ece += m.mean() * abs(conf - acc)
+    return {"bins": rows, "ece": float(ece)}
