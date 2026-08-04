@@ -6,7 +6,7 @@ paper/figures/. Neutral dynamical-systems presentation: the emission proxy is
 y(t), the latent is zeta, regimes are L/H.
 
 Usage:
-    python paper/scripts/make_figures.py --model-id cusp_run_v1 [--shot 27574]
+    python paper/scripts/make_figures.py --model-id nf_run_v1 [--shot 27574]
 """
 
 import argparse
@@ -259,7 +259,7 @@ def fig_labeler(pack_path, out):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model-id", default="cusp_run_v1")
+    ap.add_argument("--model-id", default="nf_run_v1")
     ap.add_argument("--shot", type=int, default=None, help="example shot for data/bifurcation figures")
     ap.add_argument("--data-dir", default="data")
     args = ap.parse_args()
