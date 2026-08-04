@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import shutil
@@ -53,6 +54,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config/config.yaml")
     ap.add_argument("--total-steps", type=int, default=None, help="Override training.total_steps")
+    ap.add_argument("--seed", type=int, default=None, help="Override training.seed")
+    ap.add_argument("--model-id", type=str, default=None, help="Override output.model_id")
+    ap.add_argument("--override", action="append", default=[], metavar="KEY=VAL",
+                    help="Dot-path config override, e.g. model.beta_mode=nonpositive")
     ap.add_argument("--resume_ckpt", type=str, default=None)
     ap.add_argument("--resume_step_offset", type=int, default=0)
     args = ap.parse_args()
@@ -64,6 +69,21 @@ def main():
     tr = config["training"]
     if args.total_steps is not None:
         tr["total_steps"] = int(args.total_steps)
+    if args.seed is not None:
+        tr["seed"] = int(args.seed)
+    if args.model_id is not None:
+        config.setdefault("output", {})["model_id"] = args.model_id
+    for ov in args.override:
+        key, _, val = ov.partition("=")
+        node = config
+        parts = key.split(".")
+        for k in parts[:-1]:
+            node = node.setdefault(k, {})
+        try:
+            node[parts[-1]] = yaml.safe_load(val)
+        except Exception:
+            node[parts[-1]] = val
+        logging.info(f"[override] {key} = {node[parts[-1]]}")
 
     model_id = config["output"].get("model_id", "default_run")
     model_dir = os.path.join(config["output"]["save_dir"], model_id)
@@ -77,8 +97,9 @@ def main():
     logging.info(f"Device: {device} (platform={device.platform})")
 
     logging.info("Loading data ...")
-    all_bundles, rho_rom, shot_ids, _ = load_data(config)
+    all_bundles, rho_rom, _, _ = load_data(config)
     n_shots = int(all_bundles.ts_t.shape[0])
+    shot_ids = [int(x) for x in np.asarray(all_bundles.shot_id)]
     logging.info(f"Loaded {n_shots} shots: {shot_ids}")
 
     key = jax.random.PRNGKey(int(tr.get("seed", 0)))
@@ -120,16 +141,25 @@ def main():
         substeps=int(imx.get("substeps", 5)),
     )
 
-    # Train/validation split (seeded, ~20% validation, >= 2 shots).
+    # Grouped session split (data/split.json). The locked TEST sessions are
+    # excluded from training and checkpoint selection entirely.
     rng = np.random.default_rng(int(tr.get("seed", 0)))
-    all_idx = rng.permutation(n_shots)
-    if n_shots < 3:
-        train_idx = val_idx = all_idx
+    split_path = config.get("data", {}).get("split", "data/split.json")
+    sid_arr = np.asarray(shot_ids).astype(int)
+    if os.path.exists(split_path):
+        with open(split_path) as f:
+            split = json.load(f)
+        train_idx = np.array([i for i, s in enumerate(sid_arr) if s in set(split["train"])])
+        val_idx = np.array([i for i, s in enumerate(sid_arr) if s in set(split["val"])])
+        logging.info(f"Grouped split from {split_path}: {train_idx.size} train / {val_idx.size} val "
+                     f"({len(split['test'])} locked-test shots excluded)")
     else:
+        all_idx = rng.permutation(n_shots)
         n_val = min(max(2, int(0.2 * n_shots)), n_shots - 1)
         val_idx, train_idx = all_idx[:n_val], all_idx[n_val:]
+        logging.warning("No data/split.json; falling back to random shot split.")
     batch_size = min(int(tr.get("batch_size", 8)), train_idx.size)
-    logging.info(f"Split: {train_idx.size} train / {val_idx.size} val; batch_size={batch_size}")
+    logging.info(f"batch_size={batch_size}")
 
     @eqx.filter_jit
     def train_step(params, opt_state, batch):
@@ -177,6 +207,13 @@ def main():
 
     best_val = float("inf")
     best_val_ema = float("inf")
+    best_step = -1
+    # Early stopping: halt after `patience` evaluations without a relative
+    # improvement of at least `min_delta` in the validation loss.
+    patience = int(tr.get("early_stop_patience", 8))
+    min_delta = float(tr.get("early_stop_min_delta", 1e-3))
+    evals_since_improve = 0
+    stopped_early = False
     t_loop = time.time()
     for step in range(total_steps):
         batch_idx = rng.choice(train_idx, batch_size, replace=False)
@@ -198,8 +235,13 @@ def main():
             if bool(grad_bad):
                 msg += " [non-finite grads: update skipped]"
             logging.info(msg)
+            if val_loss < best_val * (1.0 - min_delta) and float(val_ok) == 1.0:
+                evals_since_improve = 0
+            else:
+                evals_since_improve += 1
             if val_loss < best_val and float(val_ok) == 1.0:
                 best_val = val_loss
+                best_step = step + step_offset
                 eqx.tree_serialise_leaves(best_path, eqx.combine(params, static))
                 logging.info(f"New best (val) saved: {best_path} val_loss={val_loss:.4f} step={step + step_offset}")
             if ema_params is not None:
@@ -211,8 +253,31 @@ def main():
                     logging.info(
                         f"New best (val, EMA) saved: {best_ema_path} val_loss={val_loss_ema:.4f} step={step + step_offset}"
                     )
+            if evals_since_improve >= patience:
+                stopped_early = True
+                logging.info(
+                    f"[early-stop] no val improvement for {patience} evaluations "
+                    f"({patience * log_every} steps); stopping at step {step + step_offset}."
+                )
+                break
 
-    logging.info(f"Training complete. best_val={best_val:.4f} best_val_ema={best_val_ema:.4f}")
+    wall = time.time() - t_loop
+    logging.info(f"Training complete. best_val={best_val:.4f} (step {best_step}) "
+                 f"best_val_ema={best_val_ema:.4f} steps_run={step + 1} early_stop={stopped_early} wall={wall:.0f}s")
+    summary = {
+        "model_id": model_id,
+        "seed": int(tr.get("seed", 0)),
+        "best_val": best_val,
+        "best_step": best_step,
+        "steps_run": int(step + 1),
+        "early_stopped": stopped_early,
+        "wall_seconds": wall,
+        "train_shots": sorted(int(sid_arr[i]) for i in train_idx),
+        "val_shots": sorted(int(sid_arr[i]) for i in val_idx),
+        "config_overrides": args.override,
+    }
+    with open(os.path.join(model_dir, "train_summary.json"), "w") as f:
+        json.dump(summary, f, indent=1)
 
 
 if __name__ == "__main__":

@@ -840,8 +840,7 @@ def main():
         bif = normal_form_diagnostics(model.latent, np.asarray(drive_features_diag), np.asarray(zs))
         if bif is not None:
             bifurcation_summary = {
-                "c1": bif["c1"],
-                "c2": bif["c2"],
+                "beta": bif["beta"],
                 "tau_s": bif["tau"],
                 "bistable": bool(bif["bistable"]),
                 "a_fold_low": bif["a_fold_low"],

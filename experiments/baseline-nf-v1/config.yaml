@@ -1,0 +1,53 @@
+data:
+  data_dir: "data"
+  shots: "all"
+  rho_grid_mode: "uniform"
+  edge_bc_mode: "use_last_observed"
+
+training:
+  optimizer: "adamw"
+  learning_rate: 2.0e-4
+  weight_decay: 3.0e-5
+
+  warmup_steps: 5
+  # Validation loss saturates well before 2000 steps on this corpus
+  # (best raw checkpoint near step 900 in the 6000-step reference run).
+  total_steps: 2000
+  # Batch 8 is the practical ceiling: XLA-GPU core-dumps compiling the
+  # gradient for batch >= 10 on this stack, and at batch 8 the 14-core CPU
+  # and the RTX 5080 are tied (~2 s/step, float64). CPU is the robust choice.
+  batch_size: 8
+  grad_clip: 1.0e3
+  log_every: 50
+
+  huber_delta: 10.0
+  lambda_src: 1.0e-4
+  src_delta: 10.0
+  lambda_z: 1.0e-4
+  lambda_zreg: 1.0e-5
+  # The profile misfit sits at O(700) in these units; the weights below keep
+  # the regime and observation terms at a few percent of the total, which is
+  # required for the 14-parameter latent to receive usable gradient.
+  lambda_regime: 20.0
+  lambda_dalpha: 20.0
+  lambda_pH: 0.0
+
+  imex:
+    theta: 0.7
+    substeps: 5
+    max_steps: 50000
+
+  ema_decay: 0.999
+
+output:
+  model_id: "nf_run_v1"
+  save_dir: "models"
+  log_dir: "logs"
+  model_name: "normal_form_model"
+  # Short schedules: the raw best checkpoint beats the lagging EMA.
+  checkpoint_preference: "best,best_ema"
+
+model:
+  layers: 128
+  depth: 4
+  source_scale: 3.0e5

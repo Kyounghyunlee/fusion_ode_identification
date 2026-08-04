@@ -9,6 +9,12 @@ from .imex_solver import IMEXIntegrator
 from .interp import LinearInterpolation
 from .model import normalize_observed_signal, smooth_clamp
 
+# Fixed robust scales for loss normalization (training-corpus magnitudes,
+# frozen; see paper Sec. identification). Losses are averages of O(1)
+# quantities so task weights are interpretable.
+S_TE = 100.0   # eV
+S_SRC = 1.0e4  # eV/s
+
 
 def pseudo_huber(r, delta):
     delta = jnp.asarray(delta, dtype=jnp.float64)
@@ -90,14 +96,16 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     dr = jnp.diff(rho)
     dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
     Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
-    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    denom_raw = Vprime_cell * dr
+    from .imex_solver import cell_volumes
+    denom_raw = cell_volumes(rho, Vprime, dr)
     denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
     denom = jnp.maximum(denom_raw, denom_floor)
-    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_face, denom)
 
-    z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
-    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
+    # Causal initialization: lowest equilibrium of the latent vector field
+    # at the initial drive (gated discharges start in state L).
+    z0 = model.latent.initial_state(latent_features_ts[0])
+    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.atleast_1d(z0)])
 
     t0 = ts_t_full[0]
     t1 = ts_t_full[-1]
@@ -182,7 +190,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / wsum
 
         huber_delta = loss_cfg.huber_delta
-        obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / wsum
+        obs_loss = jnp.sum(weight_grid * pseudo_huber(resid / S_TE, huber_delta)) / wsum
 
         S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
             Te_model,
@@ -194,7 +202,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         src_delta = loss_cfg.src_delta
 
         src_wsum = (jnp.sum(tm) * S_nn_vals.shape[1]) + 1e-8
-        src_penalty = lambda_src * jnp.sum(tm2 * pseudo_huber(S_nn_vals, src_delta)) / src_wsum
+        src_penalty = lambda_src * jnp.sum(tm2 * pseudo_huber(S_nn_vals / S_SRC, src_delta)) / src_wsum
 
         # Physics diagnostics: mean magnitudes (time-masked for padded arrays)
         div_vals = jax.vmap(lambda Te_row, zi: model.compute_divergence_from_values(bundle.rho_rom, bundle.Vprime_rom, Te_row, zi))(
@@ -314,14 +322,16 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     dr = jnp.diff(rho)
     dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
     Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
-    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    denom_raw = Vprime_cell * dr
+    from .imex_solver import cell_volumes
+    denom_raw = cell_volumes(rho, Vprime, dr)
     denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
     denom = jnp.maximum(denom_raw, denom_floor)
-    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_face, denom)
 
-    z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
-    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
+    # Causal initialization: lowest equilibrium of the latent vector field
+    # at the initial drive (gated discharges start in state L).
+    z0 = model.latent.initial_state(latent_features_ts[0])
+    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.atleast_1d(z0)])
 
     t0 = ts_t_full[0]
     t1 = ts_t_full[-1]
@@ -386,7 +396,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / (jnp.sum(weight_grid) + 1e-8)
 
     huber_delta = loss_cfg.huber_delta
-    obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / (jnp.sum(weight_grid) + 1e-8)
+    obs_loss = jnp.sum(weight_grid * pseudo_huber(resid / S_TE, huber_delta)) / (jnp.sum(weight_grid) + 1e-8)
 
     S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
         Te_model,
@@ -396,7 +406,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     )
     lambda_src = loss_cfg.lambda_src
     src_delta = loss_cfg.src_delta
-    src_penalty = lambda_src * jnp.sum(pseudo_huber(S_nn_vals, src_delta)) / (S_nn_vals.size + 1e-8)
+    src_penalty = lambda_src * jnp.sum(pseudo_huber(S_nn_vals / S_SRC, src_delta)) / (S_nn_vals.size + 1e-8)
 
     z_reg = loss_cfg.lambda_zreg * jnp.mean(zs**2)
     dz = zs[1:] - zs[:-1]

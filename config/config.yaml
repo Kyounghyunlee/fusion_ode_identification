@@ -3,33 +3,34 @@ data:
   shots: "all"
   rho_grid_mode: "uniform"
   edge_bc_mode: "use_last_observed"
+  split: "data/split.json"   # grouped session split; test sessions locked
 
 training:
+  seed: 0
   optimizer: "adamw"
   learning_rate: 2.0e-4
   weight_decay: 3.0e-5
 
   warmup_steps: 5
-  # Validation loss saturates well before 2000 steps on this corpus
-  # (best raw checkpoint near step 900 in the 6000-step reference run).
-  total_steps: 2000
-  # Batch 8 is the practical ceiling: XLA-GPU core-dumps compiling the
-  # gradient for batch >= 10 on this stack, and at batch 8 the 14-core CPU
-  # and the RTX 5080 are tied (~2 s/step, float64). CPU is the robust choice.
+  # Ceiling only; early stopping (below) halts on validation plateau.
+  total_steps: 3000
   batch_size: 8
   grad_clip: 1.0e3
   log_every: 50
+  # Stop after `patience` evaluations without >= min_delta relative
+  # improvement of the validation loss.
+  early_stop_patience: 8
+  early_stop_min_delta: 1.0e-3
 
-  huber_delta: 10.0
-  lambda_src: 1.0e-4
-  src_delta: 10.0
-  lambda_z: 1.0e-4
-  lambda_zreg: 1.0e-5
-  # The profile misfit sits at O(700) in these units; the weights below keep
-  # the regime and observation terms at a few percent of the total, which is
-  # required for the 14-parameter latent to receive usable gradient.
-  lambda_regime: 20.0
-  lambda_dalpha: 20.0
+  # Losses are normalized to O(1) per task (see loss.py: S_TE=100 eV,
+  # S_SRC=1e4 eV/s), so these weights are interpretable ratios.
+  huber_delta: 1.0
+  lambda_src: 0.1
+  src_delta: 1.0
+  lambda_z: 1.0e-3
+  lambda_zreg: 1.0e-3
+  lambda_regime: 0.5
+  lambda_dalpha: 2.0
   lambda_pH: 0.0
 
   imex:
@@ -40,10 +41,10 @@ training:
   ema_decay: 0.999
 
 output:
-  model_id: "nf_run_v1"
+  model_id: "v2_free_s0"
   save_dir: "models"
   log_dir: "logs"
-  model_name: "normal_form_model"
+  model_name: "model"
   # Short schedules: the raw best checkpoint beats the lagging EMA.
   checkpoint_preference: "best,best_ema"
 
@@ -51,3 +52,6 @@ model:
   layers: 128
   depth: 4
   source_scale: 3.0e5
+  beta_mode: "free"        # "free" | "nonpositive" (constrained monostable)
+  delta_chi_off: false     # ablation: no regime coupling in chi
+  source_off: false        # ablation: no residual source

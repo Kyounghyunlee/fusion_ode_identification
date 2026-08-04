@@ -116,22 +116,20 @@ def normal_form_diagnostics(
     are reported as NaN. Whether the data selects a bistable field is an
     RESULT of identification, not an assumption.
     """
-    if not hasattr(latent, "c1"):
+    if not hasattr(latent, "beta_raw"):
         return None
     import jax
     import jax.numpy as jnp
 
     feats = jnp.asarray(latent_features_ts)
     a_t = np.asarray(jax.vmap(latent.drive)(feats))
-    c1 = float(latent.c1)
-    c2 = float(latent.c2)
+    beta = float(latent.beta())
+    c1, c2 = beta, 0.0  # depressed cubic
     tau = float(latent.tau_eff())
 
-    disc = c2 * c2 + 3.0 * c1
-    if disc > 0:
-        z_crit = np.array([(c2 - np.sqrt(disc)) / 3.0, (c2 + np.sqrt(disc)) / 3.0])
-        g = z_crit**3 - c2 * z_crit**2 - c1 * z_crit
-        a_fold_low, a_fold_high = float(np.min(g)), float(np.max(g))
+    if beta > 0:
+        a_fold_high = 2.0 * (beta / 3.0) ** 1.5
+        a_fold_low = -a_fold_high
         bistable = True
     else:
         a_fold_low = a_fold_high = float("nan")
@@ -152,6 +150,7 @@ def normal_form_diagnostics(
 
     return {
         "a_t": a_t,
+        "beta": beta,
         "c1": c1,
         "c2": c2,
         "tau": tau,
