@@ -52,3 +52,15 @@ kappa, delta), all causal and in fixed physical units.
 Corpus rebuilt: 107 packs. Split regenerated and re-locked (60/17/30).
 All EXP-001 runs discarded (different corpus/split); EXP-002 retrains the full
 comparison grid on one footing.
+
+## EXP-002 (2026-08-05) - drive set x topology x seed, 107 packs, locked split
+First completed run e_ext_free_s0 (extended drive, free beta):
+  best_val 1.0790 @1850 (early stop @2651)
+  val: median AUC 0.752 [0.53, 0.95], F1(cal) 0.72, Brier 0.199, ECE 0.138->0.095
+  events: L->H recall 0.33, precision 0.43, |timing| median 30 ms
+          H->L recall 0.00 (back-transitions not captured - limitation)
+  latent: median z swing 1.81 (branch separation ~1.1); 100% of shots reach the
+          H basin (basic drive: 0.32 swing, ~30% of shots) - the covariate
+          diagnosis from EXP-001 is confirmed by the intervention it motivated.
+Remaining grid in flight: e_bas_free_s{0,1,2} (controlled comparison on the
+same corpus), e_ext_mono_s{0,1,2}, then ablations on extended/free.
