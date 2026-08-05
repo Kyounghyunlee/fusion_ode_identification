@@ -240,9 +240,22 @@ def write_results_tex(runs, primary, role, split, audit, out="paper/results.tex"
         "resAUCmono": fmt(np.median([runs[m]["analysis"]["aggregate"]["median_auc"] for m in mono]), 2) if mono else "--",
         "resValFree": fmt(np.median([runs[m]["train"].get("best_val", np.nan) for m in free]), 3) if free else "--",
         "resValMono": fmt(np.median([runs[m]["train"].get("best_val", np.nan) for m in mono]), 3) if mono else "--",
+        "resMAE": "--",
+        "resPbetaPos": "--",
         "resRole": role,
         "resPrimary": primary.replace("_", r"\_"),
     }
+    rep_p = f"logs/{primary}/evaluation/evaluation_report_{role}.json"
+    if os.path.exists(rep_p):
+        om = json.load(open(rep_p)).get("overall_metrics", {})
+        if "annulus_mean_mae_eV" in om:
+            v["resMAE"] = f"\\SI{{{om['annulus_mean_mae_eV']:.0f}}}{{eV}}"
+    unc_p = "experiments/uncertainty.json"
+    if os.path.exists(unc_p):
+        lap = json.load(open(unc_p)).get("models", {}).get(primary, {}).get("laplace", {})
+        if "P(beta>0)_laplace" in lap:
+            v["resPbetaPos"] = f"{lap['P(beta>0)_laplace']:.2f}"
+            v["resBetaSE"] = f"{lap['beta_se']:.2f}"
     try:
         import equinox as eqx, jax, yaml
         jax.config.update("jax_enable_x64", True)
