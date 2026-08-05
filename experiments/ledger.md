@@ -167,3 +167,28 @@ directions on different endpoints - which is precisely what "the evidence does
 not decide" looks like when measured on multiple endpoints instead of one.
 The free fit does return beta > 0 reproducibly (+0.303/+0.296/+0.295), but that
 is a property of the fitted parameter set, not evidence that folds are required.
+
+## EXP-003 ABLATIONS (extended drive, seed 0, corrected geometry)
+config                 val      AUC    Brier   LH    MAE
+full (ext free)        0.4063   0.916  0.081   0.40  39 eV
+delta_chi = 0          0.4059   0.925  0.084   0.43  38 eV
+no residual source     0.5572   0.926  0.080   0.50  58 eV
+no D-alpha obs loss    0.3224*  0.925  0.085   0.43  39 eV   (*loss omits a term)
+KEY NEGATIVE RESULT: switching off the regime->transport coupling
+(delta_chi = 0) changes nothing measurable - val loss, profile error, AUC and
+event recall are all within noise of the full model. The mechanism the model
+was built around (regime state suppresses edge diffusivity, pedestal forms)
+is NOT identifiable from these data. Profile accuracy is carried by the
+residual source (removing it costs 39 -> 58 eV); regime identification is
+carried by the weak-label supervision (removing the D-alpha observation loss
+costs nothing). The two halves are effectively decoupled: the model behaves
+as two parallel sub-models sharing an optimiser, not as a coupled gray-box.
+LIKELY CAUSE, to be tested: the measured edge Dirichlet trace is supplied as
+an input, and supervision covers only rho ~ 0.73-1.0, so most of the profile
+variation in the scored region is already prescribed by the boundary
+condition, leaving little variance for chi modulation to explain.
+CONSEQUENCE for the paper: the interpretability claim must be withdrawn. The
+honest statement is that the regime coordinate is identified from actuators
+plus weak labels, and that its physical coupling to transport is not
+resolved by this dataset. The observation head (145 params) is also
+redundant and should be dropped for simplicity.
