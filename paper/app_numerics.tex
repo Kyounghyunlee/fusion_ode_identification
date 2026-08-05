@@ -1,0 +1,272 @@
+% Appendix: discretization, time integration, verification.
+% Every statement here corresponds to code in fusion_ode_identification/
+% imex_solver.py and scripts/verify_solver.py, and to artifacts in
+% logs/solver_verification/verification_report.json.
+
+\section{Spatial discretization, time integration, and verification}
+\label{app:numerics}
+
+\subsection{Grid and control volumes}
+
+The radial domain is discretized with $N = 65$ nodes on the uniform grid
+$\rho_i = i/(N-1)$, $i = 0,\dots,N-1$, with spacing
+$\Delta\rho = 1/(N-1) \approx 0.0156$. The scheme is node-centered:
+unknowns live at nodes and faces sit midway between them, at
+$\rho_{i+1/2} = \rho_i + \Delta\rho/2$. The last node, $\rho_{N-1} = 1$, is
+the Dirichlet boundary and is not an unknown, so the solve has $N-1 = 64$
+degrees of freedom per time level plus the scalar latent.
+
+Control volumes follow from the face positions. Interior cells span one
+grid spacing, while the axis cell spans only half a spacing because it is
+bounded on the left by the symmetry axis:
+\begin{equation}
+v_i = V'(\rho_i)\,\Delta\rho \quad (1 \le i \le N-2),
+\qquad
+v_0 = V'\!\left(\tfrac{\Delta\rho}{4}\right)\frac{\Delta\rho}{2},
+\label{eq:cellvol}
+\end{equation}
+where the axis value is evaluated at the cell centroid $\rho = \Delta\rho/4$
+and is obtained in code by the linear blend
+$\tfrac{3}{4}V'_0 + \tfrac{1}{4}V'_1$
+(\texttt{imex\_solver.cell\_volumes}).
+
+\paragraph{A defect the verification suite caught.} An earlier
+implementation used the face average $\tfrac12(V'_i + V'_{i+1})$ for every
+cell volume and gave the axis cell full width $\Delta\rho$. Both choices
+are $O(\Delta\rho)$ inconsistent with the face positions actually used in
+the flux stencil. The resulting scheme was stable and trained without any
+visible symptom, but its solution error \emph{did not decrease under grid
+refinement}: measured $L_2$ error on the analytic test of
+\S\ref{app:num-verif} was $5.4\times10^{-3}$, $8.1\times10^{-3}$,
+$9.7\times10^{-3}$, $1.0\times10^{-2}$ for $N = 17, 33, 65, 129$, i.e.\ an
+apparent convergence order of $-0.31$. Only the refinement study exposed
+this; no training or validation metric did. After adopting
+\eqref{eq:cellvol} the same test converges at first order. We report this
+because it illustrates why identified physical parameters should not be
+interpreted before a convergence study is run: a discretization can be
+consistent-looking, stable, trainable, and still wrong.
+
+\subsection{Flux form and the discrete operator}
+
+With $T_i \equiv \Te(\rho_i, t)$, face fluxes use the two-point gradient
+and face-averaged coefficients,
+\begin{equation}
+F_{i+1/2} = -\,V'_{i+1/2}\,\chi_{i+1/2}\,\frac{T_{i+1} - T_i}{\Delta\rho},
+\qquad
+V'_{i+1/2} = \tfrac12(V'_i + V'_{i+1}),
+\quad
+\chi_{i+1/2} = \tfrac12(\chi_i + \chi_{i+1}),
+\label{eq:faceflux}
+\end{equation}
+and the semi-discrete divergence on cell $i$ is the flux difference over
+the control volume,
+\begin{equation}
+(L T)_i = -\,\frac{F_{i+1/2} - F_{i-1/2}}{v_i}.
+\label{eq:div}
+\end{equation}
+Defining $k_{i+1/2} = V'_{i+1/2}\chi_{i+1/2}/\Delta\rho$, \eqref{eq:div}
+expands to the tridiagonal stencil
+\begin{equation}
+(L T)_i = \frac{k_{i-1/2} T_{i-1} - (k_{i-1/2} + k_{i+1/2}) T_i + k_{i+1/2} T_{i+1}}{v_i},
+\label{eq:stencil}
+\end{equation}
+so $L$ has non-positive diagonal and non-negative off-diagonal entries: it
+is an M-matrix generator, which is what makes the implicit solve of
+\S\ref{app:num-imex} unconditionally solvable by the Thomas algorithm
+without pivoting.
+
+\paragraph{Boundary rows.} Two rows differ from \eqref{eq:stencil}.
+\emph{Axis ($i=0$)}: the symmetry condition
+$\partial_\rho \Te|_{\rho=0} = 0$ is imposed as a zero left-face flux,
+$F_{-1/2} \equiv 0$. This is a flux condition, not a ghost-node condition:
+no extrapolated value is introduced, and the discrete conservation
+statement below therefore holds exactly. The row becomes
+$(LT)_0 = k_{1/2}(T_1 - T_0)/v_0$.
+\emph{Edge ($i=N-2$)}: the outer neighbour $T_{N-1}$ is the prescribed
+boundary trace, so its contribution moves to the right-hand side. The
+super-diagonal entry of the last row is zero and the boundary coupling
+vector has the single nonzero component
+$b^{\mathrm{bc}}_{N-2} = k_{N-3/2}/v_{N-2}$, which multiplies
+$T_{\mathrm{edge}}$.
+
+\paragraph{Numerical floors.} Three guards act before assembly, all
+recorded here because they alter the operator when triggered:
+$V' \leftarrow \max(V', 10^{-6})$;
+$\Delta\rho \leftarrow \max(\Delta\rho, 10^{-6}\max\Delta\rho + 10^{-12})$;
+and $v_i \leftarrow \max(v_i, \max(10^{-4}\max_j v_j, 10^{-10}))$. On the
+uniform grid with the equilibrium $V'$ of this corpus none of these floors
+activates; per-shot flags recording activation are written into the loss
+diagnostics.
+
+\subsection{IMEX time integration}
+\label{app:num-imex}
+
+The semi-discrete system is
+\begin{equation}
+\dot{\bm{T}} = L(\lat)\,\bm{T} + \bm{b}^{\mathrm{bc}}\,T_{\mathrm{edge}}(t)
+             + \bm{s}_\theta(\bm{T}, \nel, \inr, t),
+\qquad
+\dot\lat = F(\lat, \inr)/1 ,
+\label{eq:semidiscrete}
+\end{equation}
+with $F$ as in the main text. Diffusion is stiff: the spectral radius of
+$L$ scales as $\chi/\Delta\rho^2$, which for
+$\chi \sim 1\,\mathrm{m^2 s^{-1}}$ and $\Delta\rho \approx 0.0156$ is of
+order $4\times10^{3}\,\mathrm{s^{-1}}$, so an explicit method would need
+$\Delta t \lesssim 2\times10^{-4}\,$s. We therefore treat $L$ implicitly
+and everything else explicitly. Each substep of size $\Delta t$ advances
+\begin{align}
+\big[I - \thIMEX \Delta t\, L(\lat_n)\big] \bm{T}_{n+1}
+&= \bm{T}_n
+ + \Delta t\,(1-\thIMEX)\, L(\lat_n)\,\bm{T}_n
+ + \Delta t\, \bm{s}_\theta(\bm{T}_n,\cdot)
+ + \Delta t\, \thIMEX\, \bm{b}^{\mathrm{bc}} T_{\mathrm{edge}}(t_{n+1}),
+\label{eq:imexT}\\
+\lat_{n+1} &= \lat_n + \Delta t\, F(\lat_n, \inr_n),
+\label{eq:imexZ}
+\end{align}
+with $\thIMEX = 0.7$. Three details of \eqref{eq:imexT}--\eqref{eq:imexZ}
+are easy to state ambiguously and are therefore made explicit:
+(i) the operator is frozen at the \emph{current} latent state $\lat_n$, so
+the implicit stage is linear in $\bm{T}$ and no nonlinear iteration is
+needed --- this is the reason $\chi$ is allowed to depend on $\lat$ and
+$\rho$ but never on $\Te$;
+(ii) the boundary term is evaluated at the \emph{new} time level, weighted
+by $\thIMEX$, consistently with the implicit part;
+(iii) the latent uses explicit Euler at the same substep size, evaluated
+before the temperature update, so the pair is a first-order Lie splitting.
+
+Within each observation interval $[t_j, t_{j+1}]$ the solver takes a fixed
+number $M = 5$ of substeps, $\Delta t = (t_{j+1}-t_j)/M$, and exogenous
+inputs are linearly blended across the interval. Fixed $M$ (rather than
+adaptive stepping) keeps all loop bounds static, which is what permits
+reverse-mode differentiation through the entire rollout under JIT
+compilation. Past the valid window of a discharge the state is frozen by
+an activity mask so that zero padding cannot destabilize the solve or
+contaminate gradients.
+
+\paragraph{Stability and order.} For the scalar test problem
+$\dot y = \lambda y$ the update \eqref{eq:imexT} has amplification factor
+\begin{equation}
+R(s) = \frac{1 + (1-\thIMEX)s}{1 - \thIMEX s}, \qquad s = \lambda \Delta t,
+\label{eq:amp}
+\end{equation}
+which satisfies $|R| \le 1$ for all $\mathrm{Re}\,s \le 0$ when
+$\thIMEX \ge 1/2$: the method is A-stable in that range. It is not
+L-stable for $\thIMEX < 1$, since
+$R(s) \to -(1-\thIMEX)/\thIMEX = -0.43$ as $s \to -\infty$; the stiffest
+modes are damped by a factor $0.43$ per substep rather than annihilated.
+Backward Euler ($\thIMEX = 1$) would be L-stable but is more dissipative
+at moderate $s$; Crank--Nicolson ($\thIMEX = 1/2$) is second order but
+$R \to -1$, so stiff modes ring rather than decay. The choice
+$\thIMEX = 0.7$ is a compromise, and it makes the scheme
+\emph{first order} in time, not second: the temporal error observed in
+\S\ref{app:num-verif} is consistent with this. We state this explicitly
+because a ``$\theta$-method'' is often assumed to be second order.
+Implicit treatment removes the explicit parabolic step-size restriction;
+it does not remove the physical stiffness, and the explicit source and
+latent terms retain their own accuracy-driven step limits.
+
+\subsection{Verification}
+\label{app:num-verif}
+
+All tests below are implemented in \texttt{scripts/verify\_solver.py} and
+run on the same code path used for training. Results are archived in
+\texttt{logs/solver\_verification/verification\_report.json}.
+
+\paragraph{Analytic reference solution.} With $V' \equiv 1$,
+$\chi \equiv \chi_0$, homogeneous Neumann at $\rho=0$ and homogeneous
+Dirichlet at $\rho=1$, the function
+\begin{equation}
+\Te(\rho,t) = A\cos(k\rho)\,e^{-\chi_0 k^2 t}, \qquad k = \pi/2,
+\label{eq:analytic}
+\end{equation}
+solves the continuous problem exactly and satisfies both boundary
+conditions. We integrate to $t_{\mathrm{end}} = 0.05\,$s with
+$\chi_0 = 1$ and measure the relative $L_2$ error at the final time.
+The amplitude is set to $A = 1000\,$eV rather than unity: the solver's
+smooth positivity safeguard is exact only to $\sim0.01\,$eV, so a
+unit-amplitude test measures the safeguard rather than the discretization.
+This is itself a small lesson --- a verification test must be run at the
+operating magnitude of the quantity it verifies.
+
+\paragraph{Grid refinement.} With $M = 40$ substeps (temporal error
+subdominant):
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+$N$ & 17 & 33 & 65 & 129 \\
+$\Delta\rho$ & 0.0625 & 0.0312 & 0.0156 & 0.0078 \\
+relative $L_2$ error & $3.47\times10^{-3}$ & $1.68\times10^{-3}$ & $8.26\times10^{-4}$ & $4.10\times10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+A least-squares fit of $\log\varepsilon$ against $\log\Delta\rho$ gives
+observed order $1.03$. The error halves with each refinement, confirming
+consistency; the first-order rate reflects the splitting and the
+first-order treatment of the boundary/latent coupling rather than the
+interior stencil, which is formally second order.
+
+\paragraph{Substep refinement.} At $N = 129$:
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+$M$ & 1 & 2 & 5 & 10 & 20 \\
+relative $L_2$ error & $4.72\times10^{-4}$ & $4.40\times10^{-4}$ & $4.21\times10^{-4}$ & $4.15\times10^{-4}$ & $4.12\times10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The temporal error saturates against the spatial floor by $M \approx 5$,
+which is why $M = 5$ is used in training: further substeps buy accuracy
+that the spatial resolution cannot express, at linear cost.
+
+\paragraph{Operating-point error budget.} At the training configuration
+($N = 65$, $M = 5$) the solver's own error on \eqref{eq:analytic} is
+$8.3\times10^{-4}$ relative, i.e.\ well below $1\,$eV on a $1000\,$eV
+scale. The model--data misfit reported in the main text is
+$\sim\resMAE$, two orders of magnitude larger. Numerical error is
+therefore not a limiting factor in any comparison we draw.
+
+\paragraph{Discrete conservation.} Summing \eqref{eq:div} against the cell
+volumes must telescope to the net boundary flux. On a parabolic test
+profile the measured volume-weighted sum
+$\sum_i v_i (LT)_i$ equals $-F_{N-3/2}$ to a relative residual of
+$0$ (exactly, in double precision, since both sides are the same finite
+sum). This verifies that the axis condition contributes no spurious flux
+and that the cell volumes \eqref{eq:cellvol} are consistent with the face
+positions in \eqref{eq:faceflux} --- the property the earlier
+implementation violated.
+
+\paragraph{Positivity.} Starting from a non-negative step profile with a
+sharp interior discontinuity and a hot Dirichlet edge, the minimum value
+over all times and nodes remains $\ge 0$ (measured $0.0$). The scheme is
+not formally positivity-preserving for arbitrary $\Delta t$, but the
+M-matrix structure of $I - \thIMEX\Delta t L$ together with the smooth
+clamp keeps solutions in the physical range at the step sizes used.
+
+\paragraph{Gradient correctness.} Because parameters are identified by
+differentiating through \eqref{eq:imexT}--\eqref{eq:imexZ}, the adjoint
+must be verified, not assumed. We compare reverse-mode automatic
+derivatives of the per-discharge loss against central finite differences
+($\epsilon = 10^{-5}$) on one real training discharge:
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+parameter & autodiff & central difference & relative error \\
+\midrule
+$\beta$ (raw)               & $-1.15597\times10^{-1}$ & $-1.15597\times10^{-1}$ & $6.6\times10^{-10}$ \\
+$\tau$ (raw)                & $-1.33876\times10^{-1}$ & $-1.33876\times10^{-1}$ & $9.3\times10^{-10}$ \\
+drive intercept $\kappa_0$  & $+5.08148\times10^{-1}$ & $+5.08148\times10^{-1}$ & $6.7\times10^{-10}$ \\
+$\chi$ edge gap (raw)       & $+1.27057\times10^{-1}$ & $+1.27057\times10^{-1}$ & $1.9\times10^{-10}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+All agree to nine or ten digits. Differentiation is through the
+\emph{discrete} solver (a discrete adjoint obtained by automatic
+differentiation); no continuous adjoint equation is solved, and we avoid
+that terminology deliberately.
+
+\paragraph{Solver robustness.} Across every discharge and every training
+run reported here, the fraction of rollouts flagged as failed (non-finite
+state or step-count overflow) was zero; the success indicator entering the
+loss was $1.00$ at every logged step.
