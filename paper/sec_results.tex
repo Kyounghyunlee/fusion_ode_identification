@@ -1,0 +1,154 @@
+% Results. Every number is generated into results.tex from saved artifacts
+% by scripts/final_report.py; the prose below interprets, it does not
+% transcribe. Locked-test numbers are added only after the single
+% test-set evaluation.
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Numerical verification and the geometry correction}
+\label{sec:res-verif}
+
+The solver passes every test of Appendix~\ref{app:numerics}: first-order
+convergence under grid and substep refinement, exact discrete flux balance,
+preserved positivity, and reverse-mode gradients matching central
+differences to nine or ten significant digits. At the operating resolution
+the solver's own error is two orders of magnitude below the model--data
+misfit, so no comparison drawn below is limited by numerics.
+
+Two defects were found by verification and audit rather than by any training
+or validation metric, and both are worth reporting because both were
+invisible to the loss. The finite-volume cell volumes were inconsistent with
+the face positions, which left the scheme stable and trainable but
+non-convergent under refinement (Appendix~\ref{app:numerics}). More
+seriously, the flux coordinate was inverted: MAST Level-2 stores poloidal
+flux per radian, which is maximal on the magnetic axis, and the
+normalisation assumed the opposite, placing $\rho = 1$ \emph{at} the
+magnetic axis (Appendix~\ref{app:eq-rho}). Every profile was compressed into
+$\rho \in [0.745, 1]$ non-monotonically, so the ``edge annulus'' that
+carried all supervision was in fact the near-axis region.
+
+The effect of correcting it is large and one-directional. Held-out profile
+error falls from $\approx \SI{104}{eV}$ to $\SI{39}{eV}$--$\SI{41}{eV}$ in
+the supervised annulus, a factor $2.6$; the best-checkpoint location moves
+from step $150$--$250$ to $\approx 1850$; and, as \S\ref{sec:res-modelcomp}
+shows, the ranking of the competing latent topologies reverses. We report
+this sequence rather than only its endpoint because it is the clearest
+evidence in this study that a fit which looks healthy by every training
+diagnostic can still be fitted to the wrong part of the plasma.
+
+\subsection{Held-out profile prediction}
+\label{sec:res-profiles}
+
+On grouped-validation discharges the identified model reproduces the
+measured edge temperature with a coverage-weighted mean absolute error of
+$\SI{39}{eV}$--$\SI{41}{eV}$ ($28.5$--$29.8\%$ relative), consistently
+across all three main configurations and all three seeds; the spread across
+seeds within a configuration is below $\SI{2}{eV}$. This is a free-running
+rollout: the profile is integrated from its initial condition with no
+measurement reset, and only the measured edge boundary trace and the
+measured density enter as time-varying inputs.
+
+The residual source closure carries a substantial part of this accuracy.
+Removing it entirely degrades the error to $\SI{58}{eV}$
+(\S\ref{sec:res-ablations}), so the conservative diffusion operator alone
+does not reproduce the observed edge evolution. This is expected for a
+phenomenological temperature equation in which heating deposition,
+radiation, and the neglected density and heat-capacity factors are all
+absorbed into the residual term.
+
+\subsection{Regime discrimination and calibration}
+\label{sec:res-events}
+
+Pooled over seeds, the median per-discharge AUC of the regime probability
+against the weak labels is $0.912$ (95\% bootstrap CI $[0.909, 0.943]$) for
+the extended-drive free-topology model, $0.942$ ($[0.900, 0.983]$) for the
+constrained monostable model, and $0.920$ ($[0.909, 0.943]$) for the
+injected-power drive. Roughly two thirds of held-out discharges exceed
+AUC $0.9$ individually. Calibration behaves as described in
+\S\ref{sec:ident-select}: raw expected calibration error is $0.14$--$0.33$
+and falls to $0.036$--$0.095$ after validation-only Platt scaling, with
+median Brier scores of $0.064$--$0.085$.
+
+Event detection is a stricter test than discrimination, and the model is
+markedly weaker on it. With one-to-one matching in a \SI{40}{ms} window,
+L$\to$H recall reaches $0.40 \pm 0.03$ for the extended-drive free model and
+$0.29$--$0.33$ for the others; matched events are located to a median
+absolute timing error of a few tens of milliseconds. H$\to$L recall is
+$0.00$ for every bistable fit and $0.10$ for the monostable ones. We regard
+the low absolute recall as the principal limitation of the present model and
+return to it in \S\ref{sec:discussion}.
+
+\subsection{Do the data select a latent topology?}
+\label{sec:res-modelcomp}
+
+This is the question the study was designed to answer, and the answer is
+negative. Table~\ref{tab:comparison} reports the three configurations at
+three seeds each under identical data, splits, solver, optimiser, stopping
+rule, and parameter budget; only the named factor differs.
+
+Two findings separate cleanly from seed noise, which is $\pm 0.001$--$0.013$
+on these quantities.
+
+\paragraph{The physics-directed drive extension is accepted.} Replacing the
+injected-power drive $(P_{\mathrm{NBI}}, |I_p|, \bar n_e)$ with
+$(P_{\mathrm{loss}}, |I_p|, \bar n_e, P_{\mathrm{rad}}, \kappa, \delta)$
+improves held-out trajectory loss from $0.514 \pm 0.013$ to
+$0.424 \pm 0.013$ and L$\to$H recall from $0.29 \pm 0.00$ to
+$0.40 \pm 0.03$, at equal AUC. Both gaps are many seed-standard-deviations
+wide. The covariates that help are precisely those that MAST threshold
+studies identify as controlling: a loss-power rather than injected-power
+measure of the drive, and the plasma shape.
+
+\paragraph{The topology question is not decided by these data.} The free
+model attains the better trajectory loss ($0.424 \pm 0.013$ against
+$0.464 \pm 0.006$) and the better L$\to$H recall; the constrained monostable
+model attains the better discrimination ($0.941 \pm 0.001$ against
+$0.916 \pm 0.006$), the better calibration (Brier $0.064 \pm 0.002$ against
+$0.081 \pm 0.005$), and the only non-zero back-transition recall. The
+disagreement is systematic across seeds and runs in opposite directions on
+different endpoints. That pattern --- consistent, reproducible, and
+non-transitive --- is what ``the evidence does not decide'' looks like when
+it is measured on several endpoints rather than one scalar.
+
+The free fit does return a positive topology parameter reproducibly
+($\beta = +0.303, +0.296, +0.295$ across seeds, a spread of $\pm 0.004$),
+which under \eqref{eq:folds} implies a bistable vector field with folds at
+$\dr_{\mathrm{f}}^{\pm} = \pm 0.06$. We report this as a property of the
+fitted parameter set and explicitly not as evidence that the data require
+folds, because a model forbidden from having folds describes the same
+discharges at least as well.
+
+\paragraph{Why bistability cannot capture the back-transitions.} The zero
+H$\to$L recall of every bistable fit is structural rather than incidental.
+Once the latent occupies the upper branch, returning to the lower one
+requires the drive to fall below the \emph{lower} fold
+$\dr_{\mathrm{f}}^{-}$, an excursion roughly twice the fold separation,
+whereas a monostable latent tracks the drive continuously and can return as
+soon as the drive relaxes. In this corpus the drive rarely makes that
+excursion. The hysteresis that motivates a bistable description is therefore
+the same property that prevents it from reproducing the observed
+back-transitions --- an argument that would be invisible without fitting the
+constrained alternative.
+
+\subsection{Ablations}
+\label{sec:res-ablations}
+
+Removing the residual source degrades held-out profile error from
+$\SI{39}{eV}$ to $\SI{58}{eV}$ while \emph{raising} L$\to$H recall to
+$0.50$. The two pathways compete to explain the same edge structure: with
+the source suppressed, the only remaining way to reproduce a steepening
+edge gradient is through the barrier coupling $\chi(\rho, \bact)$, so the
+regime coordinate is forced to carry it. This is a direct measurement of the
+identifiability concern that motivated making the source regime-blind
+(\S\ref{sec:model-chi}), and it shows the concern is real: profile accuracy
+and regime identifiability trade against each other in this model class.
+
+% Remaining ablations (Delta chi = 0; no observation loss; no label loss)
+% are added when their runs complete.
+
+\subsection{Locked-test evaluation}
+\label{sec:res-test}
+
+% Written after the single evaluation on the held-out sessions.
+\emph{TODO: single-pass locked-test numbers.}

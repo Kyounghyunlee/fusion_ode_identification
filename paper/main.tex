@@ -513,6 +513,8 @@ observed convergence is first order, consistent with the
 $\thIMEX = 0.7$ splitting, with absolute profile errors two orders of
 magnitude below the model--data misfit at the operating resolution.
 
+\input{sec_identification}
+
 \section{Evaluation design}
 \label{sec:evaldesign}
 
@@ -532,64 +534,7 @@ breakdowns, and runtime. Uncertainty: per-shot bootstrap for medians;
 Laplace curvature and seed spread for low-dimensional parameters; both
 approximations are stated as such.
 
-\section{Results}
-\label{sec:results}
-
-% TODO: this section is populated by scripts/update_paper_numbers.py from
-% experiments/*.json after the experiment queue and the single locked-test
-% evaluation. Subsection placeholders below define the required content.
-
-\subsection{Numerical verification and reproducibility}
-\label{sec:res-verif}
-% fig: fig_convergence; verification table in Appendix C.
-The solver verification suite passes (Appendix~C); the baseline result of
-the previous draft was reproduced from the frozen tag before any change
-(Appendix~G).
-
-\subsection{Dataset and label audit}
-\label{sec:res-audit}
-% cohort table from data/label_audit.json; label sensitivity appendix.
-\emph{TODO: cohort counts, agreement statistics with session logs, label
-parameter sensitivity.}
-
-\subsection{Held-out profile prediction}
-\label{sec:res-profiles}
-% fig: fig_profile_heatmap (measured / predicted / residual), fig_fit.
-\emph{TODO: annulus MAE/RMSE with bootstrap CI on validation and locked
-test; comparison to persistence and transport-only baselines; residual
-heatmaps for a predeclared median shot.}
-
-\subsection{Held-out regime and event prediction; calibration}
-\label{sec:res-events}
-% fig: fig_classification (success + near-threshold + back-transition +
-% failure), fig_aggregate (distributions), fig_reliability.
-\emph{TODO: per-shot AUC distribution, event precision/recall/timing for
-both directions, confirmed-negative false-positive rate, ambiguous cases
-listed separately, reliability/Brier/ECE.}
-
-\subsection{Monostable versus bistable}
-\label{sec:res-modelcomp}
-% table: free vs nonpositive-beta vs lag vs static vs ablations.
-\emph{TODO: paired grouped-validation comparison with seed spread;
-$P(\beta > 0)$; statement calibrated to the evidence.}
-
-\subsection{Fold margins and conditional thresholds}
-\label{sec:res-folds}
-% fig: fig_bifurcation, fig_margins, fig_threshold_surface.
-\emph{TODO: $\beta$, $\tau$, folds with Laplace + seed uncertainty;
-equivalent injected-power thresholds at stated covariate slices; explicit
-warning about extrapolation and loss-power vs injected-power.}
-
-\subsection{Ablations and failure cases}
-\label{sec:res-ablations}
-\emph{TODO: $\Delta\chi$ off, source off, no-D$\alpha$, no-regime-loss;
-failure shots selected by predeclared rule (worst validation event
-timing).}
-
-\subsection{Runtime and streaming replay}
-\label{sec:res-runtime}
-\emph{TODO: causal streaming replay latency (state update + outputs),
-hardware, warm-up vs steady state.}
+\input{sec_results}
 
 \FloatBarrier
 
@@ -665,6 +610,10 @@ quasi-static state, not the completion time of the observed transition.
 \input{app_equilibrium}
 
 \input{app_numerics}
+
+\input{app_data}
+
+\input{app_history}
 
 \begin{figure}[h]
   \centering

@@ -1,0 +1,174 @@
+% Appendix: development history. Included because several of the errors
+% below were invisible to every training and validation metric, and the
+% sequence of failures is more instructive than the final configuration.
+
+\section{Development history: what failed, and how it was found}
+\label{app:history}
+
+Papers normally report the final configuration. We report the path, because
+four of the defects described here produced healthy-looking training curves,
+plausible validation losses, and publication-ready figures while being
+wrong, and because the method that eventually exposed each one is
+transferable. Every stage below corresponds to a dated entry with commit
+hashes, shot lists, and metrics in the project's experiment ledger.
+
+\subsection{Stage 1: a latent that could not fail}
+\label{app:hist-proxy}
+
+The initial model drove the latent with a relaxation law whose target was
+derived from the D$_\alpha$ signal, and predicted D$_\alpha$ through a
+parameter-free head equal to $1 - \bact$. With the observation loss weighted
+heavily, this pins $\bact \approx 1 - \tilde\yD$ pointwise. Regime
+classification from the latent was then classification from D$_\alpha$, and
+the model could not be wrong in an interesting way: it was reporting its own
+input. Diagnosing this required no experiment, only writing down what the
+two equations imply together.
+
+The fix was structural: the latent is driven by actuators alone, and
+D$_\alpha$ supervises a \emph{learned} observation head. This is what makes
+the regime state falsifiable --- an actuator-driven latent must now predict
+the emission collapse rather than copy it, and must decline to predict one
+in discharges that do not transition.
+
+\subsection{Stage 2: a redundant parameter reported as physics}
+\label{app:hist-cubic}
+
+The latent was first written as
+$\tau\dot\zeta = a + c_1\zeta + c_2\zeta^2 - \zeta^3$ and $c_2$ was reported
+as an identified coefficient. It is not identifiable: the substitution
+$\zeta = \lat + c_2/3$ removes it, and the induced shifts are absorbed by
+the drive intercept and the observation offset, which are both free
+(Appendix~\ref{app:canonical}). Two parameter sets differing only in $c_2$
+describe identical dynamics and identical observations. All subsequent work
+uses the depressed cubic, in which $\beta$ is the only topology parameter.
+
+\subsection{Stage 3: loss weights chosen to make a term ``matter''}
+\label{app:hist-weights}
+
+Early configurations set the regime and observation weights by inspecting
+the magnitude of the profile term ($\mathcal{O}(700)$ in the then-current
+units) and raising the others until they were ``visible''. This is
+scale-chasing, not modelling: it made the weights uninterpretable and
+coupled them to arbitrary unit choices. The objective was rewritten so each
+term is an average of order-one quantities with fixed robust scales
+(\S\ref{sec:ident-loss}), after which the weights became ratios that can be
+stated and varied meaningfully.
+
+\subsection{Stage 4: a finite-volume scheme that did not converge}
+\label{app:hist-fvm}
+
+The discretisation used a face-averaged $V'$ for cell volumes and gave the
+axis cell full width, both inconsistent with the face positions used in the
+flux stencil. The scheme remained stable, trained normally, and produced
+sensible fits. Its error under grid refinement was $5.4, 8.1, 9.7,
+10.0 \times 10^{-3}$ for $N = 17, 33, 65, 129$ --- an apparent convergence
+order of $-0.31$, i.e.\ refining the grid made it worse. No training or
+validation metric was sensitive to this. It was found by writing a
+manufactured-solution test with an analytic decay mode and refining.
+
+A secondary lesson: the first version of that test used a unit-amplitude
+solution and appeared to show first-order convergence stalling at
+$10^{-3}$. The solver's smooth positivity safeguard is exact only to
+$\sim$$\SI{0.01}{eV}$, so a unit-amplitude test measures the safeguard, not
+the discretisation. Re-running at $\SI{1000}{eV}$ --- the operating
+magnitude --- gave clean first-order convergence. Verification tests must be
+posed at the scale of the quantity they verify.
+
+\subsection{Stage 5: an inverted radial coordinate}
+\label{app:hist-rho}
+
+The most consequential error. MAST Level-2 stores poloidal flux per radian,
+maximal on the magnetic axis; the normalisation assumed it minimal there and
+took grid extrema as the anchors, with a guard clause that discarded the
+separatrix value whenever it lay below the grid maximum --- which it always
+does. The resulting coordinate had $\rho = 1$ \emph{at} the magnetic axis
+and $\rho \approx 0.75$--$0.82$ at both ends of the Thomson chord,
+non-monotonic in major radius. Every quality gate and mask named ``edge''
+therefore selected the near-axis region, and the interpolation interleaved
+inboard and outboard channels that mapped to similar $\rho$.
+
+Nothing in the training or validation pipeline was sensitive to this either.
+The model happily fitted the region it was given. It surfaced only when the
+equilibrium data path was audited line by line against the actual file
+contents in order to document it --- that is, the error was found by the act
+of writing the methods section, not by any diagnostic.
+
+Correcting it (Appendix~\ref{app:eq-rho}) reduced held-out profile error by
+a factor $2.6$, moved the best checkpoint from step $150$--$250$ to
+$\approx 1850$, and reversed the study's headline conclusion
+(\S\ref{sec:res-modelcomp}). We consider the checkpoint shift the most
+useful transferable diagnostic here: a model that plateaus almost
+immediately may not be converged --- it may have nothing real to learn.
+
+\subsection{Stage 6: geometry that was never the reconstruction's}
+\label{app:hist-vprime}
+
+The metric $V'(\rho)$ was documented as coming from the equilibrium. In fact
+the Level-2 group contains no flux-surface volume profile, so the code fell
+through a sentinel path to the analytic cylindrical $V' = 2\rho$ for every
+discharge. The claim was false, and the sentinel was value-based
+($V' \equiv 1$), so a genuine near-unity metric would have been silently
+overwritten too. We now integrate $V(\rho)$ from the flux map directly and
+validate it against the equilibrium's own total-volume scalar, agreeing to
+$0.1$--$0.3\%$ (Appendix~\ref{app:eq-vprime}). The general lesson is that a
+fallback which produces plausible numbers is more dangerous than one that
+crashes.
+
+\subsection{Stage 7: probabilities that were never calibrated}
+\label{app:hist-calib}
+
+The model reported $\pH$ as a probability and was evaluated with
+threshold-dependent scores. Its AUC was $0.84$--$0.94$ while $F_1$ was
+exactly zero: discrimination was good, but the raw probabilities almost
+never crossed $0.5$, so no positive prediction was ever made. An earlier
+draft had reported a median transition-timing error computed only over the
+minority of discharges where a crossing happened to occur --- a selected
+subset, and therefore a meaningless statistic. Calibration is now measured
+(reliability curve, expected calibration error, Brier score), performed by
+Platt scaling fitted on validation data only, and reported alongside the
+uncalibrated values (\S\ref{sec:ident-select}).
+
+\subsection{Stage 8: diagnosing a failure instead of tuning around it}
+\label{app:hist-covariates}
+
+With the above fixed, L$\to$H event recall was $0.06$--$0.11$: poor. The
+tempting responses --- more capacity, longer training, different weights ---
+would all have been wrong. Inspecting the latent trajectories showed the
+model was behaving correctly: in the discharges it missed, the identified
+drive never reached the fold, and the latent therefore stayed on the lower
+branch, as it should. Those discharges were concentrated in the X-point-height
+threshold campaigns, whose transition threshold depends on plasma shape ---
+a quantity the drive could not see.
+
+Extending the drive with a loss-power proxy and shape covariates raised the
+fraction of discharges in which the latent switches branches from $\sim$$30\%$
+to $100\%$ and roughly quadrupled event recall. The methodological point is
+that a performance deficit was traced to a specific missing physical
+covariate by examining the model's internal state, rather than treated as an
+optimisation problem.
+
+\subsection{Stage 9: protocol errors}
+\label{app:hist-protocol}
+
+Two process failures are recorded for completeness. First, an early
+comparison ran with an early-stopping patience of eight evaluations while
+the typical interval between validation improvements was of the same order,
+so some seeds stopped while still improving; the patience was doubled and
+all affected runs were discarded and rerun rather than mixed. Second, the
+training script persisted the raw rather than the override-applied
+configuration, so a constrained-topology run was first evaluated under the
+wrong parameterisation; this was caught by the identified $\beta$ having the
+wrong sign for its arm, and both the bug and the re-evaluation are recorded.
+
+\subsection{What this history implies for the results}
+\label{app:hist-implications}
+
+Three of the defects above (Stages 4, 5, 6) were invisible to every loss and
+metric we computed, and two of them changed conclusions. The safeguards that
+actually caught them were: a manufactured-solution convergence study, a
+line-by-line audit of the data path against file contents, and an
+independent physical validation of a derived quantity against a value the
+files already contained. None of these is a machine-learning diagnostic. We
+would suggest that any study identifying physical parameters from
+experimental data through a differentiable solver should budget for all
+three before interpreting a fitted coefficient.
