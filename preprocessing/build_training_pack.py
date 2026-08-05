@@ -33,6 +33,7 @@ if __package__ in (None, ""):
     _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+    from preprocessing.equilibrium_geometry import choose_plasma_itime, flux_geometry
     from preprocessing.geometry import (
         choose_itime,
         compute_rho_scalars,
@@ -41,6 +42,7 @@ if __package__ in (None, ""):
         volume_derivatives,
     )
 else:
+    from .equilibrium_geometry import choose_plasma_itime, flux_geometry
     from .geometry import (
         choose_itime,
         compute_rho_scalars,
@@ -988,133 +990,141 @@ def build_one_shot(
     ts = xr.load_dataset(ts_path) # Load Thomson scattering dataset; used for Te and ne profiles
     summ = xr.load_dataset(sm_path) # Load summary dataset; used for global time-series like Ip, nebar, powers
 
-    # Geometry and rho normalisation (with fallback if equilibrium is degenerate)
-    it = choose_itime(eq) # pick representative time index for equilibrium; middle of time dimension.
-    geom = extract_geom_params(eq, it) # Extract geometry parameters (R_major, a_minor, kappa, delta) from equilibrium at chosen time index
+    # ---- Geometry: flux-surface coordinate and volume element ----
+    # Primary path (preprocessing/equilibrium_geometry.py): psi is normalized
+    # from the magnetic axis to the LCFS, so rho = 0 on axis and 1 at the
+    # separatrix, and V(rho) is integrated over the poloidal plane. The
+    # legacy path assumed psi is minimal on axis, which is false for these
+    # Wb/rad files and inverted the coordinate; it is retained only as a
+    # last-resort fallback and is recorded in the pack metadata.
+    it = choose_plasma_itime(eq)
+    fg = flux_geometry(eq, it, n_rho=Nrho)
 
     rho_fallback_used = False
     psi_axis_val = float("nan")
     psi_edge_val = float("nan")
+    fallback_meta = {"rho_fallback_method": "psi_axis_to_lcfs", "rho_r_min": float("nan"), "rho_r_max": float("nan")}
+    geom_meta = {}
 
-    fallback_meta = {"rho_fallback_method": "psi", "rho_r_min": float("nan"), "rho_r_max": float("nan")}
-
-    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray: # Rho fallback function
-        # Simple linear normalisation of R when psi is unusable
-        r_candidates = ("major_radius", "R", "R_grid", "Rcoord", "R_grid_1d")
+    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray:
         r_vals = None
-        for cand in r_candidates:
+        for cand in ("major_radius", "R", "R_grid", "Rcoord", "R_grid_1d"):
             if cand in eq.coords:
-                r_vals = np.asarray(eq.coords[cand].values)
-                break
+                r_vals = np.asarray(eq.coords[cand].values); break
             if cand in eq:
-                r_vals = np.asarray(eq[cand].values)
-                break
+                r_vals = np.asarray(eq[cand].values); break
         if r_vals is None and "major_radius" in ts:
             r_vals = np.asarray(ts["major_radius"].values)
         if r_vals is None:
             r_min, r_max = 0.0, 1.0
         else:
-            r_min = float(np.nanmin(r_vals))
-            r_max = float(np.nanmax(r_vals))
+            r_min, r_max = float(np.nanmin(r_vals)), float(np.nanmax(r_vals))
             if not np.isfinite(r_min) or not np.isfinite(r_max) or abs(r_max - r_min) < 1e-9:
                 r_min, r_max = 0.0, 1.0
         fallback_meta.update({"rho_fallback_method": "linear_R", "rho_r_min": r_min, "rho_r_max": r_max})
         return np.clip((R - r_min) / (r_max - r_min + 1e-6), 0.0, 1.0)
 
-    try:
-        scalars = compute_rho_scalars(eq, it)
-        psi_axis_val = scalars["psi_axis"]
-        psi_edge_val = scalars["psi_edge"]
-        rho_fn = lambda r, z: rho_from_RZ(eq, r, z, itime=it)
-    except Exception:
+    if fg is not None:
+        rho_fn = lambda r, z: fg["rho_of_RZ"](r, z)
+        psi_axis_val = fg["psi_axis"]
+        psi_edge_val = fg["psi_boundary"]
+        rho_torax = np.asarray(fg["rho_grid"], dtype=float)
+        Vprime_torax = np.asarray(fg["Vprime"], dtype=float)
+        geom_meta = {
+            "geom_itime": fg["itime"],
+            "geom_t_equilibrium": fg["t_equilibrium"],
+            "geom_V_total": fg["V_total"],
+            "geom_V_total_reference": fg["V_total_reference"],
+            "geom_V_total_ratio": fg["V_total_ratio"],
+            "geom_axis_R": fg["axis_R"],
+            "geom_axis_Z": fg["axis_Z"],
+            "geom_method": fg["method"],
+        }
+        print(f"  .. geometry: rho from psi(axis->LCFS) at t={fg['t_equilibrium']:.3f}s; "
+              f"V(1)={fg['V_total']:.2f} m^3 (equilibrium {fg['V_total_reference']:.2f}, "
+              f"ratio {fg['V_total_ratio']:.3f})")
+    else:
         rho_fallback_used = True
         rho_fn = lambda r, z: _rho_from_R_linear(r)
-
-    rho_eq, V, Vprime = volume_derivatives(eq, it) if not rho_fallback_used else (None, None, None)
-
-    # TORAX rho grid
-    if rho_eq is not None and rho_eq.size >= Nrho:
-        idx = np.linspace(0, rho_eq.size - 1, Nrho).astype(int)
-        rho_torax = rho_eq[idx]
-    else:
         rho_torax = np.linspace(0.0, 1.0, Nrho)
+        Vprime_torax = 2.0 * rho_torax   # explicit cylindrical stand-in
+        fallback_meta["rho_fallback_method"] = "linear_R"
+        geom_meta = {"geom_method": "cylindrical_fallback"}
+        print("  !! geometry fallback: equilibrium lacked axis/LCFS fields; "
+              "using linear-R rho and cylindrical V'=2rho")
 
-    # Interpolate Vprime onto TORAX rho grid
-    if rho_eq is not None and Vprime is not None:
-        Vprime_torax = np.interp(rho_torax, rho_eq, Vprime)
-    else:
-        Vprime_torax = np.ones_like(rho_torax)
+    geom = extract_geom_params(eq, it)
 
     # Thomson scattering profiles from NetCDF
     # Variables: try common names
-        Te_da = get_var(ts, ["Te", "T_e", "te", "Te_eV", "t_e"])  # units may vary
-        ne_da = get_var(ts, ["ne", "n_e", "ne_cm3", "ne_m3"])  # units may vary
-        if Te_da is None or ne_da is None:
-            raise KeyError("Could not find Te/ne in thomson_scattering.nc")
+    Te_da = get_var(ts, ["Te", "T_e", "te", "Te_eV", "t_e"])  # units may vary
+    ne_da = get_var(ts, ["ne", "n_e", "ne_cm3", "ne_m3"])  # units may vary
+    if Te_da is None or ne_da is None:
+        raise KeyError("Could not find Te/ne in thomson_scattering.nc")
 
-        # Time alignment: assume ts has time dimension named 'time'
-        if ("time" not in Te_da.dims) and ("time" not in ne_da.dims):
-            raise KeyError("Expected 'time' dimension in Thomson scattering variables")
+    # Time alignment: assume ts has time dimension named 'time'
+    if ("time" not in Te_da.dims) and ("time" not in ne_da.dims):
+        raise KeyError("Expected 'time' dimension in Thomson scattering variables")
 
-        ts_sizes = getattr(ts, "sizes", {})
-        Nt = ts_sizes.get("time")
-        if Nt is None:
-            Nt = Te_da.sizes.get("time")
-        if Nt is None:
-            Nt = ne_da.sizes.get("time", 0)
+    ts_sizes = getattr(ts, "sizes", {})
+    Nt = ts_sizes.get("time")
+    if Nt is None:
+        Nt = Te_da.sizes.get("time")
+    if Nt is None:
+        Nt = ne_da.sizes.get("time", 0)
 
-        # Determine radial-like axis for TS
-        rho_coord_name = infer_ts_radial_coordinate(ts)
-        if rho_coord_name is not None and rho_coord_name in ts.coords:
-            rho_ts = ts.coords[rho_coord_name].values
+    # Determine radial-like axis for TS
+    rho_coord_name = infer_ts_radial_coordinate(ts)
+    if rho_coord_name is not None and rho_coord_name in ts.coords:
+        rho_ts = ts.coords[rho_coord_name].values
 
-            def to_time_samples(da: xr.DataArray) -> np.ndarray: # Convert DataArray to 2D time-by-sample array, aligning time dimension if present. If no time dimension, replicate across time samples.
-                dims = list(da.dims)
-                if "time" in dims:
-                    dims_no_time = [d for d in dims if d != "time"]
-                    if dims_no_time:
-                        arr = da.transpose("time", *dims_no_time).values
-                        return arr.reshape(Nt, -1)
-                    else:
-                        arr = da.transpose("time").values
-                        return arr.reshape(Nt, -1)
-                else:
-                    arr = da.values.reshape(1, -1)
-                    return np.tile(arr, (Nt, 1))
-
-            Te_ts = to_time_samples(Te_da)
-            ne_ts = to_time_samples(ne_da)
-            rho_t_s = np.broadcast_to(np.asarray(rho_ts, dtype=float)[None, :], Te_ts.shape).copy()
-
-        else:
-            R_da = get_var(ts, ["R", "R_midplane", "R_channel", "major_radius"])
-            Z_da = get_var(ts, ["Z", "Z_midplane", "Z_channel"])
-            if R_da is None:
-                raise KeyError("Thomson dataset missing R coordinate for channels and no rho given")
-
-            def to_time_samples_fill(da: xr.DataArray) -> np.ndarray:
-                if "time" in da.dims:
-                    dims_no_time = [d for d in da.dims if d != "time"]
-                    if dims_no_time:
-                        arr = da.transpose("time", *dims_no_time).values
-                    else:
-                        arr = da.transpose("time").values[..., None]
+        def to_time_samples(da: xr.DataArray) -> np.ndarray: # Convert DataArray to 2D time-by-sample array, aligning time dimension if present. If no time dimension, replicate across time samples.
+            dims = list(da.dims)
+            if "time" in dims:
+                dims_no_time = [d for d in dims if d != "time"]
+                if dims_no_time:
+                    arr = da.transpose("time", *dims_no_time).values
                     return arr.reshape(Nt, -1)
                 else:
-                    arr = np.array(da.values).reshape(1, -1)
-                    return np.tile(arr, (Nt, 1))
-
-            R_t_s = to_time_samples_fill(R_da)
-            if Z_da is None:
-                Z_t_s = np.zeros_like(R_t_s)
+                    arr = da.transpose("time").values
+                    return arr.reshape(Nt, -1)
             else:
-                Z_t_s = to_time_samples_fill(Z_da)
+                arr = da.values.reshape(1, -1)
+                return np.tile(arr, (Nt, 1))
 
-            Te_t_s = to_time_samples_fill(Te_da)
-            ne_t_s = to_time_samples_fill(ne_da)
-            rho_t_s = np.vstack([rho_fn(R_t_s[t_idx], Z_t_s[t_idx]) for t_idx in range(Nt)])
+        Te_ts = to_time_samples(Te_da)
+        ne_ts = to_time_samples(ne_da)
+        rho_t_s = np.broadcast_to(np.asarray(rho_ts, dtype=float)[None, :], Te_ts.shape).copy()
 
-        t_ts = ts["time"].values if "time" in ts.coords else np.arange(Nt)
+    else:
+        R_da = get_var(ts, ["R", "R_midplane", "R_channel", "major_radius"])
+        Z_da = get_var(ts, ["Z", "Z_midplane", "Z_channel"])
+        if R_da is None:
+            raise KeyError("Thomson dataset missing R coordinate for channels and no rho given")
+
+        def to_time_samples_fill(da: xr.DataArray) -> np.ndarray:
+            if "time" in da.dims:
+                dims_no_time = [d for d in da.dims if d != "time"]
+                if dims_no_time:
+                    arr = da.transpose("time", *dims_no_time).values
+                else:
+                    arr = da.transpose("time").values[..., None]
+                return arr.reshape(Nt, -1)
+            else:
+                arr = np.array(da.values).reshape(1, -1)
+                return np.tile(arr, (Nt, 1))
+
+        R_t_s = to_time_samples_fill(R_da)
+        if Z_da is None:
+            Z_t_s = np.zeros_like(R_t_s)
+        else:
+            Z_t_s = to_time_samples_fill(Z_da)
+
+        Te_t_s = to_time_samples_fill(Te_da)
+        ne_t_s = to_time_samples_fill(ne_da)
+        rho_t_s = np.vstack([rho_fn(R_t_s[t_idx], Z_t_s[t_idx]) for t_idx in range(Nt)])
+
+    t_ts = ts["time"].values if "time" in ts.coords else np.arange(Nt)
 
     qa = run_shot_quality_screen(
         t_ts,
@@ -1461,6 +1471,7 @@ def build_one_shot(
         Te_mask_mean_edge=Te_mask_mean_edge,
         ne_mask_mean_edge=ne_mask_mean_edge,
         **geom,
+        **{k: v for k, v in geom_meta.items()},
     )
 
     # Attach optional signals only if present and not all-NaN

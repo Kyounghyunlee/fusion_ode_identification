@@ -64,3 +64,49 @@ First completed run e_ext_free_s0 (extended drive, free beta):
           diagnosis from EXP-001 is confirmed by the intervention it motivated.
 Remaining grid in flight: e_bas_free_s{0,1,2} (controlled comparison on the
 same corpus), e_ext_mono_s{0,1,2}, then ablations on extended/free.
+
+## CRITICAL CORRECTION (2026-08-05) - equilibrium geometry was wrong
+An independent audit of the equilibrium data path (prompted by a request to
+document it in full) found three defects that invalidate the physical
+interpretation of every profile result obtained so far:
+
+1. INVERTED RADIAL COORDINATE. MAST Level-2 psi is stored in Wb/rad and is
+   MAXIMAL on the magnetic axis. The code assumed psi_axis = min(psi) and
+   psi_edge = max(psi) over the (R,Z) grid, so the normalization was
+   inverted: measured rho = 1.000 AT THE MAGNETIC AXIS, falling to ~0.75 at
+   both ends of the Thomson chord, non-monotonic in R, with every profile
+   compressed into rho in [0.745, 1.0]. The LCFS-sampled psi was computed
+   and then always discarded by a `psi_edge < psi_max` guard. Consequence:
+   the "reliable edge annulus rho >= 0.80" that all supervision and the
+   chi(rho) barrier were built around was, in the intended convention,
+   NEAR-AXIS - and interpolation interleaved inboard/outboard channels.
+2. GEOMETRY NOT ACTUALLY FROM THE EQUILIBRIUM. `flux_surface_volume` does
+   not exist in the Level-2 equilibrium group, so V' fell through to a
+   sentinel V' == 1, which data.py then silently replaced with the analytic
+   cylindrical V' = 2*rho. The claim "V' supplied by the equilibrium
+   reconstruction" was false for all 107 shots.
+3. DEAD/MIS-INDENTED CODE. extract_geom_params read R_axis/R_lcfs/Z_lcfs,
+   which are absent (Level-2 uses magnetic_axis_r/z, lcfs_r/lcfs_z), so
+   R_major/a_minor/kappa/delta were NaN in every pack; and the Thomson-read
+   block was indented inside the else-arm of the V'-availability test, so
+   supplying a real V' would have raised NameError.
+Also: choose_itime took the record-index midpoint, including pre-breakdown
+samples (t = 0.215 s of a -0.100..0.530 s record).
+
+FIX (preprocessing/equilibrium_geometry.py):
+  psi_axis     = psi interpolated at (magnetic_axis_r, magnetic_axis_z)
+  psi_boundary = median of psi sampled on the (lcfs_r, lcfs_z) contour
+  rho          = sqrt(clip((psi - psi_axis)/(psi_boundary - psi_axis), 0, 1))
+  V(rho)       = integral of 2*pi*R dR dZ over {rho' <= rho}, confined to
+                 psi_N <= 1 inside the LCFS bounding box; V' = dV/drho
+  itime        = midpoint of the contiguous finite magnetic-axis block
+VALIDATION: V(rho=1) reproduces the equilibrium's own `volume` scalar to
+0.0-0.3% (25145: 7.20 vs 7.20 m^3; 27574: 7.01 vs 7.04 m^3). rho is now
+monotonic outward, 0 on axis, 1 at the separatrix. Supervised columns move
+to rho = 0.73-1.00 (true edge) and retention improves (25145: 14 kept
+columns vs 7 before).
+CONSEQUENCE: EXP-002 is void for profile/chi interpretation. All packs are
+being rebuilt and the full grid rerun on the corrected geometry. Latent-only
+quantities (drive, beta, event timing) are geometry-independent in their
+inputs but were trained jointly, so they are retrained too rather than
+mixed across geometries.
