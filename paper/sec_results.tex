@@ -164,18 +164,52 @@ constrained alternative.
 \subsection{Ablations}
 \label{sec:res-ablations}
 
-Removing the residual source degrades held-out profile error from
-$\SI{39}{eV}$ to $\SI{58}{eV}$ while \emph{raising} L$\to$H recall to
-$0.50$. The two pathways compete to explain the same edge structure: with
-the source suppressed, the only remaining way to reproduce a steepening
-edge gradient is through the barrier coupling $\chi(\rho, \bact)$, so the
-regime coordinate is forced to carry it. This is a direct measurement of the
-identifiability concern that motivated making the source regime-blind
-(\S\ref{sec:model-chi}), and it shows the concern is real: profile accuracy
-and regime identifiability trade against each other in this model class.
+Four ablations were run on the extended-drive free-topology configuration
+at seed $0$. Their outcome is the most important negative result in this
+study, and it concerns the model's own claimed mechanism.
 
-% Remaining ablations (Delta chi = 0; no observation loss; no label loss)
-% are added when their runs complete.
+\paragraph{The regime--transport coupling is inert.} Setting
+$\Delta\chi = 0$, which removes \emph{all} influence of the regime state
+on the transport equation, changes nothing measurable: validation loss
+$0.4059$ against $0.4063$, profile error $\SI{38}{eV}$ against
+$\SI{39}{eV}$, AUC $0.925$ against $0.916$, L$\to$H recall $0.43$ against
+$0.40$. Every difference is within seed noise. The mechanism the model was
+constructed around --- the regime coordinate suppresses edge diffusivity and
+a pedestal forms --- is therefore \emph{not identifiable from these data}.
+
+\paragraph{The two halves are decoupled.} The complementary ablations
+locate where the performance actually comes from. Removing the residual
+source degrades profile error from $\SI{39}{eV}$ to $\SI{58}{eV}$, so the
+profile fit is carried by the learned closure, not by the regime-modulated
+diffusivity. Removing the D$_\alpha$ observation loss costs nothing
+(AUC $0.925$, profile error $\SI{39}{eV}$), so regime identification is
+carried by the weak-label supervision, and the observation head --- $145$
+parameters --- is redundant. Taken together, the model behaves as two
+parallel sub-models sharing an optimiser rather than as a coupled
+gray-box: a transport backbone that fits profiles, and a latent that
+classifies regimes, joined by a coupling that does no measurable work.
+
+\paragraph{Why, and what would test it.} The most likely explanation is
+structural rather than physical. The measured edge temperature is supplied
+to the solver as a time-varying Dirichlet trace, and supervision covers only
+$\rho \approx 0.73$--$1.0$; most of the profile variation in the scored
+region is therefore already prescribed by the boundary condition, leaving
+little residual variance for a diffusivity modulation to explain. A decisive
+test would withhold the measured boundary trace --- predicting it instead
+from the model state --- and re-run the same ablation. We did not perform
+that test here, and we therefore make no claim that the coupling is
+physically absent; we claim only that this dataset, with this boundary
+treatment, does not resolve it.
+
+\paragraph{Consequence.} We withdraw the interpretability claim that
+motivated the architecture. What the study supports is that a compact
+actuator-driven latent, supervised by weak labels, identifies the
+confinement regime with the accuracy reported in \S\ref{sec:res-events};
+what it does not support is any statement about the transport coefficient
+inferred through that latent. The ablation that establishes this is
+reported here rather than omitted precisely because a reader would
+otherwise reasonably assume the coupling was doing the work its presence in
+the model implies.
 
 \begin{figure}[t]
   \centering
