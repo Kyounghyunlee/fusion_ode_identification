@@ -147,3 +147,23 @@ drive to fall below the LOWER fold, a much larger excursion than these
 discharges provide, whereas a monostable latent tracks the drive continuously.
 The hysteresis that motivates bistability is precisely what prevents it from
 reproducing the observed back-transitions in this corpus.
+
+## EXP-003 COMPLETE (3 seeds/arm, corrected geometry, grouped validation)
+arm             n  val loss       AUC          Brier        LH recall   HL recall
+extended free   3  0.424+-0.013   0.916+-0.006 0.081+-0.005 0.40+-0.03  0.00
+extended mono   3  0.464+-0.006   0.941+-0.001 0.064+-0.002 0.33+-0.03  0.10
+basic    free   3  0.514+-0.013   0.918+-0.004 0.079+-0.000 0.29+-0.00  0.00
+Seed spread is 0.001-0.013, i.e. both effects below are many seed-sigma.
+CONCLUSION 1 (accept): the physics-directed drive extension (loss-power proxy
++ elongation + triangularity) improves held-out trajectory loss 0.514 -> 0.424
+and L->H recall 0.29 -> 0.40 relative to the injected-power drive.
+CONCLUSION 2 (accept, and it is a null result on the headline question): the
+data do NOT select a latent topology. The constrained monostable arm is better
+calibrated (Brier 0.064 vs 0.081) and discriminates slightly better (AUC 0.941
+vs 0.916) and uniquely captures back-transitions; the free arm fits
+trajectories better (0.424 vs 0.464) and detects more L->H events. The
+disagreement is systematic across seeds, not noise, and it runs in opposite
+directions on different endpoints - which is precisely what "the evidence does
+not decide" looks like when measured on multiple endpoints instead of one.
+The free fit does return beta > 0 reproducibly (+0.303/+0.296/+0.295), but that
+is a property of the fitted parameter set, not evidence that folds are required.
