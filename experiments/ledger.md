@@ -132,3 +132,18 @@ The free-beta fit still returns beta > 0, but that is a property of one
 fitted parameter set, not evidence that the data require folds.
 Awaiting seeds 1-2 and the ablations before finalizing; the direction is
 already reproducible in the loss/AUC/Brier ordering.
+
+## EXP-003 seed 1 confirms; mechanistic asymmetry noted
+ext_free  s0/s1: val 0.406/0.432  AUC 0.912/0.925  Brier 0.085/0.074  LH 0.36/0.43  HL 0.00/0.00  beta +0.303/+0.296
+ext_mono  s0/s1: val 0.460/0.473  AUC 0.940/0.942  Brier 0.062/0.066  LH 0.29/0.36  HL 0.10/0.10  beta -0.794/-0.775
+bas_free  s0/s1: val 0.503/0.532  AUC 0.920/0.912  Brier 0.079/0.078  LH 0.29/0.29  HL 0.00/0.00  beta +0.149/+0.180
+Neither topology dominates: free beta wins on trajectory loss, the constrained
+monostable arm wins on discrimination and calibration. Both reproduce across
+seeds to within a few per cent.
+MECHANISM worth reporting: the bistable arm records ZERO H->L events in every
+run, while the monostable arm records some. This is structural, not incidental
+- once the bistable latent occupies the upper branch, returning requires the
+drive to fall below the LOWER fold, a much larger excursion than these
+discharges provide, whereas a monostable latent tracks the drive continuously.
+The hysteresis that motivates bistability is precisely what prevents it from
+reproducing the observed back-transitions in this corpus.
