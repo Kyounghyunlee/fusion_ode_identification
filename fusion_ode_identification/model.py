@@ -33,6 +33,20 @@ CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
 # identical for every discharge and available online.
 CONTROL_SCALES = (1.0e6, 1.0e6, 1.0e19, 2.0)
 
+# Drive feature set for the latent regime ODE. "basic" reproduces the
+# injected-power drive; "extended" adds a loss-power proxy and plasma shape,
+# the covariates MAST threshold studies identify as controlling. All are
+# causally measurable online and enter in fixed physical units.
+DRIVE_FEATURES = {
+    "basic": ("P_nbi", "Ip", "nebar"),
+    "extended": ("P_loss", "Ip", "nebar", "P_rad", "kappa_ts", "delta_ts"),
+}
+DRIVE_SCALES = {
+    "P_nbi": 1.0e6, "P_loss": 1.0e6, "P_rad": 1.0e6,
+    "Ip": 1.0e6, "nebar": 1.0e19, "kappa_ts": 1.0, "delta_ts": 1.0,
+}
+DRIVE_OFFSETS = {"kappa_ts": 1.6, "delta_ts": 0.3}  # center shape near corpus norm
+
 TAU_MIN = 5.0e-3  # s; numerical floor, below the ~4 ms observation cadence
 
 
@@ -121,14 +135,13 @@ class NormalFormLatent(eqx.Module):
     bb: jnp.ndarray
     dalpha_head: eqx.nn.MLP
     beta_mode: str = eqx.field(static=True)
+    n_drive: int = eqx.field(static=True)
 
-    N_DRIVE = 3  # P_nbi (command), Ip and nebar (measured context)
-
-    def __init__(self, key, beta_mode: str = "free"):
+    def __init__(self, key, beta_mode: str = "free", n_drive: int = 3):
         key_w, key_head = jax.random.split(key)
-        self.drive_weights = jnp.array([-1.0, 0.0, 0.0], dtype=jnp.float64) + (
-            jax.random.normal(key_w, (self.N_DRIVE,), dtype=jnp.float64) * 0.01
-        )
+        self.n_drive = int(n_drive)
+        init = jnp.zeros((self.n_drive,), dtype=jnp.float64).at[0].set(-1.0)
+        self.drive_weights = init + jax.random.normal(key_w, (self.n_drive,), dtype=jnp.float64) * 0.01
         self.drive_bias = jnp.array(-0.5, dtype=jnp.float64)
         self.beta_raw = jnp.array(0.3, dtype=jnp.float64)
         self.tau_raw = jnp.array(-3.9, dtype=jnp.float64)  # softplus + TAU_MIN ~ 25 ms
@@ -156,15 +169,12 @@ class NormalFormLatent(eqx.Module):
 
     def drive(self, latent_features: jnp.ndarray) -> jnp.ndarray:
         """alpha(r): affine in physically scaled inputs; monotone in power."""
-        feat = _as64(latent_features)
-        w_power = jax.nn.softplus(self.drive_weights[0])
-        raw = (
-            w_power * feat[0]
-            + self.drive_weights[1] * feat[1]
-            + self.drive_weights[2] * feat[2]
-            + self.drive_bias
-        )
-        return softclip(raw, 5.0)
+        feat = _as64(latent_features)[: self.n_drive]
+        # Monotone in the first feature (injected or loss power); the
+        # remaining coefficients are unconstrained in sign.
+        w = jnp.concatenate([jnp.atleast_1d(jax.nn.softplus(self.drive_weights[0])),
+                             self.drive_weights[1:]])
+        return softclip(jnp.dot(w, feat) + self.drive_bias, 5.0)
 
     def __call__(self, z: float, latent_features: jnp.ndarray) -> float:
         zeta = _as64(z)
@@ -222,13 +232,15 @@ def build_hybrid_model(cfg, key) -> "HybridField":
     source_scale = float(model_cfg.get("source_scale", 3.0e5))
     divergence_clip = float(model_cfg.get("divergence_clip", 1.0e6))
     beta_mode = str(model_cfg.get("beta_mode", "free"))
+    drive_set = str(model_cfg.get("drive_set", "basic"))
+    n_drive = len(DRIVE_FEATURES[drive_set])
     delta_chi_off = bool(model_cfg.get("delta_chi_off", False))
     source_off = bool(model_cfg.get("source_off", False))
 
     key_nn, key_latent = jax.random.split(key)
     return HybridField(
         nn=SourceNN(key_nn, source_scale=0.0 if source_off else source_scale, layers=layers, depth=depth),
-        latent=NormalFormLatent(key_latent, beta_mode=beta_mode),
+        latent=NormalFormLatent(key_latent, beta_mode=beta_mode, n_drive=n_drive),
         divergence_clip=divergence_clip,
         delta_chi_off=delta_chi_off,
     )

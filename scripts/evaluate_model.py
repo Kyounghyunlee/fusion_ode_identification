@@ -118,6 +118,7 @@ class EvalBundle(NamedTuple):
     ne_vals: jnp.ndarray
     Te_edge: jnp.ndarray
     dalpha_ts: jnp.ndarray
+    drive_feats: jnp.ndarray
     obs_idx: jnp.ndarray
 
 def load_config(config_path="config/config.yaml"):
@@ -151,6 +152,7 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
         ne_vals = jnp.asarray(stacked.ne_vals[i, :t_len])
         Te_edge = jnp.asarray(stacked.Te_edge[i, :t_len])
         dalpha_ts = jnp.asarray(stacked.dalpha_ts[i, :t_len])
+        drive_feats = jnp.asarray(stacked.drive_feats[i, :t_len])
         obs_idx = jnp.asarray(stacked.obs_idx[i])
         shot_id = int(stacked.shot_id[i])
 
@@ -174,6 +176,7 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
                 ne_vals=ne_vals,
                 Te_edge=Te_edge,
                 dalpha_ts=dalpha_ts,
+                drive_feats=drive_feats,
                 obs_idx=obs_idx,
             )
         )
@@ -230,7 +233,7 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = bundle.ne_vals[:, -1]
-    latent_features_ts = ctrl_norm_ts
+    latent_features_ts = bundle.drive_feats
 
     rho = bundle.rho
     Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
@@ -846,8 +849,7 @@ def main():
 
         bifurcation_summary = None
         ctrl_interp_diag = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
-        drive_features_diag = (ctrl_interp_diag.evaluate(bundle.ts_t) - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
-        bif = normal_form_diagnostics(model.latent, np.asarray(drive_features_diag), np.asarray(zs))
+        bif = normal_form_diagnostics(model.latent, np.asarray(bundle.drive_feats), np.asarray(zs))
         if bif is not None:
             bifurcation_summary = {
                 "beta": bif["beta"],

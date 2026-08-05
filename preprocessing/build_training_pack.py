@@ -25,6 +25,7 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import json
 import numpy as np
 import xarray as xr  # Loads NetCDF files
 
@@ -1233,9 +1234,70 @@ def build_one_shot(
     P_nbi = sanitize_nonnegative_signal(interp_fill_1d(t, P_nbi))
     P_rad = sanitize_nonnegative_signal(interp_fill_1d(t, P_rad))
 
+    # ---- Physics-directed drive covariates (all causally measurable) ----
+    # Ohmic power and a loss-power proxy P_loss = P_nbi + P_ohm - P_rad - dW/dt.
+    # The L-H threshold is conventionally expressed in loss power, not in
+    # injected power (see Martin et al. 2008; Meyer et al. 2011).
+    P_ohm_arr = get_var(summ, ["power_ohm", "p_ohm", "power_ohmic", "P_ohm"])
+    P_ohm_clean = sanitize_nonnegative_signal(interp_fill_1d(t, P_ohm_arr.values)) if P_ohm_arr is not None else np.zeros_like(t)
+    # Ohmic traces can carry large spikes at breakdown/termination; clip to a
+    # physically plausible band before differencing.
+    P_ohm_clean = np.clip(P_ohm_clean, 0.0, 5.0e6)
+
+    def _eq_series(names):
+        """Equilibrium scalar time series interpolated onto the summary grid."""
+        da = get_var(eq, names)
+        if da is None:
+            return None
+        v = np.asarray(da.values, dtype=float).squeeze()
+        if v.ndim != 1 or v.size < 3:
+            return None
+        t_eq = None
+        for cand in ("time", "t"):
+            if cand in da.coords:
+                t_eq = np.asarray(da.coords[cand].values, dtype=float)
+                break
+        if t_eq is None or t_eq.size != v.size:
+            return None
+        good = np.isfinite(v) & np.isfinite(t_eq)
+        if good.sum() < 3:
+            return None
+        return np.interp(t, t_eq[good], v[good], left=v[good][0], right=v[good][-1])
+
+    W_mhd = _eq_series(["wmhd", "w_mhd", "stored_energy"])
+    if W_mhd is not None:
+        W_smooth = _smooth_time_window(W_mhd, t, 0.010)
+        dWdt = np.gradient(W_smooth, t)
+        dWdt = np.clip(dWdt, -5.0e6, 5.0e6)
+    else:
+        W_smooth = np.full_like(t, np.nan)
+        dWdt = np.zeros_like(t)
+    P_loss = np.clip(P_nbi + P_ohm_clean - P_rad - dWdt, 0.0, 2.0e7)
+
+    kappa_s = _eq_series(["elongation"])
+    dtri_u = _eq_series(["triangularity_upper"])
+    dtri_l = _eq_series(["triangularity_lower"])
+    if dtri_u is not None and dtri_l is not None:
+        delta_s = 0.5 * (dtri_u + dtri_l)
+    else:
+        delta_s = dtri_u if dtri_u is not None else dtri_l
+    zX_s = _eq_series(["x_point_z"])
+    q95_s = _eq_series(["q95"])
+    # Fall back to corpus-neutral constants when a channel is missing, and
+    # record availability so the manifest can report it.
+    shape_avail = {
+        "kappa": kappa_s is not None, "delta": delta_s is not None,
+        "x_point_z": zX_s is not None, "q95": q95_s is not None,
+        "wmhd": W_mhd is not None, "P_ohm": P_ohm_arr is not None,
+    }
+    kappa_ts = kappa_s if kappa_s is not None else np.full_like(t, np.nan)
+    delta_ts = delta_s if delta_s is not None else np.full_like(t, np.nan)
+    zX_ts = zX_s if zX_s is not None else np.full_like(t, np.nan)
+    q95_ts = q95_s if q95_s is not None else np.full_like(t, np.nan)
+
     # Extended Summary Signals (Level-2)
     W_tot_da = get_var(summ, ["W_tot", "w_tot", "stored_energy", "energy_total"])
-    P_ohm_da = get_var(summ, ["p_ohm", "power_ohmic", "P_ohm"])
+    P_ohm_da = get_var(summ, ["power_ohm", "p_ohm", "power_ohmic", "P_ohm"])
     P_tot_da = get_var(summ, ["p_tot", "power_total", "P_tot"])
     ne_line_da = get_var(summ, ["n_e_line", "ne_line", "line_average_density", "line_average_n_e"])
     H98_da = get_var(summ, ["H98", "H_98", "h98", "h_factor_98y2"])
@@ -1361,6 +1423,14 @@ def build_one_shot(
         **ne_scalar_meta,
         P_nbi=P_nbi,
         P_rad=P_rad,
+        P_ohm_clean=P_ohm_clean,
+        P_loss=P_loss,
+        W_mhd=W_smooth,
+        kappa_ts=kappa_ts,
+        delta_ts=delta_ts,
+        x_point_z_ts=zX_ts,
+        q95_ts=q95_ts,
+        shape_available=json.dumps(shape_avail),
         P_nbi_raw=P_nbi_raw,
         P_rad_raw=P_rad_raw,
         D_alpha=D_alpha,

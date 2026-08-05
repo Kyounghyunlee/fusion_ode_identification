@@ -9,7 +9,7 @@ from typing import List, Tuple
 import jax.numpy as jnp
 import numpy as np
 
-from .model import CONTROL_NAMES, CONTROL_SCALES
+from .model import CONTROL_NAMES, CONTROL_SCALES, DRIVE_FEATURES, DRIVE_OFFSETS, DRIVE_SCALES
 from .types import ShotBundle
 
 
@@ -78,7 +78,8 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     if len(files) == 0:
         raise FileNotFoundError(f"No training packs found in {data_dir}")
 
-    print(f"Loading {len(files)} shots...")
+    drive_set = str(config.get("model", {}).get("drive_set", "basic"))
+    print(f"Loading {len(files)} shots... (drive_set={drive_set})")
 
     ref_data = np.load(files[0])
     rho_ref_np = np.array(ref_data["rho"], dtype=float)
@@ -288,6 +289,28 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             axis=-1,
         )
         dalpha_ts = np.interp(ts_t, ctrl_t_full, dalpha_full, left=dalpha_full[0], right=dalpha_full[-1])
+
+        # Latent drive features in fixed physical units (causal; no per-shot
+        # statistics). A missing channel falls back to the corpus-neutral
+        # offset so a discharge is never silently dropped.
+        n_raw_ctrl = int(np.asarray(d["t"], dtype=float).shape[0])
+        drive_cols = []
+        for name in DRIVE_FEATURES[drive_set]:
+            off = DRIVE_OFFSETS.get(name, 0.0)
+            sc = DRIVE_SCALES[name]
+            v = None
+            if name in d:
+                raw = np.asarray(d[name], dtype=float).reshape(-1)
+                if raw.shape[0] == n_raw_ctrl:
+                    v = raw[ctrl_order][keep_c]
+            if v is None or not np.any(np.isfinite(v)):
+                v = np.full(ctrl_t_full.shape[0], off * sc, dtype=float)
+            elif not np.all(np.isfinite(v)):
+                fin = np.isfinite(v)
+                v = np.interp(ctrl_t_full, ctrl_t_full[fin], v[fin], left=v[fin][0], right=v[fin][-1])
+            col = v / sc - off
+            drive_cols.append(np.interp(ts_t, ctrl_t_full, col, left=col[0], right=col[-1]))
+        drive_feats = np.stack(drive_cols, axis=-1)
         # Fixed physical scales (causal: no per-shot statistics enter the model).
         ctrl_means = np.zeros(ctrl_vals_ts.shape[-1])
         ctrl_stds = np.array(CONTROL_SCALES, dtype=float)[: ctrl_vals_ts.shape[-1]]
@@ -308,6 +331,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
                 ctrl_means=jnp.array(ctrl_means),
                 ctrl_stds=jnp.array(ctrl_stds),
                 dalpha_ts=jnp.array(dalpha_ts),
+                drive_feats=jnp.array(drive_feats),
                 shot_id=int(os.path.basename(f).split("_")[0]),
             )
         )
@@ -461,6 +485,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             "shot_id": jnp.array(shot["shot_id"]),
             "t_len": len(ts_t),
             "dalpha_ts": shot["dalpha_ts"],
+            "drive_feats": shot["drive_feats"],
         })
 
     if len(bundles_list) == 0:
@@ -487,6 +512,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     ne_vals_stack = pad_to_max([b["ne_vals"] for b in bundles_list], mode="edge")
     Te_edge_stack = pad_to_max([b["Te_edge"] for b in bundles_list], mode="edge")
     dalpha_ts_stack = pad_to_max([b["dalpha_ts"] for b in bundles_list], mode="edge")
+    drive_feats_stack = pad_to_max([b["drive_feats"] for b in bundles_list], mode="edge")
     edge_idx_stack = jnp.stack([b["edge_idx"] for b in bundles_list])
     rho_edge_stack = jnp.stack([b["rho_edge"] for b in bundles_list])
 
@@ -531,6 +557,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         edge_idx_stack,
         rho_edge_stack,
         dalpha_ts_stack,
+        drive_feats_stack,
     )
 
     print(f"[data] Loaded and stacked {len(bundles_list)} shots.")

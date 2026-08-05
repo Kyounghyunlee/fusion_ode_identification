@@ -88,7 +88,8 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = ctrl_norm_ts
+    # Latent drive uses its own physically scaled feature set.
+    latent_features_ts = bundle.drive_feats
 
     # Precompute static geometry factors once per shot (used by diffusion operator).
     rho = bundle.rho_rom
@@ -315,7 +316,8 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = ctrl_norm_ts
+    # Latent drive uses its own physically scaled feature set.
+    latent_features_ts = bundle.drive_feats
 
     rho = bundle.rho_rom
     Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)
