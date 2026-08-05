@@ -1,0 +1,264 @@
+% Appendix: equilibrium data usage, flux coordinate, and metric.
+% Every statement corresponds to preprocessing/equilibrium_geometry.py and
+% preprocessing/build_training_pack.py, and was checked against the actual
+% NetCDF contents of the corpus.
+
+\section{Equilibrium data: coordinate, metric, and covariates}
+\label{app:equilibrium}
+
+This appendix documents exactly which equilibrium quantities are read, how
+the radial coordinate and volume element are constructed from them, which
+approximations enter, and one sign-convention error that we found and
+corrected. We give this in full because the flux coordinate determines
+\emph{which part of the plasma the model is fitted to}, and an error there
+is not visible in any training or validation metric.
+
+\subsection{Files and fields}
+
+Each discharge directory holds three NetCDF files converted from the MAST
+Level-2 Zarr groups: \texttt{equilibrium.nc}, \texttt{thomson\_scattering.nc},
+and \texttt{summary.nc}, plus an optional \texttt{d\_alpha.nc}. A discharge
+is skipped if any of the three required files is absent.
+
+From \texttt{equilibrium.nc} we read:
+
+\begin{center}\small
+\begin{tabular}{llll}
+\toprule
+field & dimensions & units & use \\
+\midrule
+\texttt{psi} & (\texttt{z}, \texttt{major\_radius}, \texttt{time}) & Wb\,rad$^{-1}$ & flux coordinate, $V(\rho)$ \\
+\texttt{major\_radius}, \texttt{z} & (65), (65) & m & poloidal-plane grid \\
+\texttt{magnetic\_axis\_r}, \texttt{magnetic\_axis\_z} & (time) & m & inner flux anchor \\
+\texttt{lcfs\_r}, \texttt{lcfs\_z} & (n$_{\mathrm{bnd}}$, time) & m & outer flux anchor \\
+\texttt{volume} & (time) & m$^3$ & \emph{validation only} \\
+\texttt{wmhd} & (time) & J & $\mathrm{d}W/\mathrm{d}t$ in $P_{\mathrm{loss}}$ \\
+\texttt{elongation} & (time) & -- & drive covariate $\kappa$ \\
+\texttt{triangularity\_upper/lower} & (time) & -- & drive covariate $\delta$ \\
+\texttt{q95} & (time) & -- & stored, not used in the drive \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Fields present in the file but deliberately unused are listed in
+\S\ref{app:eq-unused}.
+
+\subsection{The flux coordinate, and a corrected sign convention}
+\label{app:eq-rho}
+
+MAST Level-2 stores the poloidal flux per radian, and in this convention
+$\psi$ is \emph{maximal on the magnetic axis} and decreases outward. Our
+first implementation assumed the opposite --- it took
+$\psi_{\mathrm{axis}} = \min_{R,Z}\psi$ and
+$\psi_{\mathrm{edge}} = \max_{R,Z}\psi$ over the rectangular grid --- and a
+guard clause discarded the separatrix value whenever it fell below the grid
+maximum, which it always does. The consequence was a silently inverted
+coordinate. Measured on discharge 25145, the resulting map along the
+Thomson chord was
+
+\begin{center}\small
+\begin{tabular}{lrrrrrrr}
+\toprule
+$R$ [m] & 0.30 & 0.50 & 0.70 & 0.90 (axis) & 1.10 & 1.30 & 1.50 \\
+$\rho$ (erroneous) & 0.822 & 0.894 & 0.968 & \textbf{1.000} & 0.965 & 0.868 & 0.745 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+i.e.\ $\rho = 1$ \emph{at the magnetic axis}, $\rho \approx 0.75$--$0.82$ at
+both ends of the chord, non-monotonic in $R$, and every profile compressed
+into $\rho \in [0.745, 1]$. Because the quality gates and the supervision
+mask select $\rho \gtrsim 0.78$--$0.80$, the "reliable edge annulus" was in
+fact the region nearest the magnetic axis, and the sort-and-interpolate step
+interleaved inboard and outboard channels that mapped to nearly the same
+$\rho$. No training or validation metric was sensitive to this; it was
+found only by auditing the data path against the file contents.
+
+The corrected construction anchors the normalization on quantities that are
+actually present in the files:
+\begin{align}
+\psi_{\mathrm{axis}} &= \psi\big(R_{\mathrm{axis}}, Z_{\mathrm{axis}}\big),
+&& \text{bilinear interpolation at \texttt{magnetic\_axis\_r/z}},
+\label{eq:psiaxis}\\
+\psi_{\mathrm{bnd}} &= \mathrm{median}\big\{\psi(R_k, Z_k)\big\}_{k \in \mathrm{LCFS}},
+&& \text{sampled on the \texttt{lcfs\_r/lcfs\_z} contour},
+\label{eq:psibnd}\\
+\psi_N(R,Z) &= \frac{\psi(R,Z) - \psi_{\mathrm{axis}}}{\psi_{\mathrm{bnd}} - \psi_{\mathrm{axis}}},
+\qquad
+\rho(R,Z) = \sqrt{\mathrm{clip}\big(\psi_N, 0, 1\big)}.
+\label{eq:rho}
+\end{align}
+The median in \eqref{eq:psibnd} is robust to the NaN padding of the
+boundary arrays (typically a third of the stored contour points) and to
+individual outliers where the contour grazes the grid. Because
+$\psi_{\mathrm{bnd}} < \psi_{\mathrm{axis}}$, the denominator is negative
+and $\psi_N$ increases outward, so $\rho = 0$ on the axis and $\rho = 1$ on
+the last closed flux surface, as intended. On discharge 25145 the corrected
+map along the same chord is $\rho = 0.969, 0.783, 0.512, 0.314, 0.501,
+0.859, 1.000$ at $R = 0.30 \dots 1.40$~m: monotonically increasing outward
+on both sides, with the minimum at the chord's closest approach to the
+axis. The minimum is $0.314$ rather than $0$ because the magnetic axis of
+this discharge sits at $Z_{\mathrm{axis}} = -0.214$~m while the Thomson
+chord is at $Z = 0$, so the chord passes above the axis and never samples
+the true core --- a real property of the measurement, now correctly
+represented.
+
+The construction is rejected (and recorded as such) if $\psi$, the grid
+coordinates, the axis position, or the LCFS contour are missing, if fewer
+than eight finite boundary points exist, or if
+$|\psi_{\mathrm{bnd}} - \psi_{\mathrm{axis}}| < 10^{-9}$. In that case the
+pipeline falls back to a normalized major radius and an explicitly
+cylindrical metric, and stamps
+\texttt{rho\_fallback\_method = "linear\_R"} and
+\texttt{geom\_method = "cylindrical\_fallback"} into the pack. On the
+present corpus the fallback is never taken: all discharges use
+\texttt{psi\_axis\_to\_lcfs}.
+
+\subsection{The volume element $V'(\rho)$}
+\label{app:eq-vprime}
+
+The transport operator needs $V'(\rho) = \mathrm{d}V/\mathrm{d}\rho$. The
+Level-2 equilibrium group does \emph{not} contain a flux-surface volume
+profile --- only a scalar \texttt{volume}$(t)$ --- and our first
+implementation therefore fell through a sentinel path to the analytic
+cylindrical form $V' = 2\rho$ while the documentation claimed the metric
+came from the reconstruction. That claim was false for every discharge.
+
+We now integrate the volume directly over the poloidal plane,
+\begin{equation}
+V(\rho) = \int\limits_{\{\rho' \le \rho\}} 2\pi R \,\mathrm{d}R\,\mathrm{d}Z
+\;\approx\;
+\sum_{i,j} 2\pi R_{ij}\, \Delta R_i\, \Delta Z_j \,
+\mathbb{1}\big[\rho_{ij} \le \rho\big]\,\mathbb{1}\big[(i,j) \in \Omega\big],
+\qquad
+V'(\rho) = \frac{\mathrm{d}V}{\mathrm{d}\rho},
+\label{eq:volint}
+\end{equation}
+where $\rho_{ij}$ is \eqref{eq:rho} evaluated on the equilibrium grid,
+$\Delta R$, $\Delta Z$ are central grid spacings, and the derivative is
+taken by central differences on the $65$-point $\rho$ grid. The domain
+$\Omega$ restricts the sum to the closed-flux region: $\psi_N \le 1$ and
+inside the bounding box of the LCFS contour. The bounding box is needed
+because $\psi_N \le 1$ also holds in the private-flux region below the
+X-point, which is not confined plasma; this is an approximation, and it is
+the only geometric approximation in \eqref{eq:volint}. $V$ is passed through
+a running maximum to remove non-monotonicity from grid-scale noise, and
+$V'$ is floored at zero.
+
+\paragraph{Independent validation.} The equilibrium files carry their own
+total plasma volume, which is \emph{not} used in the computation. Comparing
+it with $V(\rho = 1)$ from \eqref{eq:volint} gives, on test discharges,
+$7.20$ vs $7.20$~m$^3$ (ratio $1.000$) and $7.01$ vs $7.04$~m$^3$
+(ratio $0.997$). Agreement at the few-per-mil level confirms that the
+integration, the coordinate normalization, and the closed-flux mask are
+mutually consistent. The ratio is stored per discharge as
+\texttt{geom\_V\_total\_ratio} so that any outlier is visible in the
+manifest rather than silently averaged away.
+
+The resulting $V'$ is physical rather than analytic: it rises from zero on
+axis to a maximum near mid-radius and falls in the edge region, with
+$V'(0.85) \approx 13$~m$^3$ per unit $\rho$ on the discharges above,
+compared with the cylindrical stand-in $V'(0.85) = 1.7$. Downstream,
+\texttt{data.py} interpolates $V'$ onto the uniform simulation grid, clips
+it to be positive, and applies a floor at the axis node
+($v'_0 \ge 0.125\,v'_1$) so that the axis control volume in
+\eqref{eq:cellvol} cannot vanish.
+
+\subsection{Quasi-static geometry}
+\label{app:eq-quasistatic}
+
+The flux map, the coordinate $\rho(R,Z)$, and $V'(\rho)$ are evaluated at a
+single equilibrium time index and held fixed for the whole discharge. This
+is a deliberate approximation --- the profile evolution we model is faster
+than the shape evolution --- but it must be stated, and the index must be
+chosen sensibly. Our first implementation used the midpoint of the stored
+record, which includes roughly $100$~ms of pre-breakdown samples where the
+axis and boundary fields are NaN; on discharge 25145 that placed the
+geometry at $t = 0.215$~s of a $[-0.100, 0.530]$~s record, biased early.
+We now take the midpoint of the contiguous block of finite magnetic-axis
+samples, which lands inside the reconstructed plasma phase ($t = 0.310$~s
+and $t = 0.140$~s on the two test discharges). The chosen index and its
+physical time are written into every pack as \texttt{geom\_itime} and
+\texttt{geom\_t\_equilibrium}.
+
+By contrast, the \emph{drive covariates} taken from the equilibrium
+($\kappa$, $\delta$, $W_{\mathrm{mhd}}$, $q_{95}$) are time-resolved: each
+is interpolated from the equilibrium time base ($5$~ms cadence) onto the
+summary time base ($1$~ms) with constant extrapolation at the ends, after
+dropping non-finite samples. A channel is disabled if it is not
+one-dimensional, if its time coordinate is missing or length-mismatched, or
+if fewer than three finite samples remain. The metric and the shape
+covariates are therefore treated inconsistently --- one frozen, the other
+time-dependent --- which is acceptable for a phenomenological model but is
+a genuine structural approximation.
+
+\subsection{Derived drive covariates}
+\label{app:eq-covariates}
+
+The loss-power proxy combines summary and equilibrium channels,
+\begin{equation}
+P_{\mathrm{loss}} = \mathrm{clip}\Big(
+P_{\mathrm{NBI}} + P_{\Omega} - P_{\mathrm{rad}} - \frac{\mathrm{d}W_{\mathrm{mhd}}}{\mathrm{d}t},
+\;0,\; 20\,\mathrm{MW}\Big),
+\label{eq:ploss}
+\end{equation}
+with $P_{\Omega}$ clipped to $[0, 5]$~MW (the raw Ohmic trace carries
+breakdown and termination spikes), $W_{\mathrm{mhd}}$ smoothed with a
+$10$~ms boxcar before differentiation, and
+$\mathrm{d}W/\mathrm{d}t$ clipped to $\pm 5$~MW. All clip constants are
+recorded here because they are part of the model definition, not
+housekeeping. A missing power channel enters as identically zero rather
+than as NaN, which is a silent-degradation risk we accept only because all
+three channels are present for every discharge in this corpus.
+
+Note that \eqref{eq:ploss} is a \emph{proxy}: it uses injected rather than
+absorbed beam power, and subtracts total radiated power rather than the
+in-separatrix component. Published L--H thresholds are quoted in loss power
+computed with absorbed power and shine-through/orbit-loss corrections, so
+our thresholds are not directly comparable to them in absolute value; they
+are conditional, corpus-specific quantities. Shape covariates enter as
+$\kappa$ and $\delta = \tfrac12(\delta_{\mathrm{upper}} +
+\delta_{\mathrm{lower}})$, offset by corpus-typical values ($1.6$ and
+$0.3$) so that the drive intercept remains interpretable.
+
+\subsection{Fields deliberately not used}
+\label{app:eq-unused}
+
+Available in the equilibrium group but not consumed:
+\texttt{minor\_radius}, \texttt{q}(\texttt{psi\_norm}, \texttt{time}),
+\texttt{psi\_norm}, \texttt{beta\_tor}/\texttt{beta\_pol}/\texttt{beta\_tor\_normal},
+\texttt{bphi\_rmag}/\texttt{bvac\_rmag}, \texttt{dpressure\_dpsi},
+\texttt{f\_df\_dpsi}, \texttt{j\_phi}, \texttt{x\_point\_r},
+\texttt{elongation\_axis}, \texttt{vloop\_*}, and the $q_{90}/q_{100}/q_{\mathrm{axis}}$
+scalars. Two of these deserve comment. The X-point vertical position
+\texttt{x\_point\_z} is stored with a second dimension of length two (upper
+and lower X-points) and is therefore rejected by the one-dimensional
+requirement of the covariate reader; since MAST L--H threshold studies
+identify X-point height as an important parameter, resolving the
+upper/lower selection and admitting it to the drive is the single most
+promising extension of the input set. The toroidal field
+\texttt{bvac\_rmag} is available and physically relevant to the threshold;
+it is excluded here only because it is nearly constant across this corpus
+and would be collinear with the intercept.
+
+\subsection{Remaining approximations, stated}
+\label{app:eq-caveats}
+
+\begin{enumerate}
+\item The Thomson diagnostic provides no vertical coordinate in these
+      files, so the chord is assumed to lie at $Z = 0$. Since the magnetic
+      axis sits at $|Z_{\mathrm{axis}}| \lesssim 0.2$~m, this is a real
+      geometric offset, and it is why the chord's minimum $\rho$ is
+      $\approx 0.3$ rather than $0$.
+\item $\psi$ is used only through ratios, so its Wb\,rad$^{-1}$ units never
+      require conversion; no unit attribute is read or trusted anywhere in
+      the geometry path.
+\item The closed-flux mask in \eqref{eq:volint} uses the LCFS bounding box
+      rather than the LCFS polygon, which slightly over-counts near the
+      X-point. The volume validation above bounds the resulting error at
+      the few-per-mil level.
+\item Geometry is frozen in time (\S\ref{app:eq-quasistatic}).
+\item Only $\rho \gtrsim 0.7$ carries usable Thomson data after quality
+      screening, so the core transport of the model is unconstrained and no
+      claim is made about it.
+\end{enumerate}
