@@ -110,3 +110,25 @@ being rebuilt and the full grid rerun on the corrected geometry. Latent-only
 quantities (drive, beta, event timing) are geometry-independent in their
 inputs but were trained jointly, so they are retrained too rather than
 mixed across geometries.
+
+## EXP-003 (2026-08-06) - corrected geometry REVERSES the bistability conclusion
+Same grid, same protocol, corrected flux coordinate and equilibrium-derived V'.
+Seed 0, grouped validation (20 shots):
+  extended + free beta : val 0.4063  AUC 0.912 [0.89,0.94]  Brier 0.085  LH 0.36  HL 0.00  beta +0.303
+  basic    + free beta : val 0.5031  AUC 0.920 [0.88,0.95]  Brier 0.079  LH 0.29  HL 0.00  beta +0.149
+  extended + beta<=0   : val 0.4595  AUC 0.940 [0.85,0.99]  Brier 0.062  LH 0.29  HL 0.10  beta -0.794
+Compare with the SAME grid under the inverted coordinate (EXP-002):
+  extended + free : val 1.079  AUC 0.752 ; extended + mono : val 1.104  AUC 0.519
+INTERPRETATION. Validation loss more than halves once the model is fitted to
+the real plasma edge instead of the near-axis region. More importantly the
+monostable arm, which by construction has NO static multistability, now
+attains the BEST discrimination (AUC 0.940) and the BEST calibration
+(Brier 0.062), and is the only configuration with non-zero H->L recall.
+Confidence intervals overlap heavily across all three configurations.
+=> The earlier "the data select bistability" conclusion was an ARTIFACT of the
+inverted radial coordinate. On corrected geometry these MAST data do not
+discriminate between a monostable finite-lag latent and a bistable one.
+The free-beta fit still returns beta > 0, but that is a property of one
+fitted parameter set, not evidence that the data require folds.
+Awaiting seeds 1-2 and the ablations before finalizing; the direction is
+already reproducible in the loss/AUC/Brier ordering.
