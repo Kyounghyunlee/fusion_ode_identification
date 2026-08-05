@@ -368,6 +368,50 @@ deliberately blind to $\lat$, so a pedestal can only be produced by edge
 transport suppression --- an ablation-testable interpretability
 constraint (\S\ref{sec:res-ablations}).
 
+
+\begin{figure}[t]
+  \centering
+  \begin{tikzpicture}[
+      font=\small, node distance=5mm and 9mm,
+      box/.style={draw=black!55, rounded corners=2pt, align=center, inner sep=5pt, minimum height=9mm},
+      data/.style={box, fill=black!4}, model/.style={box, fill=blue!7},
+      loss/.style={box, fill=orange!10}, arr/.style={-{Stealth[length=2.2mm]}, black!60}]
+    \node[data] (act) {causal inputs $\inr(t)$\\ $P_{\mathrm{loss}},\,I_p,\,\bar\nel,\,P_{\mathrm{rad}},\,\kappa,\,\delta$};
+    \node[model, right=of act] (latent) {regime latent\\ $\tau\dot\lat = \dr(\inr) + \beta\lat - \lat^3$};
+    \node[model, right=of latent] (pde) {transport backbone\\ $\partial_t \Te = \nabla\!\cdot\!(\chie(\rho,\bact)\nabla \Te) + s_\theta$};
+    \node[data, right=of pde] (te) {profiles $\Te(\rho_i,t_j)$\\ (Thomson)};
+    \node[model, below=of latent] (heads) {readouts: $\pH=\sigma(k_b\lat+b_b)$,\\ $\hat\yD = h_\psi(\bact,\inr,\cdot)$};
+    \node[loss, below=of pde] (losses) {losses: profile misfit,\\ regime BCE, $\hat\yD$ misfit};
+    \node[data, below=of heads] (obs) {labels $\ell(t)$, proxy $\yD(t)$\\ (D$_\alpha$, offline only)};
+    \draw[arr] (act) -- (latent);
+    \draw[arr] (latent) -- node[above]{$\bact$} (pde);
+    \draw[arr] (pde) -- (te);
+    \draw[arr] (latent) -- (heads);
+    \draw[arr] (heads) -- (losses);
+    \draw[arr] (te) |- (losses);
+    \draw[arr] (obs) -| (losses);
+  \end{tikzpicture}
+  \caption{Model structure and inference paths. The deployment path (top
+  row, left to right) is driven only by causally measurable inputs: the
+  latent closes the transport equation through $\chie(\rho,\bact)$ and is
+  read out as $\pH$ and the fold margins. Measurements enter only through
+  the losses (bottom); in particular the D$_\alpha$ proxy never drives the
+  dynamics, which is what makes the inferred regime state falsifiable.}
+  \label{fig:pipeline}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.5\linewidth]{figures/fig_chi}
+  \caption{The transport-coefficient family \eqref{eq:chi}. The regime
+  state acts only in the edge layer: as the barrier activation rises the
+  edge diffusivity is suppressed towards $\chi_{\mathrm{edge,H}}$,
+  steepening the stationary edge gradient. Positivity and the ordering
+  $\chi_{\mathrm{edge,L}} > \chi_{\mathrm{edge,H}} > 0$ hold by
+  construction.}
+  \label{fig:chi}
+\end{figure}
+
 \subsection{Canonical latent regime dynamics}
 \label{sec:model-latent}
 
@@ -396,8 +440,12 @@ exhibiting critical slowing); for $\beta > 0$ two folds exist at
 and the system is bistable for
 $\dr \in (\dr_{\mathrm{f}}^{-}, \dr_{\mathrm{f}}^{+})$. The conditional
 static margins are
-$\mLH(t) = \dr_{\mathrm{f}}^{+} - \dr(\inr(t))$ and
-$\mHL(t) = \dr(\inr(t)) - \dr_{\mathrm{f}}^{-}$. An equivalent
+\begin{equation}
+\mLH(t) = \dr_{\mathrm{f}}^{+} - \dr(\inr(t)),
+\qquad
+\mHL(t) = \dr(\inr(t)) - \dr_{\mathrm{f}}^{-}.
+\label{eq:margins}
+\end{equation} An equivalent
 injected-power margin $\mLH / \kappa_P$ is meaningful only with the other
 covariates held fixed. Derivations, the potential representation
 $V(\lat) = \lat^4/4 - \beta\lat^2/2 - \dr\lat$, linearized relaxation

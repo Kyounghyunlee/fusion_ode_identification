@@ -40,6 +40,17 @@ diagnostic can still be fitted to the wrong part of the plasma.
 \subsection{Held-out profile prediction}
 \label{sec:res-profiles}
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.66\linewidth]{figures/fig_fit}
+  \caption{Free-running prediction on a held-out discharge (validation
+  split). Dots: measured electron temperature at the three best-covered
+  radii; line: model. Bottom: the inferred regime coordinate $\pH(t)$. The
+  profile is integrated from its initial condition without measurement
+  reset.}
+  \label{fig:fit}
+\end{figure}
+
 On grouped-validation discharges the identified model reproduces the
 measured edge temperature with a coverage-weighted mean absolute error of
 $\SI{39}{eV}$--$\SI{41}{eV}$ ($28.5$--$29.8\%$ relative), consistently
@@ -78,6 +89,25 @@ absolute timing error of a few tens of milliseconds. H$\to$L recall is
 $0.00$ for every bistable fit and $0.10$ for the monostable ones. We regard
 the low absolute recall as the principal limitation of the present model and
 return to it in \S\ref{sec:discussion}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.66\linewidth]{figures/fig_classification}
+  \caption{Regime probability $\pH(t)$ (blue) for four held-out
+  discharges; shaded bands mark the weakly labelled H segments. Shot
+  numbers and split membership are given in each panel label.}
+  \label{fig:classification}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.52\linewidth]{figures/fig_reliability}
+  \caption{Reliability of the regime probability on held-out discharges
+  after validation-only Platt scaling; bin counts annotated. The
+  uncalibrated expected calibration error is quoted for comparison in the
+  panel title. Calibration is measured, not assumed.}
+  \label{fig:reliability}
+\end{figure}
 
 \subsection{Do the data select a latent topology?}
 \label{sec:res-modelcomp}
@@ -147,6 +177,18 @@ and regime identifiability trade against each other in this model class.
 % Remaining ablations (Delta chi = 0; no observation loss; no label loss)
 % are added when their runs complete.
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\linewidth]{figures/fig_aggregate}
+  \caption{Aggregate held-out performance. Left: per-discharge AUC for the
+  three configurations, all seeds pooled, with medians marked; the chance
+  level is indicated. Centre: distribution of matched L$\to$H timing
+  errors. Right: L$\to$H recall by configuration. The overlap of the AUC
+  distributions between the free and constrained-monostable arms is the
+  visual form of the null result discussed in the text.}
+  \label{fig:aggregate}
+\end{figure}
+
 \begin{table}[t]
 \centering\small
 \caption{Model comparison on grouped validation. All rows share data,
@@ -173,6 +215,41 @@ dividing by the power coefficient; the result is a conditional slice of a
 threshold surface, not a universal threshold, and it is not comparable in
 absolute value to published loss-power thresholds for the reasons given in
 Appendix~\ref{app:data-limits}.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.56\linewidth]{figures/fig_bifurcation}
+  \caption{Equilibrium manifold of the identified free-topology latent
+  (solid: stable branches; dashed: saddle) with the inferred trajectory
+  $\big(\dr(\inr(t)), \lat(t)\big)$ of one held-out discharge
+  overlaid, coloured by time. This characterises the fitted parameter set;
+  \S\ref{sec:res-modelcomp} explains why it is not evidence that the data
+  require folds.}
+  \label{fig:bifurcation}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.66\linewidth]{figures/fig_margins}
+  \caption{Static fold margins \eqref{eq:margins} along a held-out
+  discharge for the free-topology fit. $\mLH$ reaching zero marks the
+  disappearance of the quasi-static low-confinement equilibrium, which
+  under a finite-rate drive precedes the observed transition by a dynamic
+  delay.}
+  \label{fig:margins}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.5\linewidth]{figures/fig_threshold}
+  \caption{Conditional equivalent-power threshold surface implied by the
+  identified drive, as a function of plasma current and density with the
+  remaining covariates held fixed. A single threshold number is one slice
+  of this surface; the absolute values are corpus-specific and are not
+  comparable to published loss-power thresholds
+  (Appendix~\ref{app:data-limits}).}
+  \label{fig:threshold}
+\end{figure}
 
 \subsection{Runtime and streaming replay}
 \label{sec:res-runtime}

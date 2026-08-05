@@ -96,6 +96,16 @@ by per-discharge statistics, so that the same actuator setting produces the
 same model input in every discharge and at deployment.
 \end{enumerate}
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{figures/fig_data}
+  \caption{A discharge as the model sees it. Top: the D$_\alpha$ emission
+  proxy with the weakly labelled H segment shaded. Middle: the causal
+  inputs in fixed physical scales. Bottom: the label code, where ``--''
+  marks samples excluded by the plasma gate.}
+  \label{fig:data}
+\end{figure}
+
 \subsection{Weak label construction}
 \label{app:data-labels}
 
@@ -127,6 +137,18 @@ labelled ``transition'' and excluded from scoring, as are all out-of-gate
 samples. Multiple H segments per discharge are permitted, so
 back-transitions are labelled rather than suppressed.
 \end{enumerate}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{figures/fig_labeler}
+  \caption{Anatomy of the weak labels. The raw proxy (orange) is
+  contaminated by edge-localised-mode bursts; the rolling lower envelope
+  (green) isolates the inter-burst baseline whose step-down is the
+  transition signature. The gated variance-maximising threshold is dashed;
+  the accepted H segment is shaded and the resulting transition time
+  dotted.}
+  \label{fig:labeler}
+\end{figure}
 
 \subsection{Label audit and cohorts}
 \label{app:data-audit}
