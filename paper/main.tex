@@ -169,11 +169,15 @@ radial points, reliably measured mainly in an outer annulus); summary
 traces of neutral-beam injected power $P$, plasma current $I_p$, and
 line/profile-averaged density at \SI{1}{ms} cadence; filtered D$_\alpha$
 photodiode signals; and equilibrium reconstructions from which the
-flux-surface geometry is derived. The radial coordinate $\rho \in [0,1]$
-used throughout is the normalized coordinate supplied with the Level-2
-profile data (a normalized minor-radius/flux label; the same convention
-enters training and evaluation consistently).
-% TODO: confirm the exact flux convention string from the dataset metadata.
+flux-surface geometry is derived. The radial coordinate $\rho \in [0,1]$ used throughout is
+\emph{constructed}, not supplied: it is the square root of the poloidal
+flux normalised between the magnetic axis and the last closed flux surface,
+$\rho = \sqrt{(\psi - \psi_{\mathrm{axis}})/(\psi_{\mathrm{bnd}} -
+\psi_{\mathrm{axis}})}$. The Level-2 field \texttt{psi} is documented in
+the files as the poloidal flux per radian (units \texttt{Wb/rad}) on the
+$(R, Z)$ grid, and is maximal on the magnetic axis in this convention ---
+a fact that caused the error described in Appendix~\ref{app:eq-rho}. The
+same construction is used in training, evaluation, and deployment.
 
 \paragraph{The L--H transition.} Above a threshold in the power crossing
 the plasma boundary, sheared flows suppress edge turbulence; the effective
@@ -679,12 +683,19 @@ boundary condition so that the transport coupling has variance to explain,
 to add X-point geometry to the drive, and to test whether the resulting
 margins retain predictive content on a second device.
 
-\paragraph{Data and code availability.} All data are from the UKAEA MAST
-open-data archive \citep{mastopendata} and are acknowledged per the data
-license. Code, configuration, split manifest, seeds, and the experiment
-ledger reproducing every number and figure are available in the project
-repository.
-% TODO: insert exact UKAEA acknowledgement wording from license page.
+\paragraph{Data and code availability.} All measurements are from the UKAEA
+MAST open-data archive \citep{mastopendata}, Level-2 product, accessed
+August 2026. The archive's end-user licence requires that publications based
+on the data acknowledge the original data creators, depositors or copyright
+holders, the service funders, and the data service provider in the form
+specified in the distribution notes accompanying the dataset, and that the
+data collections used be cited in that same form; we follow the wording
+supplied with the downloaded collections. The complete shot list is given in
+Appendix~\ref{app:manifest}. Code, configurations, the split manifest with
+its hash, seeds, the environment lock, and the experiment ledger --- which
+records every run reported here together with the rejected ones --- are
+distributed with the paper, and every number and figure is generated from
+saved artifacts by the scripts referenced in the text.
 
 \bibliographystyle{plainnat}
 \bibliography{refs}
