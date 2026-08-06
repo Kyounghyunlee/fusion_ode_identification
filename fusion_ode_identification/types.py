@@ -29,6 +29,7 @@ class ShotBundle(NamedTuple):
     edge_idx: jnp.ndarray
     rho_edge: jnp.ndarray
     dalpha_ts: jnp.ndarray
+    drive_feats: jnp.ndarray
 
 
 class ShotEval(NamedTuple):

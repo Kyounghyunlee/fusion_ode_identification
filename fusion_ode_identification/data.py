@@ -9,7 +9,7 @@ from typing import List, Tuple
 import jax.numpy as jnp
 import numpy as np
 
-from .model import CONTROL_NAMES
+from .model import CONTROL_NAMES, CONTROL_SCALES, DRIVE_FEATURES, DRIVE_OFFSETS, DRIVE_SCALES
 from .types import ShotBundle
 
 
@@ -78,7 +78,8 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     if len(files) == 0:
         raise FileNotFoundError(f"No training packs found in {data_dir}")
 
-    print(f"Loading {len(files)} shots...")
+    drive_set = str(config.get("model", {}).get("drive_set", "basic"))
+    print(f"Loading {len(files)} shots... (drive_set={drive_set})")
 
     ref_data = np.load(files[0])
     rho_ref_np = np.array(ref_data["rho"], dtype=float)
@@ -288,8 +289,31 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             axis=-1,
         )
         dalpha_ts = np.interp(ts_t, ctrl_t_full, dalpha_full, left=dalpha_full[0], right=dalpha_full[-1])
-        ctrl_means = ctrl_vals_ts.mean(axis=0)
-        ctrl_stds = ctrl_vals_ts.std(axis=0)
+
+        # Latent drive features in fixed physical units (causal; no per-shot
+        # statistics). A missing channel falls back to the corpus-neutral
+        # offset so a discharge is never silently dropped.
+        n_raw_ctrl = int(np.asarray(d["t"], dtype=float).shape[0])
+        drive_cols = []
+        for name in DRIVE_FEATURES[drive_set]:
+            off = DRIVE_OFFSETS.get(name, 0.0)
+            sc = DRIVE_SCALES[name]
+            v = None
+            if name in d:
+                raw = np.asarray(d[name], dtype=float).reshape(-1)
+                if raw.shape[0] == n_raw_ctrl:
+                    v = raw[ctrl_order][keep_c]
+            if v is None or not np.any(np.isfinite(v)):
+                v = np.full(ctrl_t_full.shape[0], off * sc, dtype=float)
+            elif not np.all(np.isfinite(v)):
+                fin = np.isfinite(v)
+                v = np.interp(ctrl_t_full, ctrl_t_full[fin], v[fin], left=v[fin][0], right=v[fin][-1])
+            col = v / sc - off
+            drive_cols.append(np.interp(ts_t, ctrl_t_full, col, left=col[0], right=col[-1]))
+        drive_feats = np.stack(drive_cols, axis=-1)
+        # Fixed physical scales (causal: no per-shot statistics enter the model).
+        ctrl_means = np.zeros(ctrl_vals_ts.shape[-1])
+        ctrl_stds = np.array(CONTROL_SCALES, dtype=float)[: ctrl_vals_ts.shape[-1]]
 
         raw_shots.append(
             dict(
@@ -307,6 +331,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
                 ctrl_means=jnp.array(ctrl_means),
                 ctrl_stds=jnp.array(ctrl_stds),
                 dalpha_ts=jnp.array(dalpha_ts),
+                drive_feats=jnp.array(drive_feats),
                 shot_id=int(os.path.basename(f).split("_")[0]),
             )
         )
@@ -324,16 +349,9 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     reliable_cov_min = float(data_cfg.get("reliable_cov_min", 0.10))
     reliable_rho_min = float(data_cfg.get("reliable_rho_min", 0.80))
 
-    model_cfg = config.get("model", {})
-    latent_design = str(model_cfg.get("latent_design", "cubic")).lower()
-    if "z0" in data_cfg:
-        z0_default = float(data_cfg["z0"])
-    elif latent_design == "barrier_v1":
-        initial_barrier = float(data_cfg.get("latent_initial_barrier", model_cfg.get("initial_barrier", 0.05)))
-        initial_barrier = float(np.clip(initial_barrier, 1.0e-4, 1.0 - 1.0e-4))
-        z0_default = float(np.log(initial_barrier / (1.0 - initial_barrier)))
-    else:
-        z0_default = 0.0
+    # Every discharge starts in the low-confinement state: initialize the
+    # latent near the lower attractor of the normal form.
+    z0_default = float(data_cfg.get("z0", -1.0))
 
     edge_mode = str(data_cfg.get("edge_bc_mode", "use_last_observed")).lower()
 
@@ -443,16 +461,6 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         Vprime_rom = np.clip(Vprime_rom, 1e-6, None)
 
         z0_shot = z0_default
-        if latent_design == "barrier_v1" and "z0" not in data_cfg:
-            dalpha_np = np.asarray(shot["dalpha_ts"], dtype=float)
-            finite = np.isfinite(dalpha_np)
-            if np.any(finite):
-                vals = dalpha_np[finite]
-                span = float(np.max(vals) - np.min(vals))
-                if span > 1.0e-9:
-                    h_evidence0 = 1.0 - float((dalpha_np[0] - np.min(vals)) / (span + 1.0e-6))
-                    h_evidence0 = float(np.clip(h_evidence0, 0.02, 0.98))
-                    z0_shot = float(np.log(h_evidence0 / (1.0 - h_evidence0)))
 
         bundles_list.append({
             "ts_t": ts_t,
@@ -477,6 +485,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
             "shot_id": jnp.array(shot["shot_id"]),
             "t_len": len(ts_t),
             "dalpha_ts": shot["dalpha_ts"],
+            "drive_feats": shot["drive_feats"],
         })
 
     if len(bundles_list) == 0:
@@ -503,6 +512,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
     ne_vals_stack = pad_to_max([b["ne_vals"] for b in bundles_list], mode="edge")
     Te_edge_stack = pad_to_max([b["Te_edge"] for b in bundles_list], mode="edge")
     dalpha_ts_stack = pad_to_max([b["dalpha_ts"] for b in bundles_list], mode="edge")
+    drive_feats_stack = pad_to_max([b["drive_feats"] for b in bundles_list], mode="edge")
     edge_idx_stack = jnp.stack([b["edge_idx"] for b in bundles_list])
     rho_edge_stack = jnp.stack([b["rho_edge"] for b in bundles_list])
 
@@ -547,6 +557,7 @@ def load_data(config) -> Tuple[ShotBundle, np.ndarray, np.ndarray, np.ndarray]:
         edge_idx_stack,
         rho_edge_stack,
         dalpha_ts_stack,
+        drive_feats_stack,
     )
 
     print(f"[data] Loaded and stacked {len(bundles_list)} shots.")

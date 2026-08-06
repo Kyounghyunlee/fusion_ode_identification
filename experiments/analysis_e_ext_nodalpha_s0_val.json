@@ -1,0 +1,940 @@
+{
+ "model_id": "e_ext_nodalpha_s0",
+ "role": "val",
+ "n_shots": 20,
+ "calibration": {
+  "A": 1.6009920144705887,
+  "B": -2.053510678859807,
+  "ece_raw": 0.21807603138073048,
+  "ece_calibrated": 0.049701284101414396
+ },
+ "reliability_calibrated": [
+  {
+   "bin_lo": 0.0,
+   "bin_hi": 0.1,
+   "confidence": 0.021237346194500076,
+   "frequency": 0.011673151750972763,
+   "n": 771
+  },
+  {
+   "bin_lo": 0.1,
+   "bin_hi": 0.2,
+   "confidence": 0.14948995932234513,
+   "frequency": 0.3111111111111111,
+   "n": 45
+  },
+  {
+   "bin_lo": 0.2,
+   "bin_hi": 0.30000000000000004,
+   "confidence": 0.2434003763701187,
+   "frequency": 0.3125,
+   "n": 16
+  },
+  {
+   "bin_lo": 0.30000000000000004,
+   "bin_hi": 0.4,
+   "confidence": 0.34957035884371696,
+   "frequency": 0.6875,
+   "n": 16
+  },
+  {
+   "bin_lo": 0.4,
+   "bin_hi": 0.5,
+   "confidence": 0.45405868735986926,
+   "frequency": 0.2857142857142857,
+   "n": 28
+  },
+  {
+   "bin_lo": 0.5,
+   "bin_hi": 0.6000000000000001,
+   "confidence": 0.5541543007024805,
+   "frequency": 0.65,
+   "n": 20
+  },
+  {
+   "bin_lo": 0.6000000000000001,
+   "bin_hi": 0.7000000000000001,
+   "confidence": 0.6620998048589949,
+   "frequency": 0.7972972972972973,
+   "n": 74
+  },
+  {
+   "bin_lo": 0.7000000000000001,
+   "bin_hi": 0.8,
+   "confidence": 0.7458014217394304,
+   "frequency": 0.62,
+   "n": 50
+  },
+  {
+   "bin_lo": 0.8,
+   "bin_hi": 0.9,
+   "confidence": 0.8237448201665746,
+   "frequency": 0.3333333333333333,
+   "n": 15
+  }
+ ],
+ "aggregate": {
+  "median_auc": 0.9247863247863248,
+  "n_auc_shots": 11,
+  "auc_ci95": [
+   0.8947368421052632,
+   0.948051948051948
+  ],
+  "median_f1_raw": 0.76,
+  "median_f1_calibrated": 0.5499999999999999,
+  "median_acc_calibrated": 0.8759615384615385,
+  "median_brier_calibrated": 0.08500630105965644
+ },
+ "events": {
+  "LH": {
+   "n_label": 14,
+   "n_model": 9,
+   "n_matched": 6,
+   "recall": 0.42857142857142855,
+   "precision": 0.6666666666666666,
+   "timing_median_ms": 9.99999999999998,
+   "timing_iqr_ms": [
+    6.249999999999992,
+    19.375000000000018
+   ],
+   "timing_signed_median_ms": 9.99999999999998
+  },
+  "HL": {
+   "n_label": 10,
+   "n_model": 1,
+   "n_matched": 0,
+   "recall": 0.0,
+   "precision": 0.0,
+   "timing_median_ms": NaN,
+   "timing_iqr_ms": null,
+   "timing_signed_median_ms": NaN
+  }
+ },
+ "negative_control": {
+  "n_confirmed_negative": 6,
+  "n_with_false_H_event": 0,
+  "max_pH_values": {
+   "27568": 0.018,
+   "27569": 0.481,
+   "27570": 0.451,
+   "27578": 0.055,
+   "27579": 0.035,
+   "27580": 0.027
+  }
+ },
+ "n_ambiguous_shots": 9,
+ "per_shot": {
+  "27404": {
+   "cohort": "confirmed_transition",
+   "raw": {
+    "n_scored": 68,
+    "n_H": 19,
+    "n_L": 49,
+    "accuracy": 0.8235294117647058,
+    "f1": 0.76,
+    "auc": 0.8388829215896885,
+    "brier": 0.14654569800454562
+   },
+   "calibrated": {
+    "n_scored": 68,
+    "n_H": 19,
+    "n_L": 49,
+    "accuracy": 0.8676470588235294,
+    "f1": 0.7999999999999999,
+    "auc": 0.8388829215896885,
+    "brier": 0.11368595430941958
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      0.009999999999999953
+     ]
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.8492775862251273
+  },
+  "27568": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 58,
+    "n_H": 0,
+    "n_L": 58,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.02560218320117073
+   },
+   "calibrated": {
+    "n_scored": 58,
+    "n_H": 0,
+    "n_L": 58,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 8.551493360692851e-05
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.017919319105068623
+  },
+  "27569": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 49,
+    "n_H": 0,
+    "n_L": 49,
+    "accuracy": 0.7142857142857143,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.1885032416786629
+   },
+   "calibrated": {
+    "n_scored": 49,
+    "n_H": 0,
+    "n_L": 49,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.04284640500433531
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.4805375787510806
+  },
+  "27570": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 48,
+    "n_H": 0,
+    "n_L": 48,
+    "accuracy": 0.7291666666666666,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.17120303349326393
+   },
+   "calibrated": {
+    "n_scored": 48,
+    "n_H": 0,
+    "n_L": 48,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.033281768613062174
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.45132755462960195
+  },
+  "27571": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 46,
+    "n_H": 0,
+    "n_L": 46,
+    "accuracy": 0.6521739130434783,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.23927597915590262
+   },
+   "calibrated": {
+    "n_scored": 46,
+    "n_H": 0,
+    "n_L": 46,
+    "accuracy": 0.8043478260869565,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.08656369323751079
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 1,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 1,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.6389646995245374
+  },
+  "27572": {
+   "cohort": "confirmed_transition",
+   "raw": {
+    "n_scored": 39,
+    "n_H": 4,
+    "n_L": 35,
+    "accuracy": 0.9230769230769231,
+    "f1": 0.7272727272727273,
+    "auc": 0.9428571428571428,
+    "brier": 0.10334099483199377
+   },
+   "calibrated": {
+    "n_scored": 39,
+    "n_H": 4,
+    "n_L": 35,
+    "accuracy": 0.8717948717948718,
+    "f1": 0.28571428571428575,
+    "auc": 0.9428571428571428,
+    "brier": 0.05311788570139564
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      0.02250000000000002
+     ]
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.5976502252360292
+  },
+  "27573": {
+   "cohort": "confirmed_transition",
+   "raw": {
+    "n_scored": 41,
+    "n_H": 7,
+    "n_L": 34,
+    "accuracy": 0.926829268292683,
+    "f1": 0.8235294117647058,
+    "auc": 0.9117647058823529,
+    "brier": 0.11844928911344933
+   },
+   "calibrated": {
+    "n_scored": 41,
+    "n_H": 7,
+    "n_L": 34,
+    "accuracy": 0.7804878048780488,
+    "f1": 0.18181818181818182,
+    "auc": 0.9117647058823529,
+    "brier": 0.12093601543815181
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      0.03500000000000003
+     ]
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.772482230116093
+  },
+  "27574": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 38,
+    "n_H": 5,
+    "n_L": 33,
+    "accuracy": 0.9210526315789473,
+    "f1": 0.7692307692307693,
+    "auc": 0.9090909090909091,
+    "brier": 0.11317638003544132
+   },
+   "calibrated": {
+    "n_scored": 38,
+    "n_H": 5,
+    "n_L": 33,
+    "accuracy": 0.868421052631579,
+    "f1": 0.0,
+    "auc": 0.9090909090909091,
+    "brier": 0.08890683369864595
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.49470505641737605
+  },
+  "27576": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 46,
+    "n_H": 15,
+    "n_L": 31,
+    "accuracy": 0.9347826086956522,
+    "f1": 0.9090909090909091,
+    "auc": 1.0,
+    "brier": 0.07653499582070239
+   },
+   "calibrated": {
+    "n_scored": 46,
+    "n_H": 15,
+    "n_L": 31,
+    "accuracy": 0.8478260869565217,
+    "f1": 0.6956521739130436,
+    "auc": 1.0,
+    "brier": 0.08344890888180209
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 1,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 1,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.6770335007859319
+  },
+  "27578": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 56,
+    "n_H": 0,
+    "n_L": 56,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.07179869266126529
+   },
+   "calibrated": {
+    "n_scored": 56,
+    "n_H": 0,
+    "n_L": 56,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.000807062277822522
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.05497800565071655
+  },
+  "27579": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 87,
+    "n_H": 0,
+    "n_L": 87,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.06133739810936011
+   },
+   "calibrated": {
+    "n_scored": 87,
+    "n_H": 0,
+    "n_L": 87,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.0005341092263239956
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.03454722766576365
+  },
+  "27580": {
+   "cohort": "confirmed_negative",
+   "raw": {
+    "n_scored": 37,
+    "n_H": 0,
+    "n_L": 37,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.04764700134308973
+   },
+   "calibrated": {
+    "n_scored": 37,
+    "n_H": 0,
+    "n_L": 37,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.0003135772136065406
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.027291555877963586
+  },
+  "27582": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 65,
+    "n_H": 8,
+    "n_L": 57,
+    "accuracy": 0.9076923076923077,
+    "f1": 0.7272727272727273,
+    "auc": 0.9254385964912281,
+    "brier": 0.11828295857446373
+   },
+   "calibrated": {
+    "n_scored": 65,
+    "n_H": 8,
+    "n_L": 57,
+    "accuracy": 0.8769230769230769,
+    "f1": 0.0,
+    "auc": 0.9254385964912281,
+    "brier": 0.09142772772760344
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.17655542670221758
+  },
+  "27584": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 51,
+    "n_H": 7,
+    "n_L": 44,
+    "accuracy": 0.8627450980392157,
+    "f1": 0.0,
+    "auc": 0.948051948051948,
+    "brier": 0.11192539168485756
+   },
+   "calibrated": {
+    "n_scored": 51,
+    "n_H": 7,
+    "n_L": 44,
+    "accuracy": 0.8627450980392157,
+    "f1": 0.0,
+    "auc": 0.948051948051948,
+    "brier": 0.12926302179088586
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.03448144134866189
+  },
+  "27585": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 40,
+    "n_H": 0,
+    "n_L": 40,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.06096009012659607
+   },
+   "calibrated": {
+    "n_scored": 40,
+    "n_H": 0,
+    "n_L": 40,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.0009550340530616524
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.08233540414847128
+  },
+  "27586": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 60,
+    "n_H": 11,
+    "n_L": 49,
+    "accuracy": 0.65,
+    "f1": 0.5116279069767442,
+    "auc": 0.7792207792207793,
+    "brier": 0.28456402416083304
+   },
+   "calibrated": {
+    "n_scored": 60,
+    "n_H": 11,
+    "n_L": 49,
+    "accuracy": 0.7,
+    "f1": 0.5499999999999999,
+    "auc": 0.7792207792207793,
+    "brier": 0.1907337010610294
+   },
+   "events": {
+    "LH": {
+     "n_label": 2,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      0.0025000000000000022
+     ]
+    },
+    "HL": {
+     "n_label": 2,
+     "n_model": 1,
+     "n_matched": 0,
+     "misses": 2,
+     "false_alarms": 1,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.8294284809885945
+  },
+  "27587": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 54,
+    "n_H": 15,
+    "n_L": 39,
+    "accuracy": 0.7962962962962963,
+    "f1": 0.7317073170731707,
+    "auc": 0.9247863247863248,
+    "brier": 0.16839947089267465
+   },
+   "calibrated": {
+    "n_scored": 54,
+    "n_H": 15,
+    "n_L": 39,
+    "accuracy": 0.8703703703703703,
+    "f1": 0.8108108108108109,
+    "auc": 0.9247863247863248,
+    "brier": 0.09282379306049775
+   },
+   "events": {
+    "LH": {
+     "n_label": 2,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      -0.0050000000000000044
+     ]
+    },
+    "HL": {
+     "n_label": 1,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.8267010656668617
+  },
+  "27855": {
+   "cohort": "confirmed_transition",
+   "raw": {
+    "n_scored": 72,
+    "n_H": 45,
+    "n_L": 27,
+    "accuracy": 0.9583333333333334,
+    "f1": 0.9655172413793104,
+    "auc": 1.0,
+    "brier": 0.048928413987028144
+   },
+   "calibrated": {
+    "n_scored": 72,
+    "n_H": 45,
+    "n_L": 27,
+    "accuracy": 0.875,
+    "f1": 0.888888888888889,
+    "auc": 1.0,
+    "brier": 0.12954460831187242
+   },
+   "events": {
+    "LH": {
+     "n_label": 1,
+     "n_model": 1,
+     "n_matched": 0,
+     "misses": 1,
+     "false_alarms": 1,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.7720230752175766
+  },
+  "27860": {
+   "cohort": "ambiguous",
+   "raw": {
+    "n_scored": 29,
+    "n_H": 0,
+    "n_L": 29,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.04873437250459011
+   },
+   "calibrated": {
+    "n_scored": 29,
+    "n_H": 0,
+    "n_L": 29,
+    "accuracy": 1.0,
+    "f1": 0.0,
+    "auc": NaN,
+    "brier": 0.00034000528926468707
+   },
+   "events": {
+    "LH": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    },
+    "HL": {
+     "n_label": 0,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 0,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.03242161126688188
+  },
+  "27866": {
+   "cohort": "confirmed_transition",
+   "raw": {
+    "n_scored": 51,
+    "n_H": 19,
+    "n_L": 32,
+    "accuracy": 0.803921568627451,
+    "f1": 0.7916666666666666,
+    "auc": 0.8947368421052632,
+    "brier": 0.14181150426808628
+   },
+   "calibrated": {
+    "n_scored": 51,
+    "n_H": 19,
+    "n_L": 32,
+    "accuracy": 0.9019607843137255,
+    "f1": 0.8780487804878049,
+    "auc": 0.8947368421052632,
+    "brier": 0.0935995274660504
+   },
+   "events": {
+    "LH": {
+     "n_label": 2,
+     "n_model": 1,
+     "n_matched": 1,
+     "misses": 1,
+     "false_alarms": 0,
+     "timing_errors_s": [
+      0.010000000000000009
+     ]
+    },
+    "HL": {
+     "n_label": 2,
+     "n_model": 0,
+     "n_matched": 0,
+     "misses": 2,
+     "false_alarms": 0,
+     "timing_errors_s": []
+    }
+   },
+   "max_pH": 0.829355221470236
+  }
+ }
+}

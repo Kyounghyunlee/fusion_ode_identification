@@ -1,88 +1,57 @@
 data:
   data_dir: "data"
-  # "all" will load all .npz files in data_dir
   shots: "all"
-
-  # Uniform grid only
   rho_grid_mode: "uniform"
-  # Optional. If omitted, uses the NPZ rho length.
-  # uniform_n_rho: 26
-
-  # BC
   edge_bc_mode: "use_last_observed"
-
-system:
-  device: "gpu"
+  split: "data/split.json"   # grouped session split; test sessions locked
 
 training:
-  # Longer, higher-quality run
-  num_restarts: 1
-
+  seed: 0
   optimizer: "adamw"
   learning_rate: 2.0e-4
   weight_decay: 3.0e-5
 
-  # Longer AdamW phase before L-BFGS
   warmup_steps: 5
-  total_steps: 5000
+  # Ceiling only; early stopping (below) halts on validation plateau.
+  total_steps: 3000
   batch_size: 8
   grad_clip: 1.0e3
-
-  # logging
   log_every: 50
+  # Stop after `patience` evaluations without >= min_delta relative
+  # improvement of the validation loss.
+  early_stop_patience: 10
+  early_stop_min_delta: 5.0e-4
 
-  # loss weights (explicit)
-  huber_delta: 10.0
-  lambda_src: 1.0e-4
-  src_delta: 10.0
-  lambda_z: 1.0e-4
-  lambda_zreg: 1.0e-5
-  lambda_regime: 1.0e-3
-  lambda_dalpha: 0.0
+  # Losses are normalized to O(1) per task (see loss.py: S_TE=100 eV,
+  # S_SRC=1e4 eV/s), so these weights are interpretable ratios.
+  huber_delta: 1.0
+  lambda_src: 0.1
+  src_delta: 1.0
+  lambda_z: 1.0e-3
+  lambda_zreg: 1.0e-3
+  lambda_regime: 0.5
+  lambda_dalpha: 2.0
   lambda_pH: 0.0
 
-  # ODE solver configuration
-  solver: "imex"
-  rtol: 1.0e-3
-  atol: 1.0e-3
-
-  # IMEX-specific configuration (only used if solver=="imex")
   imex:
-    theta: 0.7         # Less dissipative than 1.0, still stable for stiff diffusion
-    dt_base: 0.001     # Base timestep (seconds)
-    substeps: 5        # More substeps -> healthier sensitivities than one big implicit step
-    max_steps: 50000   # Maximum number of steps
-    rtol: 1.0e-4       # Relative tolerance (for future adaptive stepping)
-    atol: 1.0e-6       # Absolute tolerance
+    theta: 0.7
+    substeps: 5
+    max_steps: 50000
 
-  # Optional EMA (0 disables)
   ema_decay: 0.999
 
-  # Enable a short, safe L-BFGS finetune after AdamW
-  lbfgs_finetune: False  
-  lbfgs_maxiter: 20
-  # If >1, run multiple LBFGS "epochs" sequentially.
-  # Use with lbfgs_resample_shots_each_epoch to reshuffle the k shots each epoch.
-  lbfgs_epochs: 10
-  # When true, resample/shuffle the k finetune shots each LBFGS epoch.
-  # Note: stochastic shot selection can be noisier than a fixed batch.
-  lbfgs_resample_shots_each_epoch: false
-  # Optional. If set, each epoch runs this many LBFGS iterations.
-  # If omitted, lbfgs_maxiter is used for each epoch.
-  # lbfgs_maxiter_per_epoch: 10
-  lbfgs_history: 1
-  lbfgs_batch_shots: 8
-  lbfgs_tol: 5.0e-5
-
 output:
-  model_id: "production_run_v2"
+  model_id: "v2_free_s0"
   save_dir: "models"
   log_dir: "logs"
-  model_name: "tokamak ode model"
+  model_name: "model"
+  # Short schedules: the raw best checkpoint beats the lagging EMA.
+  checkpoint_preference: "best,best_ema"
 
 model:
   layers: 128
   depth: 4
-  latent_design: "cubic"
-  latent_gain: 1.0
   source_scale: 3.0e5
+  beta_mode: "free"        # "free" | "nonpositive" (constrained monostable)
+  delta_chi_off: false     # ablation: no regime coupling in chi
+  source_off: false        # ablation: no residual source

@@ -1,11 +1,57 @@
-"""Model definitions for tokamak electron temperature ODE."""
-# fusion_ode_identification/model.py
+"""Model definitions: transport backbone + canonical regime latent.
+
+The latent regime coordinate z(t) obeys the depressed cubic
+
+    tau * dz/dt = alpha(r) + beta * z - z^3,
+
+the canonical (translation-reduced) form of the scalar cubic family: a
+quadratic term can always be removed by shifting z, with the shift absorbed
+into the drive intercept and observation offsets, so only beta is an
+independently meaningful topology parameter. beta is unconstrained: the
+data may support beta <= 0 (single equilibrium branch, finite-rate lag but
+no static multistability) or beta > 0 (two folds, static hysteresis).
+
+The drive alpha(r) is affine in the causal input vector r = [P_nbi, |Ip|,
+nebar] in fixed physical units (MW, MA, 1e19 m^-3), monotone non-decreasing
+in power. No per-shot statistics enter the model, so inference is causal.
+The D-alpha proxy never enters the dynamics; it supervises a learned
+observation head. The residual source network deliberately does NOT see z,
+so regime dependence of the profiles can only arise through the transport
+coefficient chi(rho, b) - removing the interpretability bypass.
+"""
 
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import equinox as eqx
+
+
+CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
+
+# Fixed physical scales for control inputs (W, A, m^-3, a.u.). Frozen;
+# identical for every discharge and available online.
+CONTROL_SCALES = (1.0e6, 1.0e6, 1.0e19, 2.0)
+
+# Drive feature set for the latent regime ODE. "basic" reproduces the
+# injected-power drive; "extended" adds a loss-power proxy and plasma shape,
+# the covariates MAST threshold studies identify as controlling. All are
+# causally measurable online and enter in fixed physical units.
+DRIVE_FEATURES = {
+    "basic": ("P_nbi", "Ip", "nebar"),
+    "extended": ("P_loss", "Ip", "nebar", "P_rad", "kappa_ts", "delta_ts"),
+}
+DRIVE_SCALES = {
+    "P_nbi": 1.0e6, "P_loss": 1.0e6, "P_rad": 1.0e6,
+    "Ip": 1.0e6, "nebar": 1.0e19, "kappa_ts": 1.0, "delta_ts": 1.0,
+}
+DRIVE_OFFSETS = {"kappa_ts": 1.6, "delta_ts": 0.3}  # center shape near corpus norm
+
+TAU_MIN = 5.0e-3  # s; numerical floor, below the ~4 ms observation cadence
+
+
+def _as64(x):
+    return jnp.asarray(x, dtype=jnp.float64)
 
 
 def softclip(x, limit):
@@ -23,26 +69,10 @@ def smooth_clamp(x, lo, hi, beta: float = 50.0):
     x2 = hi - jax.nn.softplus(beta * (hi - x1)) / beta
     return x2
 
-CONTROL_NAMES = ["P_nbi", "Ip", "nebar", "D_alpha"]
-LATENT_FEATURE_SIZE = 6
 
-
-def _as64(x):
-    return jnp.asarray(x, dtype=jnp.float64)
-
-
-def _moving_average_same(x: jnp.ndarray, width: int) -> jnp.ndarray:
-    width = max(1, int(width))
-    if width <= 1 or x.shape[0] < 3:
-        return _as64(x)
-    pad_left = width // 2
-    pad_right = width - 1 - pad_left
-    x_pad = jnp.concatenate([jnp.repeat(x[:1], pad_left), x, jnp.repeat(x[-1:], pad_right)], axis=0)
-    kernel = jnp.ones((width,), dtype=jnp.float64) / float(width)
-    return jnp.convolve(_as64(x_pad), kernel, mode="valid")
-
-
-def _normalize_range(x: jnp.ndarray, default: float = 0.5) -> jnp.ndarray:
+def normalize_observed_signal(x: jnp.ndarray, default: float = 0.5) -> jnp.ndarray:
+    """Range-normalize a measured trace to [0, 1] (supervision targets only;
+    never used on model inputs)."""
     x = _as64(x)
     x_min = jnp.min(x)
     span = jnp.max(x) - x_min
@@ -50,58 +80,18 @@ def _normalize_range(x: jnp.ndarray, default: float = 0.5) -> jnp.ndarray:
     return jnp.where(span > 1.0e-6, scaled, jnp.full_like(x, float(default)))
 
 
-def normalize_observed_signal(x: jnp.ndarray) -> jnp.ndarray:
-    return _normalize_range(x)
-
-
-def _time_derivative(x: jnp.ndarray, t: jnp.ndarray) -> jnp.ndarray:
-    x = _as64(x)
-    t = _as64(t)
-    if x.shape[0] < 2:
-        return jnp.zeros_like(x)
-    dx = jnp.diff(x)
-    dt = jnp.maximum(jnp.diff(t), 1.0e-6)
-    if x.shape[0] == 2:
-        slope = dx[0] / dt[0]
-        return jnp.array([slope, slope], dtype=jnp.float64)
-    center = (x[2:] - x[:-2]) / jnp.maximum(t[2:] - t[:-2], 1.0e-6)
-    first = dx[0] / dt[0]
-    last = dx[-1] / dt[-1]
-    return jnp.concatenate([jnp.array([first], dtype=jnp.float64), center, jnp.array([last], dtype=jnp.float64)])
-
-
-def build_latent_feature_series(
-    ts: jnp.ndarray,
-    ctrl_norm_ts: jnp.ndarray,
-    dalpha_ts: jnp.ndarray,
-    Te_edge_ts: jnp.ndarray,
-    ne_edge_ts: jnp.ndarray,
-) -> jnp.ndarray:
-    ts = _as64(ts)
-    ctrl_norm_ts = _as64(ctrl_norm_ts)
-    dalpha_norm = normalize_observed_signal(dalpha_ts)
-    Te_edge_norm = normalize_observed_signal(Te_edge_ts)
-    ne_edge_norm = normalize_observed_signal(ne_edge_ts)
-
-    dalpha_s = _moving_average_same(dalpha_norm, 11)
-    Te_edge_s = _moving_average_same(Te_edge_norm, 11)
-    ne_edge_s = _moving_average_same(ne_edge_norm, 11)
-
-    dalpha_hmode_evidence = 1.0 - dalpha_s
-    d_dalpha = -_time_derivative(dalpha_s, ts)
-    d_Te_edge = _time_derivative(Te_edge_s, ts)
-    d_ne_edge = _time_derivative(ne_edge_s, ts)
-    P_nbi = ctrl_norm_ts[:, 0]
-    Ip = ctrl_norm_ts[:, 1]
-    return jnp.stack([dalpha_hmode_evidence, d_dalpha, d_Te_edge, d_ne_edge, P_nbi, Ip], axis=-1)
-
-
 class SourceNN(eqx.Module):
+    """Residual source s(rho, Te, ne, r); zero-initialized; regime-blind.
+
+    z is intentionally NOT an input: regime dependence of the profile must
+    flow through chi(rho, b), keeping the transport interpretation testable.
+    """
+
     mlp: eqx.nn.MLP
     source_scale: float
 
     def __init__(self, key, source_scale: float = 1.0, layers: int = 64, depth: int = 3):
-        in_size = 1 + 1 + 1 + len(CONTROL_NAMES) + 1  # rho, Te, ne, controls, z
+        in_size = 1 + 1 + 1 + len(CONTROL_NAMES)  # rho, Te, ne, controls
         self.mlp = eqx.nn.MLP(
             in_size=in_size,
             out_size=1,
@@ -110,378 +100,266 @@ class SourceNN(eqx.Module):
             activation=jax.nn.tanh,
             key=key,
         )
-        # zero-init final layer for stability
         self.mlp = eqx.tree_at(lambda m: m.layers[-1].weight, self.mlp, jnp.zeros_like(self.mlp.layers[-1].weight))
         self.mlp = eqx.tree_at(lambda m: m.layers[-1].bias, self.mlp, jnp.zeros_like(self.mlp.layers[-1].bias))
         self.source_scale = float(source_scale)
 
-    def __call__(self, rho, Te_val, ne_val, controls, z):
-        # Do not force float64 here; let dtype follow model/inputs.
+    def __call__(self, rho, Te_val, ne_val, controls):
         x = jnp.concatenate(
             [
                 jnp.atleast_1d(rho),
                 jnp.atleast_1d(Te_val),
                 jnp.atleast_1d(ne_val),
                 jnp.asarray(controls),
-                jnp.atleast_1d(z),
             ],
             axis=0,
         )
         return self.mlp(x)[0] * self.source_scale
 
 
-class LatentDynamics(eqx.Module):
-    alpha: jnp.ndarray
-    beta: jnp.ndarray
-    gamma: jnp.ndarray
-    mu_weights: jnp.ndarray
-    mu_bias: jnp.ndarray
-    mu_ref: jnp.ndarray
+class NormalFormLatent(eqx.Module):
+    """Depressed-cubic regime latent with monotone barrier readout.
 
-    def __call__(self, z: float, controls: jnp.ndarray) -> float:
-        mu = jnp.dot(controls[:3], self.mu_weights) + self.mu_bias
-        alpha_eff = jax.nn.softplus(self.alpha)
-        beta_eff = jax.nn.softplus(self.beta)
-        gamma_eff = jax.nn.softplus(self.gamma)
-        return alpha_eff * (mu - self.mu_ref) - beta_eff * z - gamma_eff * z**3
+    tau * dz/dt = alpha(r) + beta*z - z^3.
 
-    def barrier_coordinate(self, z: float, latent_gain: float = 1.0) -> float:
-        return jax.nn.sigmoid(_as64(latent_gain) * _as64(z))
+    beta_mode:
+      "free"        - beta = beta_raw (unconstrained; sign decided by data)
+      "nonpositive" - beta = -softplus(beta_raw) (constrained monostable)
+    """
 
-    def regime_logit(self, z: float, latent_gain: float = 1.0) -> float:
-        return _as64(latent_gain) * _as64(z)
+    drive_weights: jnp.ndarray
+    drive_bias: jnp.ndarray
+    beta_raw: jnp.ndarray
+    tau_raw: jnp.ndarray
+    kb_raw: jnp.ndarray
+    bb: jnp.ndarray
+    dalpha_head: eqx.nn.MLP
+    beta_mode: str = eqx.field(static=True)
+    n_drive: int = eqx.field(static=True)
 
-    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float, latent_gain: float = 1.0) -> float:
-        del control_norm, Te_edge, ne_edge
-        return self.barrier_coordinate(z, latent_gain=latent_gain)
+    def __init__(self, key, beta_mode: str = "free", n_drive: int = 3):
+        key_w, key_head = jax.random.split(key)
+        self.n_drive = int(n_drive)
+        init = jnp.zeros((self.n_drive,), dtype=jnp.float64).at[0].set(-1.0)
+        self.drive_weights = init + jax.random.normal(key_w, (self.n_drive,), dtype=jnp.float64) * 0.01
+        self.drive_bias = jnp.array(-0.5, dtype=jnp.float64)
+        self.beta_raw = jnp.array(0.3, dtype=jnp.float64)
+        self.tau_raw = jnp.array(-3.9, dtype=jnp.float64)  # softplus + TAU_MIN ~ 25 ms
+        self.kb_raw = jnp.array(1.5, dtype=jnp.float64)    # softplus + 0.5 -> k_b > 0.5
+        self.bb = jnp.array(0.0, dtype=jnp.float64)
+        self.beta_mode = str(beta_mode)
+        self.dalpha_head = eqx.nn.MLP(
+            in_size=1 + len(CONTROL_NAMES) + 2,
+            out_size=1,
+            width_size=16,
+            depth=1,
+            activation=jax.nn.tanh,
+            key=key_head,
+        )
 
+    # -- canonical quantities --
 
-class BarrierLatentDynamics(eqx.Module):
-    target_extra_weights_raw: jnp.ndarray
-    target_bias: jnp.ndarray
-    evidence_gain_raw: jnp.ndarray
-    tau_lh_raw: jnp.ndarray
-    tau_hl_raw: jnp.ndarray
-    regime_gain: jnp.ndarray
+    def beta(self) -> jnp.ndarray:
+        if self.beta_mode == "nonpositive":
+            return -jax.nn.softplus(self.beta_raw)
+        return self.beta_raw
 
-    def __init__(self, key):
-        del key
-        self.target_extra_weights_raw = jnp.full((LATENT_FEATURE_SIZE - 1,), -5.0, dtype=jnp.float64)
-        self.target_bias = jnp.array(0.0, dtype=jnp.float64)
-        self.evidence_gain_raw = jnp.array(5.5, dtype=jnp.float64)
-        self.tau_lh_raw = jnp.array(-3.0, dtype=jnp.float64)
-        self.tau_hl_raw = jnp.array(-2.2, dtype=jnp.float64)
-        self.regime_gain = jnp.array(1.0, dtype=jnp.float64)
+    def tau_eff(self) -> jnp.ndarray:
+        return jax.nn.softplus(self.tau_raw) + TAU_MIN
+
+    def drive(self, latent_features: jnp.ndarray) -> jnp.ndarray:
+        """alpha(r): affine in physically scaled inputs; monotone in power."""
+        feat = _as64(latent_features)[: self.n_drive]
+        # Monotone in the first feature (injected or loss power); the
+        # remaining coefficients are unconstrained in sign.
+        w = jnp.concatenate([jnp.atleast_1d(jax.nn.softplus(self.drive_weights[0])),
+                             self.drive_weights[1:]])
+        return softclip(jnp.dot(w, feat) + self.drive_bias, 5.0)
 
     def __call__(self, z: float, latent_features: jnp.ndarray) -> float:
-        feat = _as64(latent_features)
         zeta = _as64(z)
-        z_b = self.barrier_coordinate(zeta)
-        dalpha_evidence = jnp.clip(feat[0], 0.0, 1.0)
-        extra = feat[1:]
-        extra_drive = jnp.dot(jax.nn.softplus(self.target_extra_weights_raw), extra)
-        evidence_gain = jax.nn.softplus(self.evidence_gain_raw) + 1.0
-        target_logit = evidence_gain * (dalpha_evidence - 0.5) + 0.1 * extra_drive + self.target_bias
-        target_logit = jnp.clip(target_logit, -8.0, 8.0)
-        target_barrier = jax.nn.sigmoid(target_logit)
-        tau_lh = jax.nn.softplus(self.tau_lh_raw) + 5.0e-3
-        tau_hl = jax.nn.softplus(self.tau_hl_raw) + 5.0e-3
-        tau = jnp.where(target_barrier >= z_b, tau_lh, tau_hl)
-        return (target_logit - zeta) / tau
+        alpha = self.drive(latent_features)
+        rhs = (alpha + self.beta() * zeta - zeta**3) / self.tau_eff()
+        return softclip(rhs, 1.0e3)
 
-    def barrier_coordinate(self, z: float, latent_gain: float = 1.0) -> float:
-        del latent_gain
-        return jax.nn.sigmoid(_as64(z))
+    def initial_state(self, latent_features_0: jnp.ndarray) -> jnp.ndarray:
+        """Causal initialization: the lowest equilibrium of the vector field
+        at the initial drive (every gated discharge starts in state L).
 
-    def regime_logit(self, z: float, latent_gain: float = 1.0) -> float:
-        del latent_gain
-        return self.regime_gain * _as64(z)
+        Newton iteration on f(z) = alpha0 + beta*z - z^3 from a bracket left
+        of all roots; static iteration count keeps this jit-differentiable.
+        """
+        alpha0 = self.drive(latent_features_0)
+        beta = self.beta()
+        z_start = -(1.0 + jnp.sqrt(jnp.abs(beta)) + jnp.abs(alpha0) ** (1.0 / 3.0))
 
-    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float, latent_gain: float = 1.0) -> float:
-        del control_norm, Te_edge, ne_edge, latent_gain
-        return 1.0 - self.barrier_coordinate(z)
+        def newton(_, z):
+            f = alpha0 + beta * z - z**3
+            fp = beta - 3.0 * z**2
+            fp = jnp.where(jnp.abs(fp) < 1e-8, -1e-8, fp)
+            return z - f / fp
+
+        return jax.lax.fori_loop(0, 60, newton, z_start)
+
+    # -- readouts --
+
+    def regime_logit(self, z: float) -> float:
+        k_b = jax.nn.softplus(self.kb_raw) + 0.5
+        return k_b * _as64(z) + self.bb
+
+    def barrier_coordinate(self, z: float) -> float:
+        """Soft barrier activation b(z) in [0, 1]; also the soft regime
+        coordinate reported as p_H (its probabilistic calibration is
+        measured, not assumed)."""
+        return jax.nn.sigmoid(self.regime_logit(z))
+
+    def aux_dalpha_hat(self, z: float, control_norm: jnp.ndarray, Te_edge: float, ne_edge: float) -> float:
+        x = jnp.concatenate(
+            [
+                jnp.atleast_1d(self.barrier_coordinate(z)),
+                jnp.asarray(control_norm, dtype=jnp.float64),
+                jnp.atleast_1d(_as64(Te_edge) / 1000.0),
+                jnp.atleast_1d(_as64(ne_edge) / 1e19),
+            ]
+        )
+        return jax.nn.sigmoid(self.dalpha_head(x)[0])
 
 
 def build_hybrid_model(cfg, key) -> "HybridField":
     model_cfg = cfg.get("model", {})
     layers = int(model_cfg.get("layers", 64))
     depth = int(model_cfg.get("depth", 3))
-    latent_gain = float(model_cfg.get("latent_gain", 1.0))
     source_scale = float(model_cfg.get("source_scale", 3.0e5))
     divergence_clip = float(model_cfg.get("divergence_clip", 1.0e6))
-    latent_design = str(model_cfg.get("latent_design", "cubic")).lower()
+    beta_mode = str(model_cfg.get("beta_mode", "free"))
+    drive_set = str(model_cfg.get("drive_set", "basic"))
+    n_drive = len(DRIVE_FEATURES[drive_set])
+    delta_chi_off = bool(model_cfg.get("delta_chi_off", False))
+    source_off = bool(model_cfg.get("source_off", False))
 
     key_nn, key_latent = jax.random.split(key)
-    if latent_design == "cubic":
-        latent = LatentDynamics(
-            alpha=jnp.array(1.0, dtype=jnp.float64),
-            beta=jnp.array(1.0, dtype=jnp.float64),
-            gamma=jnp.array(1.0, dtype=jnp.float64),
-            mu_weights=jax.random.normal(key_latent, (3,), dtype=jnp.float64) * 0.01,
-            mu_bias=jnp.array(0.0, dtype=jnp.float64),
-            mu_ref=jnp.array(0.0, dtype=jnp.float64),
-        )
-    elif latent_design == "barrier_v1":
-        latent = BarrierLatentDynamics(key_latent)
-    else:
-        raise ValueError(f"Unknown model.latent_design={latent_design!r}")
-
     return HybridField(
-        nn=SourceNN(key_nn, source_scale=source_scale, layers=layers, depth=depth),
-        latent=latent,
-        latent_gain=latent_gain,
+        nn=SourceNN(key_nn, source_scale=0.0 if source_off else source_scale, layers=layers, depth=depth),
+        latent=NormalFormLatent(key_latent, beta_mode=beta_mode, n_drive=n_drive),
         divergence_clip=divergence_clip,
+        delta_chi_off=delta_chi_off,
     )
 
 
 class HybridField(eqx.Module):
+    """1D flux-coordinate temperature-diffusion backbone + regime latent.
+
+    Phenomenological: the evolved quantity is the electron temperature
+    directly; density, heat capacity, and coordinate-motion factors of a
+    full energy balance are absorbed into chi and the residual source.
+    """
+
     nn: SourceNN
     latent: Any
-    latent_gain: jnp.ndarray
 
     Te_scale: float = 1000.0
     ne_scale: float = 1e19
-    chi_core: jnp.ndarray
-    chi_edge_base: jnp.ndarray
-    chi_edge_drop: jnp.ndarray
+    chi_core_raw: jnp.ndarray
+    chi_edge_H_raw: jnp.ndarray
+    chi_edge_gap_raw: jnp.ndarray
     divergence_clip: jnp.ndarray
     ped_center: float = 0.85
     ped_width: float = 0.08
+    delta_chi_off: bool = eqx.field(static=True)
 
     def __init__(
         self,
         nn: SourceNN,
         latent: Any,
-        latent_gain: float = 1.0,
         chi_core: float = 0.6,
-        chi_edge_base: float = 2.0,
-        chi_edge_drop: float = 1.0,
+        chi_edge_L: float = 2.0,
+        chi_edge_H: float = 1.0,
         divergence_clip: float = 1.0e6,
+        delta_chi_off: bool = False,
     ):
+        # softplus-inverse init so constraints hold by construction:
+        # chi_core > 0, chi_edge_H > 0, chi_edge_L = chi_edge_H + gap > chi_edge_H.
+        def _inv_softplus(y):
+            import numpy as np
+            return float(np.log(np.expm1(y)))
+
         self.nn = nn
         self.latent = latent
-        self.latent_gain = jnp.array(latent_gain, dtype=jnp.float64)
-        self.chi_core = jnp.array(chi_core, dtype=jnp.float64)
-        self.chi_edge_base = jnp.array(chi_edge_base, dtype=jnp.float64)
-        self.chi_edge_drop = jnp.array(chi_edge_drop, dtype=jnp.float64)
+        self.chi_core_raw = jnp.array(_inv_softplus(chi_core), dtype=jnp.float64)
+        self.chi_edge_H_raw = jnp.array(_inv_softplus(chi_edge_H), dtype=jnp.float64)
+        self.chi_edge_gap_raw = jnp.array(_inv_softplus(chi_edge_L - chi_edge_H), dtype=jnp.float64)
         self.divergence_clip = jnp.array(divergence_clip, dtype=jnp.float64)
+        self.delta_chi_off = bool(delta_chi_off)
 
-    def __call__(self, t, y, args):
-        dTe_hat_dt, z_dot, _div_raw, _src_raw = self.compute_rhs_components(t, y, args)
+    # -- chi parameters (positive, ordered by construction) --
 
-        rhs = jnp.concatenate([dTe_hat_dt, jnp.array([z_dot], dtype=jnp.float64)])
-        rhs = jnp.where(jnp.isfinite(rhs), rhs, 0.0)
-        return rhs
+    def chi_core(self):
+        return jax.nn.softplus(self.chi_core_raw)
 
-    def uses_barrier_latent(self) -> bool:
-        return isinstance(self.latent, BarrierLatentDynamics)
+    def chi_edge_H(self):
+        return jax.nn.softplus(self.chi_edge_H_raw)
+
+    def chi_edge_L(self):
+        return self.chi_edge_H() + jax.nn.softplus(self.chi_edge_gap_raw)
 
     def barrier_coordinate(self, z):
-        return self.latent.barrier_coordinate(z, latent_gain=self.latent_gain)
+        return self.latent.barrier_coordinate(z)
 
     def compute_regime_logit(self, z):
-        return self.latent.regime_logit(z, latent_gain=self.latent_gain)
+        return self.latent.regime_logit(z)
 
     def compute_aux_dalpha_hat(self, z, control_norm, Te_edge, ne_edge):
-        return self.latent.aux_dalpha_hat(z, control_norm, Te_edge, ne_edge, latent_gain=self.latent_gain)
+        return self.latent.aux_dalpha_hat(z, control_norm, Te_edge, ne_edge)
 
     def _chi_profile(self, rho, z):
-        chi_edge = self.chi_edge_base - self.chi_edge_drop * self.barrier_coordinate(z)
-        chi_edge = jnp.clip(chi_edge, 0.1, 5.0)
+        b = jnp.where(self.delta_chi_off, 0.0, self.barrier_coordinate(z))
+        chi_edge = (1.0 - b) * self.chi_edge_L() + b * self.chi_edge_H()
         w_ped = jax.nn.sigmoid((rho - self.ped_center) / self.ped_width)
-        return self.chi_core + w_ped * (chi_edge - self.chi_core)
+        return self.chi_core() + w_ped * (chi_edge - self.chi_core())
 
-    def _conservative_divergence(self, rho, Vprime, chi, Te_total):
-        # Expect rho, Vprime, chi, Te_total length N (including boundary).
-        dr = jnp.diff(rho)
-        dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
+    # -- IMEX interface --
 
-        grad_T = jnp.diff(Te_total) / dr
-        chi_face = 0.5 * (chi[:-1] + chi[1:])
-        Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
-        flux_face = -Vprime_face * chi_face * grad_T
+    def build_diffusion_matrix_imex(self, t, z, args, dt, theta=1.0):
+        """Tridiagonal coefficients of (I - theta*dt*L) plus boundary coupling.
 
-        flux_in = jnp.concatenate([jnp.array([0.0], dtype=jnp.float64), flux_face[:-1]])
-        flux_out = flux_face
+        chi depends only on (rho, z) so the implicit operator is linear in T.
+        args: (rho, Vprime, ctrl_norm, ne, latent_inputs, dr, Vprime_face,
+        Vprime_cell, denom).
+        """
+        from .imex_solver import build_diffusion_solve_tridiag_implicit
 
-        Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-        vol = Vprime_cell * dr
-        vol_floor = jnp.maximum(1e-4 * jnp.max(vol), 1e-10)
-        denom = jnp.maximum(vol, vol_floor)
-
-        divergence = -(flux_out - flux_in) / denom
-        divergence = softclip(divergence, self.divergence_clip)
-        return divergence, vol, dr
-
-    def _control_norm(self, t, ctrl_interp, control_means, control_stds):
-        control_vals = ctrl_interp.evaluate(t)
-        control_norm = (control_vals - control_means) / (control_stds + 1e-6)
-        return jnp.clip(control_norm, -10.0, 10.0)
-
-    def compute_physics_tendency(self, t, Te_total, z, args):
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
-        rho = _as64(rho_vals)
-        Vprime = jnp.clip(_as64(Vprime_vals), 1e-6, None)
+        rho = _as64(args[0])
+        Vprime = jnp.clip(_as64(args[1]), 1e-6, None)
         chi = self._chi_profile(rho, z)
-
-        divergence, _vol, _dr = self._conservative_divergence(rho, Vprime, chi, Te_total)
-
-        control_norm = self._control_norm(t, ctrl_interp, control_means, control_stds)
-        ne_vals = jnp.clip(ne_interp.evaluate(t), 1e17, 1e21)
-
-        S_nn = jax.vmap(
-            lambda r, T, n: self.nn(r, T / self.Te_scale, n / self.ne_scale, control_norm, z)
-        )(rho[:-1], Te_total[:-1], ne_vals[:-1])
-
-        return divergence + S_nn
-
-    def compute_divergence_only(self, t, Te_total, z, args):
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
-        rho = _as64(rho_vals)
-        Vprime = jnp.clip(_as64(Vprime_vals), 1e-6, None)
-        chi = self._chi_profile(rho, z)
-        divergence, _vol, _dr = self._conservative_divergence(rho, Vprime, chi, Te_total)
-        return divergence
-
-    def compute_source(self, t, Te_total, z, args):
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
-        rho = _as64(rho_vals)
-
-        control_norm = self._control_norm(t, ctrl_interp, control_means, control_stds)
-        ne_vals = jnp.clip(ne_interp.evaluate(t), 1e17, 1e21)
-
-        S_nn = jax.vmap(
-            lambda r, T, n: self.nn(r, T / self.Te_scale, n / self.ne_scale, control_norm, z)
-        )(rho[:-1], Te_total[:-1], ne_vals[:-1])
-        return S_nn
-
-    # -------- Fast (interp-free) helpers for IMEX --------
+        a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(
+            rho, Vprime, chi, dt, theta,
+            dr=args[5], Vprime_face=args[6], Vprime_cell=args[7], denom=args[8],
+        )
+        return a, b, c, b_bc, chi
 
     def compute_source_from_values(self, rho, Te_total, z, ne_vals, control_norm):
-        """Compute explicit NN source on interior nodes from already-sampled inputs."""
+        """Explicit NN source on interior nodes (z unused by design)."""
+        del z
         rho = _as64(rho)
         ne_vals = jnp.clip(_as64(ne_vals), 1e17, 1e21)
         control_norm = jnp.clip(_as64(control_norm), -10.0, 10.0)
         S_nn = jax.vmap(
-            lambda r, T, n: self.nn(r, T / self.Te_scale, n / self.ne_scale, control_norm, z)
+            lambda r, T, n: self.nn(r, T / self.Te_scale, n / self.ne_scale, control_norm)
         )(rho[:-1], Te_total[:-1], ne_vals[:-1])
         return S_nn
 
     def compute_divergence_from_values(self, rho, Vprime, Te_total, z):
-        """Compute conservative diffusion divergence on interior nodes."""
+        """Conservative-form diffusion divergence on interior nodes (diagnostics)."""
+        from .imex_solver import apply_diffusion_explicit
+
         rho = _as64(rho)
         Vprime = jnp.clip(_as64(Vprime), 1e-6, None)
         chi = self._chi_profile(rho, z)
-        divergence, _vol, _dr = self._conservative_divergence(rho, Vprime, chi, Te_total)
-        return divergence
+        divergence = apply_diffusion_explicit(rho, Vprime, chi, Te_total)
+        return softclip(divergence, self.divergence_clip)
 
-    def compute_rhs_components(self, t, y, args):
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
-
-        Te_hat = smooth_clamp(y[:-1], 0.0, 5000.0 / self.Te_scale)
-        z = smooth_clamp(y[-1], -10.0, 10.0)
-
-        Te_bc = Te_bc_interp.evaluate(t)
-        Te_total = jnp.append(Te_hat * self.Te_scale, Te_bc)
-        Te_total = smooth_clamp(Te_total, 0.0, 5000.0)
-
-        div = self.compute_divergence_only(t, Te_total, z, args)
-        src = self.compute_source(t, Te_total, z, args)
-
-        limit = 1e4
-        total_clip = softclip(div + src, limit)
-
-        control_norm = self._control_norm(t, ctrl_interp, control_means, control_stds)
-        z_dot = self.latent(z, control_norm)
-
-        dTe_hat_dt = total_clip / self.Te_scale
-        return dTe_hat_dt, z_dot, div, src
-    
-    # ========== IMEX Interface Methods ==========
-    
-    def build_diffusion_matrix_imex(self, t, z, args, dt, theta=1.0):
-        """Build implicit diffusion solve coefficients for IMEX.
-
-        Clean split requirement: the implicit operator must be linear in T.
-        Therefore chi must not depend on T (only on rho and latent z).
-
-        Returns:
-            a,b,c: (N-1,) tridiagonal coefficients for (I - theta*dt*L)
-            b_bc: (N-1,) boundary coupling vector (multiplied by T_edge)
-            chi: (N,) diffusivity profile
-        """
-        from .imex_solver import build_diffusion_solve_tridiag_implicit
-
-        # Support both legacy args (with interpolants) and new fast args.
-        rho_vals = args[0]
-        Vprime_vals = args[1]
-        rho = _as64(rho_vals)
-        Vprime = jnp.clip(_as64(Vprime_vals), 1e-6, None)
-        chi = self._chi_profile(rho, z)
-
-        # Optional precomputed geometry.
-        # Legacy fast args: (rho, Vprime, ctrl_norm, ne, dr, Vprime_face, Vprime_cell, denom)
-        # Barrier-latent fast args: (rho, Vprime, ctrl_norm, ne, latent_inputs, dr, Vprime_face, Vprime_cell, denom)
-        if len(args) >= 9:
-            dr = args[5]
-            Vprime_face = args[6]
-            Vprime_cell = args[7]
-            denom = args[8]
-            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(
-                rho,
-                Vprime,
-                chi,
-                dt,
-                theta,
-                dr=dr,
-                Vprime_face=Vprime_face,
-                Vprime_cell=Vprime_cell,
-                denom=denom,
-            )
-        elif len(args) >= 8:
-            dr = args[4]
-            Vprime_face = args[5]
-            Vprime_cell = args[6]
-            denom = args[7]
-            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(
-                rho,
-                Vprime,
-                chi,
-                dt,
-                theta,
-                dr=dr,
-                Vprime_face=Vprime_face,
-                Vprime_cell=Vprime_cell,
-                denom=denom,
-            )
-        else:
-            a, b, c, b_bc = build_diffusion_solve_tridiag_implicit(rho, Vprime, chi, dt, theta)
-        return a, b, c, b_bc, chi
-    
     def compute_source_imex(self, t, Te_total, z, args):
-        """
-        Compute explicit source term for IMEX (S_net on interior nodes).
-        """
-        # New fast args: (rho, Vprime, control_norm, ne_vals)
-        if len(args) >= 4:
-            rho_vals = args[0]
-            control_norm = args[2]
-            ne_vals = args[3]
-            return self.compute_source_from_values(rho_vals, Te_total, z, ne_vals, control_norm)
-        return self.compute_source(t, Te_total, z, args)
-    
-    def compute_latent_rhs_imex(self, t, z, args):
-        """
-        Compute dz/dt for explicit latent evolution in IMEX.
-        """
-        # New fast args: (rho, Vprime, control_norm, ne_vals, latent_inputs)
-        if len(args) >= 5:
-            return self.latent(z, _as64(args[4]))
-        if len(args) >= 4:
-            control_norm = args[2]
-            control_norm = jnp.clip(_as64(control_norm), -10.0, 10.0)
-            return self.latent(z, control_norm)
+        return self.compute_source_from_values(args[0], Te_total, z, args[3], args[2])
 
-        (rho_vals, Vprime_vals, ctrl_interp, control_means, control_stds, ne_interp, Te_bc_interp) = args
-        control_norm = self._control_norm(t, ctrl_interp, control_means, control_stds)
-        return self.latent(z, control_norm)
+    def compute_latent_rhs_imex(self, t, z, args):
+        return self.latent(z, _as64(args[4]))

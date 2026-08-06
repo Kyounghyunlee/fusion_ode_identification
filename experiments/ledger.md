@@ -1,0 +1,246 @@
+# Experiment Ledger
+
+## EXP-000 (2026-08-04) - Phase 1+3 restructure  [baseline tag: baseline-nf-v1]
+Hypothesis: none (structural corrections, no performance claim).
+Changes bundled deliberately as the Phase-3 restructure:
+- depressed cubic latent (beta free; quadratic term removed as coordinate-redundant)
+- z removed from residual source (interpretability bypass closed)
+- chi positivity/ordering by construction (chi_edge_L > chi_edge_H > 0)
+- causal z0 = lowest equilibrium at initial drive (Newton, in-graph)
+- normalized per-task losses (S_TE=100 eV, S_SRC=1e4 eV/s)
+- grouped session split (gap>20), locked test set; early stopping (patience 8 evals, min_delta 1e-3)
+- FV cell-volume fix: axis half-cell + node-value V' (was face-averaged; spatial convergence was stalled)
+Solver verification: order ~1 end-to-end, L2 err 4e-4..3.5e-3 over N=17..129; flux residual 0;
+positivity pass; grad rel err <= 1e-9. Artifacts: logs/solver_verification/.
+Conclusion: accepted as the v2 platform. All subsequent EXPs compare within this platform.
+
+## EXP-001 (2026-08-04) - free vs monostable, seed 0 (grouped val)
+Hypothesis: constrained beta<=0 fits held-out data as well as free beta.
+- v2_free_s0: early stop @2251 (best 1850), best_val 1.1204, beta=+0.303,
+  tau=30 ms, val median AUC 0.899, MAE 105 eV.
+- v2_mono_s0: early stop @651 (best 250), best_val 1.1448, beta=-0.847,
+  val median AUC 0.376 (ranking near-inverted; latent barely informative).
+- Reference baselines (same split): static logistic AUC 0.58; first-order
+  lag AUC 0.935 (classification only, no profiles).
+Bug found & fixed mid-experiment: train.py persisted the raw config, not
+the effective (override-applied) one; v2_mono_s0 was first evaluated under
+the wrong beta parameterization and re-evaluated after the fix.
+Conclusion (provisional, 1 seed): free-beta strongly preferred on val loss
+and AUC; awaiting seeds 1-2.
+
+## EXP-001 RESULT (superseded corpus) - free vs monostable, 3 seeds, 103 packs
+free beta:  best_val 1.118/1.178/1.081, per-shot median val AUC 0.841/0.842/0.937, beta=+0.303/+0.296/+0.293
+mono beta:  best_val 1.145/1.104/1.096, per-shot median val AUC 0.376/0.244/0.228, beta=-0.847/-0.764/-0.765
+ablations (free): no-chi AUC 0.406; no-source MAE 255 eV (vs 104); no-dalpha AUC 0.932; no-regime AUC 0.944
+baselines: static logistic AUC 0.579; first-order lag AUC 0.935
+Calibration: p_H uncalibrated (pooled ECE 0.25); Platt (fit on val) halves ECE to ~0.11.
+Event detection: LH recall 0.06-0.11 - LOW. Diagnosis: when the model does fire,
+timing is accurate (median -12 ms vs label), but in most discharges the drive
+never reaches the fold. Inspection of z(t) shows the latent correctly stays on
+the L branch in those shots: the affine drive in (P_nbi, Ip, nebar) cannot
+reach threshold for the X-point-height campaign shots, whose threshold depends
+on shape (Meyer 2011). NOT a solver/optimizer failure - a missing-covariate one.
+Conclusion: accept free>mono provisionally; act on the covariate diagnosis.
+
+## PROTOCOL CHANGE (2026-08-05) - physics-directed drive extension
+Pack builder now also stores: P_ohm_clean, P_loss = P_nbi + P_ohm - P_rad - dW/dt
+(loss-power proxy; the quantity in which L-H thresholds are conventionally
+expressed), W_mhd, kappa_ts, delta_ts, q95_ts (from equilibrium.nc).
+x_point_z is present in the equilibrium file but not 1-D; not used.
+Drive sets: basic = (P_nbi, Ip, nebar); extended = (P_loss, Ip, nebar, P_rad,
+kappa, delta), all causal and in fixed physical units.
+Corpus rebuilt: 107 packs. Split regenerated and re-locked (60/17/30).
+All EXP-001 runs discarded (different corpus/split); EXP-002 retrains the full
+comparison grid on one footing.
+
+## EXP-002 (2026-08-05) - drive set x topology x seed, 107 packs, locked split
+First completed run e_ext_free_s0 (extended drive, free beta):
+  best_val 1.0790 @1850 (early stop @2651)
+  val: median AUC 0.752 [0.53, 0.95], F1(cal) 0.72, Brier 0.199, ECE 0.138->0.095
+  events: L->H recall 0.33, precision 0.43, |timing| median 30 ms
+          H->L recall 0.00 (back-transitions not captured - limitation)
+  latent: median z swing 1.81 (branch separation ~1.1); 100% of shots reach the
+          H basin (basic drive: 0.32 swing, ~30% of shots) - the covariate
+          diagnosis from EXP-001 is confirmed by the intervention it motivated.
+Remaining grid in flight: e_bas_free_s{0,1,2} (controlled comparison on the
+same corpus), e_ext_mono_s{0,1,2}, then ablations on extended/free.
+
+## CRITICAL CORRECTION (2026-08-05) - equilibrium geometry was wrong
+An independent audit of the equilibrium data path (prompted by a request to
+document it in full) found three defects that invalidate the physical
+interpretation of every profile result obtained so far:
+
+1. INVERTED RADIAL COORDINATE. MAST Level-2 psi is stored in Wb/rad and is
+   MAXIMAL on the magnetic axis. The code assumed psi_axis = min(psi) and
+   psi_edge = max(psi) over the (R,Z) grid, so the normalization was
+   inverted: measured rho = 1.000 AT THE MAGNETIC AXIS, falling to ~0.75 at
+   both ends of the Thomson chord, non-monotonic in R, with every profile
+   compressed into rho in [0.745, 1.0]. The LCFS-sampled psi was computed
+   and then always discarded by a `psi_edge < psi_max` guard. Consequence:
+   the "reliable edge annulus rho >= 0.80" that all supervision and the
+   chi(rho) barrier were built around was, in the intended convention,
+   NEAR-AXIS - and interpolation interleaved inboard/outboard channels.
+2. GEOMETRY NOT ACTUALLY FROM THE EQUILIBRIUM. `flux_surface_volume` does
+   not exist in the Level-2 equilibrium group, so V' fell through to a
+   sentinel V' == 1, which data.py then silently replaced with the analytic
+   cylindrical V' = 2*rho. The claim "V' supplied by the equilibrium
+   reconstruction" was false for all 107 shots.
+3. DEAD/MIS-INDENTED CODE. extract_geom_params read R_axis/R_lcfs/Z_lcfs,
+   which are absent (Level-2 uses magnetic_axis_r/z, lcfs_r/lcfs_z), so
+   R_major/a_minor/kappa/delta were NaN in every pack; and the Thomson-read
+   block was indented inside the else-arm of the V'-availability test, so
+   supplying a real V' would have raised NameError.
+Also: choose_itime took the record-index midpoint, including pre-breakdown
+samples (t = 0.215 s of a -0.100..0.530 s record).
+
+FIX (preprocessing/equilibrium_geometry.py):
+  psi_axis     = psi interpolated at (magnetic_axis_r, magnetic_axis_z)
+  psi_boundary = median of psi sampled on the (lcfs_r, lcfs_z) contour
+  rho          = sqrt(clip((psi - psi_axis)/(psi_boundary - psi_axis), 0, 1))
+  V(rho)       = integral of 2*pi*R dR dZ over {rho' <= rho}, confined to
+                 psi_N <= 1 inside the LCFS bounding box; V' = dV/drho
+  itime        = midpoint of the contiguous finite magnetic-axis block
+VALIDATION: V(rho=1) reproduces the equilibrium's own `volume` scalar to
+0.0-0.3% (25145: 7.20 vs 7.20 m^3; 27574: 7.01 vs 7.04 m^3). rho is now
+monotonic outward, 0 on axis, 1 at the separatrix. Supervised columns move
+to rho = 0.73-1.00 (true edge) and retention improves (25145: 14 kept
+columns vs 7 before).
+CONSEQUENCE: EXP-002 is void for profile/chi interpretation. All packs are
+being rebuilt and the full grid rerun on the corrected geometry. Latent-only
+quantities (drive, beta, event timing) are geometry-independent in their
+inputs but were trained jointly, so they are retrained too rather than
+mixed across geometries.
+
+## EXP-003 (2026-08-06) - corrected geometry REVERSES the bistability conclusion
+Same grid, same protocol, corrected flux coordinate and equilibrium-derived V'.
+Seed 0, grouped validation (20 shots):
+  extended + free beta : val 0.4063  AUC 0.912 [0.89,0.94]  Brier 0.085  LH 0.36  HL 0.00  beta +0.303
+  basic    + free beta : val 0.5031  AUC 0.920 [0.88,0.95]  Brier 0.079  LH 0.29  HL 0.00  beta +0.149
+  extended + beta<=0   : val 0.4595  AUC 0.940 [0.85,0.99]  Brier 0.062  LH 0.29  HL 0.10  beta -0.794
+Compare with the SAME grid under the inverted coordinate (EXP-002):
+  extended + free : val 1.079  AUC 0.752 ; extended + mono : val 1.104  AUC 0.519
+INTERPRETATION. Validation loss more than halves once the model is fitted to
+the real plasma edge instead of the near-axis region. More importantly the
+monostable arm, which by construction has NO static multistability, now
+attains the BEST discrimination (AUC 0.940) and the BEST calibration
+(Brier 0.062), and is the only configuration with non-zero H->L recall.
+Confidence intervals overlap heavily across all three configurations.
+=> The earlier "the data select bistability" conclusion was an ARTIFACT of the
+inverted radial coordinate. On corrected geometry these MAST data do not
+discriminate between a monostable finite-lag latent and a bistable one.
+The free-beta fit still returns beta > 0, but that is a property of one
+fitted parameter set, not evidence that the data require folds.
+Awaiting seeds 1-2 and the ablations before finalizing; the direction is
+already reproducible in the loss/AUC/Brier ordering.
+
+## EXP-003 seed 1 confirms; mechanistic asymmetry noted
+ext_free  s0/s1: val 0.406/0.432  AUC 0.912/0.925  Brier 0.085/0.074  LH 0.36/0.43  HL 0.00/0.00  beta +0.303/+0.296
+ext_mono  s0/s1: val 0.460/0.473  AUC 0.940/0.942  Brier 0.062/0.066  LH 0.29/0.36  HL 0.10/0.10  beta -0.794/-0.775
+bas_free  s0/s1: val 0.503/0.532  AUC 0.920/0.912  Brier 0.079/0.078  LH 0.29/0.29  HL 0.00/0.00  beta +0.149/+0.180
+Neither topology dominates: free beta wins on trajectory loss, the constrained
+monostable arm wins on discrimination and calibration. Both reproduce across
+seeds to within a few per cent.
+MECHANISM worth reporting: the bistable arm records ZERO H->L events in every
+run, while the monostable arm records some. This is structural, not incidental
+- once the bistable latent occupies the upper branch, returning requires the
+drive to fall below the LOWER fold, a much larger excursion than these
+discharges provide, whereas a monostable latent tracks the drive continuously.
+The hysteresis that motivates bistability is precisely what prevents it from
+reproducing the observed back-transitions in this corpus.
+
+## EXP-003 COMPLETE (3 seeds/arm, corrected geometry, grouped validation)
+arm             n  val loss       AUC          Brier        LH recall   HL recall
+extended free   3  0.424+-0.013   0.916+-0.006 0.081+-0.005 0.40+-0.03  0.00
+extended mono   3  0.464+-0.006   0.941+-0.001 0.064+-0.002 0.33+-0.03  0.10
+basic    free   3  0.514+-0.013   0.918+-0.004 0.079+-0.000 0.29+-0.00  0.00
+Seed spread is 0.001-0.013, i.e. both effects below are many seed-sigma.
+CONCLUSION 1 (accept): the physics-directed drive extension (loss-power proxy
++ elongation + triangularity) improves held-out trajectory loss 0.514 -> 0.424
+and L->H recall 0.29 -> 0.40 relative to the injected-power drive.
+CONCLUSION 2 (accept, and it is a null result on the headline question): the
+data do NOT select a latent topology. The constrained monostable arm is better
+calibrated (Brier 0.064 vs 0.081) and discriminates slightly better (AUC 0.941
+vs 0.916) and uniquely captures back-transitions; the free arm fits
+trajectories better (0.424 vs 0.464) and detects more L->H events. The
+disagreement is systematic across seeds, not noise, and it runs in opposite
+directions on different endpoints - which is precisely what "the evidence does
+not decide" looks like when measured on multiple endpoints instead of one.
+The free fit does return beta > 0 reproducibly (+0.303/+0.296/+0.295), but that
+is a property of the fitted parameter set, not evidence that folds are required.
+
+## EXP-003 ABLATIONS (extended drive, seed 0, corrected geometry)
+config                 val      AUC    Brier   LH    MAE
+full (ext free)        0.4063   0.916  0.081   0.40  39 eV
+delta_chi = 0          0.4059   0.925  0.084   0.43  38 eV
+no residual source     0.5572   0.926  0.080   0.50  58 eV
+no D-alpha obs loss    0.3224*  0.925  0.085   0.43  39 eV   (*loss omits a term)
+KEY NEGATIVE RESULT: switching off the regime->transport coupling
+(delta_chi = 0) changes nothing measurable - val loss, profile error, AUC and
+event recall are all within noise of the full model. The mechanism the model
+was built around (regime state suppresses edge diffusivity, pedestal forms)
+is NOT identifiable from these data. Profile accuracy is carried by the
+residual source (removing it costs 39 -> 58 eV); regime identification is
+carried by the weak-label supervision (removing the D-alpha observation loss
+costs nothing). The two halves are effectively decoupled: the model behaves
+as two parallel sub-models sharing an optimiser, not as a coupled gray-box.
+LIKELY CAUSE, to be tested: the measured edge Dirichlet trace is supplied as
+an input, and supervision covers only rho ~ 0.73-1.0, so most of the profile
+variation in the scored region is already prescribed by the boundary
+condition, leaving little variance for chi modulation to explain.
+CONSEQUENCE for the paper: the interpretability claim must be withdrawn. The
+honest statement is that the regime coordinate is identified from actuators
+plus weak labels, and that its physical coupling to transport is not
+resolved by this dataset. The observation head (145 params) is also
+redundant and should be dropped for simplicity.
+
+## MODEL SELECTION (validation only; declared before the locked-test run)
+Ablation summary (ext drive, seed 0): AUC / Brier / LH / MAE
+  full            0.916 / 0.081 / 0.40 / 39 eV
+  delta_chi=0     0.925 / 0.084 / 0.43 / 38 eV
+  no source       0.926 / 0.080 / 0.50 / 58 eV
+  no obs loss     0.925 / 0.085 / 0.43 / 39 eV
+  no label loss   0.912 / 0.073 / 0.50 / 39 eV
+The full model is best on none of the regime metrics; only the residual source
+is load-bearing, and only for profile accuracy. Applying "simplest model within
+statistical uncertainty of the best": the extended drive is retained (clearly
+better than basic across 3 seeds), and the CONSTRAINED MONOSTABLE topology is
+selected, since it is the simpler hypothesis and is not worse on any endpoint
+(it is better on AUC, Brier and back-transition recall).
+PRIMARY MODEL = e_ext_mono_s2, chosen as the MEDIAN validation loss within the
+selected configuration (s0 0.4595, s2 0.4613, s1 0.4726) to avoid selecting the
+best-performing seed.
+The locked test sessions (27445, 29181, 29039, 29934 -> 29 discharges) have not
+been touched by any decision above. They are now evaluated exactly once.
+
+## LOCKED TEST (2026-08-06) - single evaluation, e_ext_mono_s2, 29 discharges
+metric              validation    locked test
+median AUC          0.941         0.948  [0.84, 0.99]  (27 scorable shots)
+Brier (calibrated)  0.064         0.156
+ECE raw -> cal      0.114 -> 0.048  0.114 -> 0.314
+F1 (calibrated)     ~0.5          0.00
+L->H recall         0.33          0.10   (precision 0.22, 41 labelled events)
+H->L recall         0.10          0.00
+annulus MAE         39 eV         77 eV
+READING. Discrimination transfers and is if anything better on the held-out
+sessions (AUC 0.948). Nothing else transfers well:
+ * profile error doubles (39 -> 77 eV);
+ * event recall falls by a factor three (0.33 -> 0.10);
+ * the Platt calibration fitted on the 20 validation discharges makes test
+   calibration WORSE than no calibration at all (ECE 0.114 -> 0.314). The
+   calibration map does not transfer across sessions; with 20 shots it is a
+   high-variance fit of a session-specific probability scale.
+ * the test cohort contains 27 ambiguous and 0 confirmed-negative discharges,
+   so the false-positive claim cannot be evaluated on it at all.
+CONCLUSION. The honest headline is that the model RANKS confinement regimes
+well on unseen sessions but does not yet deliver calibrated probabilities,
+reliable event detection, or transferable profile accuracy. The validation
+numbers were optimistic on every axis except AUC. Reported as such; the
+gap between validation and test is itself one of the study's results.
+
+## PROTOCOL (post-grid): early-stop patience 16 -> 10
+Applied only after EXP-003 completed, so no comparison mixes stopping rules.
+Justification measured on EXP-003: intervals between successive validation
+improvements had median 50 steps, p90 200, max 750 (n=198); no improvement
+ever followed a gap > 800 steps and only 2% followed a gap > 500. Patience 10
+evaluations (500 steps) therefore saves ~300 steps/run at ~2% risk of missing
+a final marginal improvement.

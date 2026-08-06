@@ -85,11 +85,16 @@ def _sanitize_name(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
     return name
 
-from fusion_ode_identification.model import build_hybrid_model, build_latent_feature_series
+from fusion_ode_identification.model import build_hybrid_model
 from fusion_ode_identification.data import load_data
 from fusion_ode_identification.types import ShotBundle, IMEXConfig
 from fusion_ode_identification.imex_solver import IMEXIntegrator
 from fusion_ode_identification.interp import LinearInterpolation
+from fusion_ode_identification.regime_metrics import (
+    regime_classification_metrics,
+    transition_time_error,
+    normal_form_diagnostics,
+)
 
 jax.config.update("jax_enable_x64", True)
 
@@ -113,6 +118,7 @@ class EvalBundle(NamedTuple):
     ne_vals: jnp.ndarray
     Te_edge: jnp.ndarray
     dalpha_ts: jnp.ndarray
+    drive_feats: jnp.ndarray
     obs_idx: jnp.ndarray
 
 def load_config(config_path="config/config.yaml"):
@@ -146,6 +152,7 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
         ne_vals = jnp.asarray(stacked.ne_vals[i, :t_len])
         Te_edge = jnp.asarray(stacked.Te_edge[i, :t_len])
         dalpha_ts = jnp.asarray(stacked.dalpha_ts[i, :t_len])
+        drive_feats = jnp.asarray(stacked.drive_feats[i, :t_len])
         obs_idx = jnp.asarray(stacked.obs_idx[i])
         shot_id = int(stacked.shot_id[i])
 
@@ -169,6 +176,7 @@ def build_eval_bundles(stacked: ShotBundle) -> List[EvalBundle]:
                 ne_vals=ne_vals,
                 Te_edge=Te_edge,
                 dalpha_ts=dalpha_ts,
+                drive_feats=drive_feats,
                 obs_idx=obs_idx,
             )
         )
@@ -225,7 +233,7 @@ def run_inference(model, bundle: EvalBundle, imex_cfg: IMEXConfig):
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = bundle.ne_vals[:, -1]
-    latent_features_ts = build_latent_feature_series(bundle.ts_t, ctrl_norm_ts, bundle.dalpha_ts, bundle.Te_edge, ne_edge_ts) if model.uses_barrier_latent() else ctrl_norm_ts
+    latent_features_ts = bundle.drive_feats
 
     rho = bundle.rho
     Vprime = jnp.clip(bundle.Vprime, 1e-6, None)
@@ -655,6 +663,9 @@ def main():
     ap = argparse.ArgumentParser(description="Evaluate trained physics manifold model")
     ap.add_argument("--config", default="config/config.yaml", help="Path to config.yaml")
     ap.add_argument("--model-id", default=None, help="Override model_id from config")
+    ap.add_argument("--role", default="val", choices=["train", "val", "test", "all"],
+                    help="Which grouped-split role to evaluate (data/split.json); 'test' is the locked set")
+    ap.add_argument("--no-plots", action="store_true", help="Skip per-shot plot generation")
     ap.add_argument("--data-check", action="store_true", help="Print mask coverage summary before eval")
     args = ap.parse_args()
 
@@ -712,6 +723,13 @@ def main():
     print("Loading Data...")
     stacked_bundles, rho_rom, _, _ = load_data(config)
     eval_bundles = build_eval_bundles(stacked_bundles)
+    split_path = config.get("data", {}).get("split", "data/split.json")
+    if args.role != "all" and os.path.exists(split_path):
+        with open(split_path) as f:
+            split_roles = json.load(f)
+        keep = set(split_roles[args.role])
+        eval_bundles = [b for b in eval_bundles if b.shot_id in keep]
+        print(f"[eval] role={args.role}: {len(eval_bundles)} shots")
     if args.data_check:
         cov_stats = summarize_data(eval_bundles)
         print("Mask coverage (mean over grid) and shapes:")
@@ -737,11 +755,11 @@ def main():
         },
     )
     imex_cfg = IMEXConfig(
-        theta=float(imex_dict["theta"]),
-        dt_base=float(imex_dict["dt_base"]),
-        max_steps=int(imex_dict["max_steps"]),
-        rtol=float(imex_dict["rtol"]),
-        atol=float(imex_dict["atol"]),
+        theta=float(imex_dict.get("theta", 0.7)),
+        dt_base=float(imex_dict.get("dt_base", 1e-3)),
+        max_steps=int(imex_dict.get("max_steps", 50000)),
+        rtol=float(imex_dict.get("rtol", 1e-4)),
+        atol=float(imex_dict.get("atol", 1e-6)),
         substeps=int(imex_dict.get("substeps", 1)),
     )
     
@@ -778,7 +796,7 @@ def main():
     for bundle in eval_bundles:
         print(f"Evaluating Shot {bundle.shot_id}...")
         Te_model, zs = run_inference(model, bundle, imex_cfg)
-        z_barrier = jax.vmap(model.barrier_coordinate)(zs) if model.uses_barrier_latent() else None
+        z_barrier = jax.vmap(model.barrier_coordinate)(zs)
 
         # Match the training-time weighting so offline evaluation is comparable.
         mse, mae_eV, mae_pct = masked_error_metrics_weighted(Te_model, bundle.ts_Te, bundle.mask)
@@ -814,6 +832,64 @@ def main():
         outside_total_mae_eV += outside_mae_eV
         outside_total_mae_pct += outside_mae_pct
         
+        # Quantitative L/H regime assessment
+        regime_ts_np = np.asarray(bundle.regime_ts)
+        # Same clean-L/clean-H masking rule as the training loader.
+        regime_mask_np = (
+            ((regime_ts_np > 0.5) & (regime_ts_np < 1.5)) | ((regime_ts_np > 2.5) & (regime_ts_np < 3.5))
+        ).astype(float)
+        regime_logits_np = np.asarray(jax.vmap(model.compute_regime_logit)(zs))
+        regime_class = regime_classification_metrics(regime_logits_np, regime_ts_np, regime_mask_np)
+
+        # Labeled transition time: first sample where the label reaches H (3).
+        ts_np = np.asarray(bundle.ts_t)
+        h_idx = np.where(regime_ts_np > 2.5)[0]
+        t_label = float(ts_np[h_idx[0]]) if h_idx.size else float("nan")
+        transition_timing = transition_time_error(ts_np, regime_logits_np, t_label)
+
+        bifurcation_summary = None
+        ctrl_interp_diag = LinearInterpolation(ts=bundle.ctrl_t, ys=bundle.ctrl_vals)
+        bif = normal_form_diagnostics(model.latent, np.asarray(bundle.drive_feats), np.asarray(zs))
+        if bif is not None:
+            bifurcation_summary = {
+                "beta": bif["beta"],
+                "tau_s": bif["tau"],
+                "bistable": bool(bif["bistable"]),
+                "a_fold_low": bif["a_fold_low"],
+                "a_fold_high": bif["a_fold_high"],
+                "drive_min": float(np.min(bif["a_t"])),
+                "drive_max": float(np.max(bif["a_t"])),
+                "bistable_fraction": bif["bistable_fraction"],
+                "h_basin_fraction": float(np.mean(bif["basin"] > 0)),
+            }
+            np.savez(
+                os.path.join(eval_dir, f"bifurcation_shot_{bundle.shot_id}.npz"),
+                ts=ts_np,
+                z=np.asarray(zs),
+                a_t=bif["a_t"],
+                c1=bif["c1"],
+                c2=bif["c2"],
+                a_fold_low=bif["a_fold_low"],
+                a_fold_high=bif["a_fold_high"],
+                z_saddle=bif["z_saddle"],
+                basin=bif["basin"],
+                regime_ts=regime_ts_np,
+                regime_logits=regime_logits_np,
+                dalpha_ts=np.asarray(bundle.dalpha_ts),
+            )
+
+        # Compact fit artifact for downstream figures (paper/scripts).
+        np.savez(
+            os.path.join(eval_dir, f"fit_shot_{bundle.shot_id}.npz"),
+            ts=ts_np,
+            rho=np.asarray(bundle.rho),
+            Te_model=np.asarray(Te_model),
+            Te_obs=np.asarray(bundle.ts_Te_raw),
+            mask=np.asarray(bundle.mask),
+            z_barrier=np.asarray(z_barrier),
+            dalpha_ts=np.asarray(bundle.dalpha_ts),
+        )
+
         # Physics Diagnostics
         diff_mag, source_mag = analyze_physics_components(model, bundle, Te_model, zs)
         
@@ -847,6 +923,9 @@ def main():
             "dalpha_stats": compute_dalpha_stats(bundle.ts_t, bundle.dalpha_ts, bundle.regime_ts),
             "regime_consistency": compute_regime_consistency(bundle.regime_ts, zs, z_barrier),
             "dalpha_latent_alignment": compute_dalpha_latent_alignment(bundle.dalpha_ts, z_barrier),
+            "regime_classification": regime_class,
+            "transition_timing": transition_timing,
+            "bifurcation": bifurcation_summary,
             "physics_consistency": {
                 "diffusion_magnitude": float(diff_mag),
                 "source_magnitude": float(source_mag),
@@ -856,6 +935,8 @@ def main():
         report["shot_metrics"][str(bundle.shot_id)] = metrics
         
         rho_vals = np.array(bundle.rho)
+        if args.no_plots:
+            continue
         plot_results(
             bundle.ts_t,
             rho_vals,
@@ -871,6 +952,27 @@ def main():
         )
         plot_time_series(bundle.ts_t, rho_vals, bundle.ts_Te_raw, Te_model, bundle.mask, bundle.obs_idx, bundle.shot_id, plots_dir)
         
+    # Pooled regime-classification summary over shots.
+    per_shot_cls = [m.get("regime_classification", {}) for m in report["shot_metrics"].values()]
+    per_shot_cls = [c for c in per_shot_cls if c and c.get("n_scored", 0) > 1]
+    if per_shot_cls:
+        def _mean_of(key):
+            vals = [c[key] for c in per_shot_cls if key in c and np.isfinite(c[key])]
+            return float(np.mean(vals)) if vals else float("nan")
+        tt_errors = [
+            abs(m["transition_timing"]["transition_time_error_s"])
+            for m in report["shot_metrics"].values()
+            if m.get("transition_timing") and np.isfinite(m["transition_timing"].get("transition_time_error_s", float("nan")))
+        ]
+        report["regime_classification_summary"] = {
+            "n_shots_scored": len(per_shot_cls),
+            "mean_accuracy": _mean_of("accuracy"),
+            "mean_f1": _mean_of("f1"),
+            "mean_auc": _mean_of("auc"),
+            "mean_brier": _mean_of("brier"),
+            "mean_abs_transition_time_error_s": float(np.mean(tt_errors)) if tt_errors else float("nan"),
+        }
+
     report["overall_metrics"] = {
         "mean_mse": total_mse / len(eval_bundles),
         "mean_mae_eV": total_mae_eV / len(eval_bundles),
@@ -884,7 +986,7 @@ def main():
     }
     
     # Save Report
-    with open(os.path.join(eval_dir, "evaluation_report.json"), "w") as f:
+    with open(os.path.join(eval_dir, f"evaluation_report_{args.role}.json"), "w") as f:
         json.dump(report, f, indent=2)
         
     print(f"Evaluation complete. Results saved to {eval_dir}")

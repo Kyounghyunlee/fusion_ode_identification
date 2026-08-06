@@ -1,0 +1,202 @@
+% Appendix: exhaustive description of the MAST signals and their processing.
+
+\section{Signals, processing, and data limitations}
+\label{app:data}
+
+This appendix documents every measured signal the model consumes, the exact
+processing applied to it, and the limitations that processing does not
+remove. It is deliberately more detailed than is customary, because in this
+study the data-preparation choices --- not the model class --- turned out to
+control the scientific conclusion.
+
+\subsection{Provenance and access}
+
+All data come from the UKAEA MAST open archive, Level-2 product, read as
+Zarr groups from public object storage and converted to NetCDF per
+discharge. Four groups are used: \texttt{summary}, \texttt{thomson\_scattering},
+\texttt{equilibrium}, and the D$_\alpha$ extract of
+\texttt{spectrometer\_visible}. Discharge metadata and free-text session-log
+annotations come from the accompanying catalogue API and are used only for
+the label audit (\S\ref{app:data-audit}), never as model input.
+
+\subsection{The signals}
+\label{app:data-signals}
+
+\paragraph{Electron temperature and density profiles (Thomson scattering).}
+The dominant measurement, and the sparsest. Each discharge provides
+$T_{\mathrm{e}}$ and $n_{\mathrm{e}}$ on a $121$-point major-radius chord
+sampled at $\SI{5}{ms}$ (typically $80$--$140$ time slices, median $83$
+after screening). Values arrive in eV and m$^{-3}$; units are read from the
+file attributes and verified, never assumed. Two properties dominate
+everything downstream. First, the chord is horizontal at $Z = 0$ while the
+magnetic axis of these discharges sits at $|Z_{\mathrm{axis}}|$ up to
+$\SI{0.2}{m}$, so the chord never samples the true core: its closest
+approach corresponds to $\rho \approx 0.3$. Second, and more restrictive,
+the great majority of channels fail quality screening --- after processing,
+the median discharge retains $10$ usable radial columns out of $65$ grid
+points (range $4$--$16$), all at $\rho \gtrsim 0.7$. The model is therefore
+identified on a thin outer annulus, and we make no claim about core
+transport anywhere in this paper.
+
+\paragraph{Actuator and global signals (summary).} Sampled at
+$\SI{1}{ms}$ over roughly $[-0.1, 0.7]\,\mathrm{s}$ ($\sim$$790$ samples):
+injected neutral-beam power $P_{\mathrm{NBI}}$ (W), plasma current $I_p$
+(A, signed; the magnitude is used), line-averaged density (m$^{-3}$),
+Ohmic power $P_{\Omega}$ (W), and radiated power $P_{\mathrm{rad}}$ (W).
+$P_{\Omega}$ carries large transient spikes at breakdown and termination and
+is clipped to $[0, 5]\,\mathrm{MW}$ before use; the raw trace is retained
+separately as a diagnostic.
+
+\paragraph{D$_\alpha$ emission.} Three photodiode channels sampled at
+$\SI{20}{\micro s}$ --- $\sim$$35\,000$ samples per discharge, two orders of
+magnitude faster than any other signal here. The channel sum is used. This
+signal is \emph{never} a model input: it is used offline to construct weak
+labels and as the target of the observation head. Its fast cadence matters
+because the edge-localised-mode bursts that contaminate it are only a few
+hundred microseconds wide and would be aliased away by any resampling to the
+profile grid before filtering.
+
+\paragraph{Equilibrium.} Poloidal flux map, magnetic-axis position, LCFS
+contour, elongation, triangularity, stored energy, and $q_{95}$, at
+$\SI{5}{ms}$. Their use is documented in full in
+Appendix~\ref{app:equilibrium}.
+
+\subsection{Processing chain}
+\label{app:data-processing}
+
+Three time bases coexist: D$_\alpha$ at $\SI{20}{\micro s}$, actuators at
+$\SI{1}{ms}$, profiles at $\SI{5}{ms}$, and the equilibrium at $\SI{5}{ms}$.
+Everything is resolved onto the profile grid, but only after any filtering
+that must happen at native resolution.
+
+\begin{enumerate}
+\item \textbf{Radial mapping.} Each Thomson channel's major radius is mapped
+to the flux label $\rho$ through the equilibrium
+(Appendix~\ref{app:eq-rho}), then profiles are interpolated onto a uniform
+$65$-point $\rho$ grid. Interpolation is constant-extrapolated outside the
+measured range rather than zero-padded, because injecting
+$T_{\mathrm{e}} = 0$ at an unmeasured radius creates a spurious gradient
+that the diffusion operator would faithfully act on.
+\item \textbf{Per-time-slice screening.} A slice is rejected unless it has a
+minimum number of finite channels and a minimum radial span. Impulsive
+outliers are removed by a rolling median-absolute-deviation test.
+\item \textbf{Per-channel screening.} A radial channel is rejected unless
+its median level, its bounded relative jump statistics, its relative span,
+and its time coverage all pass fixed thresholds. A discharge is written only
+if at least four stable channels survive.
+\item \textbf{Representative density.} A single scalar density per time is
+formed as a trimmed mean over trusted channels and broadcast over $\rho$,
+rather than using the noisy density profile pointwise.
+\item \textbf{Boundary trace.} The outermost surviving measured temperature
+at each time becomes the Dirichlet edge condition, gap-filled in time.
+\item \textbf{Actuator resampling.} Actuator traces are interpolated onto
+the profile grid with endpoint carry. All model inputs are then divided by
+\emph{fixed physical constants} (MW, MA, $10^{19}\,\mathrm{m}^{-3}$) --- never
+by per-discharge statistics, so that the same actuator setting produces the
+same model input in every discharge and at deployment.
+\end{enumerate}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{figures/fig_data}
+  \caption{A discharge as the model sees it. Top: the D$_\alpha$ emission
+  proxy with the weakly labelled H segment shaded. Middle: the causal
+  inputs in fixed physical scales. Bottom: the label code, where ``--''
+  marks samples excluded by the plasma gate.}
+  \label{fig:data}
+\end{figure}
+
+\subsection{Weak label construction}
+\label{app:data-labels}
+
+Labels come from D$_\alpha$ and are deliberately conservative.
+
+\begin{enumerate}
+\item \textbf{Lower envelope.} A rolling $15$th percentile over
+$\SI{15}{ms}$ windows. Edge-localised modes are short positive spikes, so a
+low quantile tracks the inter-burst baseline whose step-down is the actual
+transition signature. A mean or median filter smears the bursts into the
+baseline and destroys the step.
+\item \textbf{Plasma gate.} Samples are considered only where $|I_p|$
+exceeds $60\%$ of its 95th percentile and density exceeds $20\%$ of its
+peak. This excludes the current ramp, where D$_\alpha$ is low simply because
+recycling has not yet built up --- a low baseline there reflects the absence
+of plasma, not improved confinement.
+\item \textbf{Threshold.} A variance-maximising (Otsu) split of the gated
+envelope distribution, rejected if the threshold sits outside the central
+range, if either class is nearly empty, or if the class means differ by less
+than $0.20$ of the normalised range.
+\item \textbf{Acceptance rules.} A candidate H segment must persist for at
+least $\SI{20}{ms}$; must be preceded by an L reference inside the gate;
+and its entry must show a baseline step-down of at least $0.10$ of the
+normalised range across $\SI{25}{ms}$ contrast windows. The last rule was
+added after slow density-ramp discharges produced false positives by
+drifting across the threshold.
+\item \textbf{Exclusions.} Samples within a short window of every switch are
+labelled ``transition'' and excluded from scoring, as are all out-of-gate
+samples. Multiple H segments per discharge are permitted, so
+back-transitions are labelled rather than suppressed.
+\end{enumerate}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.72\linewidth]{figures/fig_labeler}
+  \caption{Anatomy of the weak labels. The raw proxy (orange) is
+  contaminated by edge-localised-mode bursts; the rolling lower envelope
+  (green) isolates the inter-burst baseline whose step-down is the
+  transition signature. The gated variance-maximising threshold is dashed;
+  the accepted H segment is shaded and the resulting transition time
+  dotted.}
+  \label{fig:labeler}
+\end{figure}
+
+\subsection{Label audit and cohorts}
+\label{app:data-audit}
+
+Labels are compared against the free-text session-log annotations retrieved
+for every discharge, giving three cohorts: \emph{confirmed transitions}
+(extractor and log agree), \emph{confirmed negatives} (both indicate L
+throughout), and \emph{ambiguous} (they disagree, or the log is silent).
+On the present corpus these number \nTrans{}, \nNoTrans{}, and \nAmbig{}
+respectively. The large ambiguous fraction is dominated by discharges whose
+session-log entry is empty, not by genuine disagreement.
+
+This has a direct consequence we state rather than work around: with only
+\nNoTrans{} confirmed negatives, the false-positive rate of the model can be
+estimated only weakly, and we report it as such. Ambiguous discharges are
+never used to support a claim in either direction.
+
+\subsection{Limitations of the data, stated}
+\label{app:data-limits}
+
+\begin{enumerate}
+\item \textbf{Radial coverage.} Roughly $10$ of $65$ radial grid points
+carry usable data, all outboard of $\rho \approx 0.7$. Core transport is
+unidentified; the pedestal-region conclusion is the only one the data can
+support.
+\item \textbf{Temporal resolution mismatch.} The transition develops on a
+$\sim$$\SI{20}{ms}$ scale while profiles are sampled every $\SI{5}{ms}$, so
+only three or four profile samples resolve it. Event timing better than
+$\sim$$\SI{10}{ms}$ is not measurable from the profile channel alone.
+\item \textbf{Label--observation coupling.} The labels and the observation
+head both derive from D$_\alpha$. The latent dynamics never see it, which
+removes dynamical leakage, but the \emph{evaluation} remains statistically
+tied to a single diagnostic. Independent confirmation would require an
+electron-cyclotron or reflectometry-based transition marker, which the
+Level-2 product does not provide.
+\item \textbf{Midplane assumption.} The Thomson chord's vertical position is
+absent from the files and is assumed to be $Z = 0$.
+\item \textbf{Absorbed versus injected power.} Only injected beam power is
+available; shine-through, orbit losses, and charge-exchange losses are not
+resolved, so the loss-power proxy of \eqref{eq:ploss} systematically
+overestimates the power actually crossing the separatrix. Thresholds derived
+here are conditional, corpus-specific quantities and are not directly
+comparable to published loss-power thresholds.
+\item \textbf{Single device, narrow operating space.} All discharges are
+MAST, in a limited current and density range. Nothing here tests transfer to
+another device or to a substantially different scenario.
+\item \textbf{Supervision-target normalisation.} The D$_\alpha$ target is
+range-normalised per discharge. This affects training only --- no model input
+is normalised this way and deployment needs no such statistic --- but it
+means the observation head is fitted against a per-discharge-scaled target.
+\end{enumerate}

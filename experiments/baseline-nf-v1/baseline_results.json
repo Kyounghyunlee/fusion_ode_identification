@@ -1,0 +1,5474 @@
+{
+  "model_config": {
+    "depth": 4,
+    "layers": 128,
+    "source_scale": "3.0e5"
+  },
+  "training_config": {
+    "batch_size": 8,
+    "ema_decay": 0.999,
+    "grad_clip": "1.0e3",
+    "huber_delta": 10.0,
+    "imex": {
+      "max_steps": 50000,
+      "substeps": 5,
+      "theta": 0.7
+    },
+    "lambda_dalpha": 20.0,
+    "lambda_pH": 0.0,
+    "lambda_regime": 20.0,
+    "lambda_src": 0.0001,
+    "lambda_z": 0.0001,
+    "lambda_zreg": 1e-05,
+    "learning_rate": 0.0002,
+    "log_every": 50,
+    "optimizer": "adamw",
+    "src_delta": 10.0,
+    "total_steps": 2000,
+    "warmup_steps": 5,
+    "weight_decay": 3e-05
+  },
+  "observability": {
+    "reliable_cov_min": 0.1,
+    "reliable_rho_min": 0.8
+  },
+  "shot_metrics": {
+    "27567": {
+      "mse": 11488.847233707434,
+      "mae_eV": 85.85569720233471,
+      "mae_pct": 55.84271498559497,
+      "annulus_metrics": {
+        "mse": 11488.847233707434,
+        "mae_eV": 85.85569720233471,
+        "mae_pct": 55.84271498559497
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.9468393613700012,
+        "std": 0.0075665605042697336
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.11990341461495484,
+        "std": 0.0016473737329370278
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.27099609375,
+        "max": 2.6489257812499867,
+        "mean": 1.3124936586850668,
+        "std": 0.5465524971317204,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.05,
+        "normalized_slope_min": -1.4688296828110872,
+        "normalized_slope_max": 6.25834756318009,
+        "transition_window_slope_min": -1.4688296828110872,
+        "transition_window_slope_max": 0.3179350257213329
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.11990341461495484,
+        "latent_span": 0.011483437286392006,
+        "hmode_median": NaN,
+        "lmode_median": 0.11980548146974315,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.3826145186940731,
+        "rmse_vs_1_minus_norm_dalpha": 0.49909922166291837,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4543229736742814
+      },
+      "regime_classification": {
+        "n_scored": 52,
+        "n_H": 0,
+        "n_L": 52,
+        "accuracy": 1.0,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.01434323900507335
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4393137826140881,
+        "drive_max": -0.4288533717589011,
+        "bistable_fraction": 0.0,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 1923.320661156009,
+        "source_magnitude": 6042.6482133156405,
+        "source_ratio": 3.141778868294347
+      }
+    },
+    "27568": {
+      "mse": 9818.926083256032,
+      "mae_eV": 81.5078293847751,
+      "mae_pct": 71.80720802518223,
+      "annulus_metrics": {
+        "mse": 9818.926083256032,
+        "mae_eV": 81.5078293847751,
+        "mae_pct": 71.80720802518223
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.9467300608840343,
+        "std": 0.006877167936689043
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.11992807244441893,
+        "std": 0.0014979986809764462
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.18554687500000003,
+        "max": 2.16064453125,
+        "mean": 1.4959327210771294,
+        "std": 0.5654534451964044,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.425,
+        "normalized_slope_min": -1.5595351896379626,
+        "normalized_slope_max": 4.916865174900694,
+        "transition_window_slope_min": -1.5595351896379626,
+        "transition_window_slope_max": -0.801658551234496
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.11992807244441893,
+        "latent_span": 0.011508095115856098,
+        "hmode_median": NaN,
+        "lmode_median": 0.11971489768357027,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.513559308266021,
+        "rmse_vs_1_minus_norm_dalpha": 0.360063573890926,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.24061351995277655
+      },
+      "regime_classification": {
+        "n_scored": 58,
+        "n_H": 0,
+        "n_L": 58,
+        "accuracy": 1.0,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.01430923389101425
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43929164699761114,
+        "drive_max": -0.42869888386658056,
+        "bistable_fraction": 0.0,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 1596.0951208976187,
+        "source_magnitude": 5889.026905372331,
+        "source_ratio": 3.6896465784387518
+      }
+    },
+    "27445": {
+      "mse": 12910.768591753837,
+      "mae_eV": 87.30012961924858,
+      "mae_pct": 24.781424766287188,
+      "annulus_metrics": {
+        "mse": 12910.768591753837,
+        "mae_eV": 87.30012961924858,
+        "mae_pct": 24.781424766287188
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0067652591179552,
+        "std": 0.8428785677399091
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8986884886962881,
+        "std": 0.34475812806880823
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.22216796875000003,
+        "max": 3.654785156250047,
+        "mean": 1.2823044044384189,
+        "std": 0.5813801981693689,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.3,
+        "normalized_slope_min": -1.1474263041646964,
+        "normalized_slope_max": 7.48574605538209,
+        "transition_window_slope_min": -1.1474263041646964,
+        "transition_window_slope_max": 2.248546296569529
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8986884886962881,
+        "latent_span": 0.7902685113677254,
+        "hmode_median": NaN,
+        "lmode_median": 0.7568789411066534,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6955874009687781,
+        "rmse_vs_1_minus_norm_dalpha": 0.5199545771128871,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.45521884204449037
+      },
+      "regime_classification": {
+        "n_scored": 54,
+        "n_H": 0,
+        "n_L": 54,
+        "accuracy": 0.42592592592592593,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.4514262442704774
+      },
+      "transition_timing": {
+        "t_transition_model": 0.2,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388452873380213,
+        "drive_max": 0.5685687347306658,
+        "bistable_fraction": 0.028985507246376812,
+        "h_basin_fraction": 0.6956521739130435
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5527.681911210262,
+        "source_magnitude": 11573.053868936899,
+        "source_ratio": 2.0936540945622855
+      }
+    },
+    "27535": {
+      "mse": 13119.811197415691,
+      "mae_eV": 90.10643049307352,
+      "mae_pct": 71.98997842210757,
+      "annulus_metrics": {
+        "mse": 13119.811197415691,
+        "mae_eV": 90.10643049307352,
+        "mae_pct": 71.98997842210757
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.8609141684818091,
+        "std": 0.5241332333241276
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8665694259484185,
+        "std": 0.22117380727247743
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.19287109375,
+        "max": 5.4150390625,
+        "mean": 0.8046242042824078,
+        "std": 0.752533395916678,
+        "hmode_fraction": 0.3888888888888889,
+        "transition_fraction": 0.018518518518518517,
+        "transition_time": 0.17,
+        "normalized_slope_min": -3.273394652575204,
+        "normalized_slope_max": 9.961034941008993,
+        "transition_window_slope_min": -1.2187059011728594,
+        "transition_window_slope_max": 9.961034941008993
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8665694259484185,
+        "latent_span": 0.7581494486198557,
+        "hmode_median": 0.38984404296266584,
+        "lmode_median": 0.1193208611076521,
+        "h_minus_l_median": 0.27052318185501373
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.011023387107771166,
+        "rmse_vs_1_minus_norm_dalpha": 0.6841129008445235,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.6626695650992999
+      },
+      "regime_classification": {
+        "n_scored": 43,
+        "n_H": 21,
+        "n_L": 22,
+        "accuracy": 0.6976744186046512,
+        "f1": 0.5517241379310345,
+        "auc": 1.0,
+        "brier": 0.17920055368342444
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.17500000000000002,
+        "transition_time_error_s": 0.06499999999999997
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43915566528584743,
+        "drive_max": 0.5809792153053233,
+        "bistable_fraction": 0.05555555555555555,
+        "h_basin_fraction": 0.4074074074074074
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3507.914561698476,
+        "source_magnitude": 7746.204768175348,
+        "source_ratio": 2.208207933723606
+      }
+    },
+    "27569": {
+      "mse": 10651.21334715965,
+      "mae_eV": 82.78684507028743,
+      "mae_pct": 38.208127064865735,
+      "annulus_metrics": {
+        "mse": 10651.21334715965,
+        "mae_eV": 82.78684507028743,
+        "mae_pct": 38.208127064865735
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.8987500292466084,
+        "std": 0.6950448607230344
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8756471317974392,
+        "std": 0.2940567617173591
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2270507812499999,
+        "max": 1.7724609375,
+        "mean": 1.1903381347656288,
+        "std": 0.4776986358683547,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.305,
+        "normalized_slope_min": -1.3405752388793957,
+        "normalized_slope_max": 6.293616441648801,
+        "transition_window_slope_min": -1.3405752388793957,
+        "transition_window_slope_max": -0.6538174098779734
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8756471317974392,
+        "latent_span": 0.7672271544688765,
+        "hmode_median": NaN,
+        "lmode_median": 0.4324506266349334,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.7118066888758897,
+        "rmse_vs_1_minus_norm_dalpha": 0.5583855563600606,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4872182111433144
+      },
+      "regime_classification": {
+        "n_scored": 48,
+        "n_H": 0,
+        "n_L": 48,
+        "accuracy": 0.5416666666666666,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.3199140737651501
+      },
+      "transition_timing": {
+        "t_transition_model": 0.215,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4392774818682205,
+        "drive_max": 0.3438785391593945,
+        "bistable_fraction": 0.125,
+        "h_basin_fraction": 0.5625
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 7113.678527948798,
+        "source_magnitude": 16648.792162041158,
+        "source_ratio": 2.3403914155369323
+      }
+    },
+    "27570": {
+      "mse": 9786.626206777108,
+      "mae_eV": 80.01126372327842,
+      "mae_pct": 31.105036676134535,
+      "annulus_metrics": {
+        "mse": 9786.626206777108,
+        "mae_eV": 80.01126372327842,
+        "mae_pct": 31.105036676134535
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.8972238676633282,
+        "std": 0.6912123434699503
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8752914596001701,
+        "std": 0.29263362737509546
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21240234375000092,
+        "max": 4.106445312500137,
+        "mean": 1.2112808227539005,
+        "std": 0.6072247892563617,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.28500000000000003,
+        "normalized_slope_min": -0.6578612706386053,
+        "normalized_slope_max": 9.178254289732397,
+        "transition_window_slope_min": -0.6578612706386053,
+        "transition_window_slope_max": 2.2005273000856747
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8752914596001701,
+        "latent_span": 0.7668714822716073,
+        "hmode_median": NaN,
+        "lmode_median": 0.42649594524651946,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.743917736834074,
+        "rmse_vs_1_minus_norm_dalpha": 0.5483910895000808,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4733795906335605
+      },
+      "regime_classification": {
+        "n_scored": 48,
+        "n_H": 0,
+        "n_L": 48,
+        "accuracy": 0.5625,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.31545222949637625
+      },
+      "transition_timing": {
+        "t_transition_model": 0.22,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4391868150040135,
+        "drive_max": 0.3400186705867026,
+        "bistable_fraction": 0.109375,
+        "h_basin_fraction": 0.578125
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 8217.414830298883,
+        "source_magnitude": 18149.500259529104,
+        "source_ratio": 2.208663020199542
+      }
+    },
+    "27571": {
+      "mse": 6149.555979044241,
+      "mae_eV": 62.048015359044925,
+      "mae_pct": 21.552833728369116,
+      "annulus_metrics": {
+        "mse": 6149.555979044241,
+        "mae_eV": 62.048015359044925,
+        "mae_pct": 21.552833728369116
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.949563479274131,
+        "std": 0.7806144246314468
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8870003095479608,
+        "std": 0.3245138943014062
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21484375,
+        "max": 2.6416015625000124,
+        "mean": 1.1871047247023796,
+        "std": 0.5524709655601973,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.315,
+        "normalized_slope_min": -0.8103278384257833,
+        "normalized_slope_max": 6.337658864917923,
+        "transition_window_slope_min": -0.8103278384257833,
+        "transition_window_slope_max": -0.3543931725350049
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8870003095479608,
+        "latent_span": 0.778580332219398,
+        "hmode_median": NaN,
+        "lmode_median": 0.5719885712098567,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.773729502508204,
+        "rmse_vs_1_minus_norm_dalpha": 0.5455227296412388,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4822428658207832
+      },
+      "regime_classification": {
+        "n_scored": 47,
+        "n_H": 0,
+        "n_L": 47,
+        "accuracy": 0.46808510638297873,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.39327114410893427
+      },
+      "transition_timing": {
+        "t_transition_model": 0.195,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43929981681133706,
+        "drive_max": 0.42510436904874094,
+        "bistable_fraction": 0.047619047619047616,
+        "h_basin_fraction": 0.6349206349206349
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5594.700860408373,
+        "source_magnitude": 14003.900069428435,
+        "source_ratio": 2.503065028199414
+      }
+    },
+    "27573": {
+      "mse": 8119.729889804569,
+      "mae_eV": 70.12018039081096,
+      "mae_pct": 27.14134743944183,
+      "annulus_metrics": {
+        "mse": 8119.729889804569,
+        "mae_eV": 70.12018039081096,
+        "mae_pct": 27.14134743944183
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9487707392061271,
+        "std": 0.7503197924651934
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8868303486829041,
+        "std": 0.31299768139469797
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.19042968750000014,
+        "max": 2.2607421874999534,
+        "mean": 0.9712245100635583,
+        "std": 0.4395817224485526,
+        "hmode_fraction": 0.11864406779661017,
+        "transition_fraction": 0.03389830508474576,
+        "transition_time": 0.24,
+        "normalized_slope_min": -4.561998505088608,
+        "normalized_slope_max": 6.589393846751154,
+        "transition_window_slope_min": -1.4720035745793822,
+        "transition_window_slope_max": 3.4982820698272974
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8868303486829041,
+        "latent_span": 0.7784103713543413,
+        "hmode_median": 0.8817067791993529,
+        "lmode_median": 0.33492449743640973,
+        "h_minus_l_median": 0.5467822817629432
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.4822665607433414,
+        "rmse_vs_1_minus_norm_dalpha": 0.5036957788932053,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.425878193718195
+      },
+      "regime_classification": {
+        "n_scored": 41,
+        "n_H": 7,
+        "n_L": 34,
+        "accuracy": 0.7073170731707317,
+        "f1": 0.5384615384615384,
+        "auc": 0.9159663865546218,
+        "brier": 0.20759132686181309
+      },
+      "transition_timing": {
+        "t_transition_model": 0.195,
+        "t_transition_label": 0.245,
+        "transition_time_error_s": -0.04999999999999999
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4390059808670119,
+        "drive_max": 0.44746040852949365,
+        "bistable_fraction": 0.06779661016949153,
+        "h_basin_fraction": 0.5932203389830508
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 10116.081717568864,
+        "source_magnitude": 18756.740877934066,
+        "source_ratio": 1.8541507868115172
+      }
+    },
+    "27574": {
+      "mse": 8597.290871520867,
+      "mae_eV": 70.87168504709634,
+      "mae_pct": 41.912447681510336,
+      "annulus_metrics": {
+        "mse": 8597.290871520867,
+        "mae_eV": 70.87168504709634,
+        "mae_pct": 41.912447681510336
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9482216827825116,
+        "std": 0.7267397195784151
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8867125021068619,
+        "std": 0.30390758897413866
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.19775390624999994,
+        "max": 2.20703125,
+        "mean": 0.9470040457589263,
+        "std": 0.40823549742537407,
+        "hmode_fraction": 0.08928571428571429,
+        "transition_fraction": 0.03571428571428571,
+        "transition_time": 0.23500000000000001,
+        "normalized_slope_min": -2.7148144252182718,
+        "normalized_slope_max": 7.35799380321866,
+        "transition_window_slope_min": -2.2022110833394777,
+        "transition_window_slope_max": 3.949029019206179
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8867125021068619,
+        "latent_span": 0.7782925247782991,
+        "hmode_median": 0.876836544132152,
+        "lmode_median": 0.3267727950455088,
+        "h_minus_l_median": 0.5500637490866431
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5917362461735698,
+        "rmse_vs_1_minus_norm_dalpha": 0.5146438808111425,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4354574582029184
+      },
+      "regime_classification": {
+        "n_scored": 38,
+        "n_H": 5,
+        "n_L": 33,
+        "accuracy": 0.7105263157894737,
+        "f1": 0.47619047619047616,
+        "auc": 0.9090909090909091,
+        "brier": 0.2116391032554572
+      },
+      "transition_timing": {
+        "t_transition_model": 0.195,
+        "t_transition_label": 0.24,
+        "transition_time_error_s": -0.044999999999999984
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4390442461110311,
+        "drive_max": 0.4461621998157639,
+        "bistable_fraction": 0.05357142857142857,
+        "h_basin_fraction": 0.5892857142857143
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 10376.543068382516,
+        "source_magnitude": 19432.65574474513,
+        "source_ratio": 1.8727485266344606
+      }
+    },
+    "27575": {
+      "mse": 15330.537352647609,
+      "mae_eV": 97.30899774504839,
+      "mae_pct": 53.80175834340126,
+      "annulus_metrics": {
+        "mse": 15330.537352647609,
+        "mae_eV": 97.30899774504839,
+        "mae_pct": 53.80175834340126
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9777070267684937,
+        "std": 0.7836711915219424
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8928913064945994,
+        "std": 0.3239820426260763
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.18310546875000006,
+        "max": 1.9213867187499805,
+        "mean": 0.8892611799568966,
+        "std": 0.3743127440087259,
+        "hmode_fraction": 0.1724137931034483,
+        "transition_fraction": 0.017241379310344827,
+        "transition_time": 0.24,
+        "normalized_slope_min": -4.166627794680203,
+        "normalized_slope_max": 6.471554329029244,
+        "transition_window_slope_min": -2.3786035265303127,
+        "transition_window_slope_max": 3.7614043376825137
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8928913064945994,
+        "latent_span": 0.7844713291660366,
+        "hmode_median": 0.8917583843592647,
+        "lmode_median": 0.3126893999151166,
+        "h_minus_l_median": 0.5790689844441481
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.4717874003659739,
+        "rmse_vs_1_minus_norm_dalpha": 0.4980704446278495,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4211195525558162
+      },
+      "regime_classification": {
+        "n_scored": 41,
+        "n_H": 10,
+        "n_L": 31,
+        "accuracy": 0.7317073170731707,
+        "f1": 0.6451612903225806,
+        "auc": 1.0,
+        "brier": 0.18048119703708537
+      },
+      "transition_timing": {
+        "t_transition_model": 0.185,
+        "t_transition_label": 0.245,
+        "transition_time_error_s": -0.06
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.439153326196406,
+        "drive_max": 0.4939622618558264,
+        "bistable_fraction": 0.034482758620689655,
+        "h_basin_fraction": 0.6206896551724138
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 10279.203162797969,
+        "source_magnitude": 19431.762624708153,
+        "source_ratio": 1.8903958132809673
+      }
+    },
+    "27576": {
+      "mse": 15000.807528611516,
+      "mae_eV": 93.19457401433338,
+      "mae_pct": 35.00140830458446,
+      "annulus_metrics": {
+        "mse": 15000.807528611516,
+        "mae_eV": 93.19457401433338,
+        "mae_pct": 35.00140830458446
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.8895242192923121,
+        "std": 0.7802836520963505
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8734837314047067,
+        "std": 0.3302594732406386
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.18066406249999997,
+        "max": 1.589355468750109,
+        "mean": 0.865691654265878,
+        "std": 0.35474774296595035,
+        "hmode_fraction": 0.23809523809523808,
+        "transition_fraction": 0.015873015873015872,
+        "transition_time": 0.24,
+        "normalized_slope_min": -4.302118380711107,
+        "normalized_slope_max": 6.108380408516236,
+        "transition_window_slope_min": 1.3018542099223396,
+        "transition_window_slope_max": 5.223542631047806
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8734837314047067,
+        "latent_span": 0.7650637540761439,
+        "hmode_median": 0.8498729336536077,
+        "lmode_median": 0.3282954876880985,
+        "h_minus_l_median": 0.5215774459655091
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.44575501839919146,
+        "rmse_vs_1_minus_norm_dalpha": 0.49974787109799484,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4364044195828505
+      },
+      "regime_classification": {
+        "n_scored": 46,
+        "n_H": 15,
+        "n_L": 31,
+        "accuracy": 0.7391304347826086,
+        "f1": 0.7142857142857143,
+        "auc": 0.843010752688172,
+        "brier": 0.18682604122242602
+      },
+      "transition_timing": {
+        "t_transition_model": 0.18,
+        "t_transition_label": 0.245,
+        "transition_time_error_s": -0.065
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4392979440517686,
+        "drive_max": 0.5711245271738246,
+        "bistable_fraction": 0.20634920634920634,
+        "h_basin_fraction": 0.6349206349206349
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 10195.68943042206,
+        "source_magnitude": 19179.04799961872,
+        "source_ratio": 1.8810937826833836
+      }
+    },
+    "27577": {
+      "mse": 9747.71520089589,
+      "mae_eV": 75.90598102350106,
+      "mae_pct": 34.593441113706845,
+      "annulus_metrics": {
+        "mse": 9747.71520089589,
+        "mae_eV": 75.90598102350106,
+        "mae_pct": 34.593441113706845
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.45714286072645294,
+        "std": 0.2182087622521721
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.2795780129702632,
+        "std": 0.06978025411387384
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.18310546874999997,
+        "max": 2.880859375,
+        "mean": 0.8631036931818175,
+        "std": 0.4387553780839057,
+        "hmode_fraction": 0.12727272727272726,
+        "transition_fraction": 0.03636363636363636,
+        "transition_time": 0.23500000000000001,
+        "normalized_slope_min": -3.0446803752875127,
+        "normalized_slope_max": 9.8438901814591,
+        "transition_window_slope_min": -2.903041667640853,
+        "transition_window_slope_max": 2.5095803745799614
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.2795780129702632,
+        "latent_span": 0.17115803564170035,
+        "hmode_median": 0.278925550484094,
+        "lmode_median": 0.2383665356107903,
+        "h_minus_l_median": 0.04055901487330371
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6199940883239298,
+        "rmse_vs_1_minus_norm_dalpha": 0.5894748074537223,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5597917284847187
+      },
+      "regime_classification": {
+        "n_scored": 37,
+        "n_H": 7,
+        "n_L": 30,
+        "accuracy": 0.8108108108108109,
+        "f1": 0.0,
+        "auc": 1.0,
+        "brier": 0.13927025599772067
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.245,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4389961580838498,
+        "drive_max": 0.18414244866024473,
+        "bistable_fraction": 0.18181818181818182,
+        "h_basin_fraction": 0.45454545454545453
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 7251.208506339777,
+        "source_magnitude": 17450.265843809524,
+        "source_ratio": 2.406532073397988
+      }
+    },
+    "27578": {
+      "mse": 5539.482179249965,
+      "mae_eV": 59.71856476834775,
+      "mae_pct": 26.079094379509485,
+      "annulus_metrics": {
+        "mse": 5539.482179249965,
+        "mae_eV": 59.71856476834775,
+        "mae_pct": 26.079094379509485
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.3319095642522676,
+        "std": 0.21319454653814257
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.33651724654022275,
+        "std": 0.07385026850517969
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.43212890625,
+        "max": 4.331054687500027,
+        "mean": 1.8289671082427637,
+        "std": 0.7638693269428013,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.01,
+        "normalized_slope_min": -0.3070565676276402,
+        "normalized_slope_max": 7.026788828877275,
+        "transition_window_slope_min": -0.3070565676276402,
+        "transition_window_slope_max": 0.2348908898402371
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.33651724654022275,
+        "latent_span": 0.2280972692116599,
+        "hmode_median": NaN,
+        "lmode_median": 0.29444437061801665,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.9106290171628229,
+        "rmse_vs_1_minus_norm_dalpha": 0.4695371186096985,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.39740913610834433
+      },
+      "regime_classification": {
+        "n_scored": 56,
+        "n_H": 0,
+        "n_L": 56,
+        "accuracy": 1.0,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.08279415286964822
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4390084570310277,
+        "drive_max": 0.1855272922886943,
+        "bistable_fraction": 0.08695652173913043,
+        "h_basin_fraction": 0.782608695652174
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 8276.232859411837,
+        "source_magnitude": 17310.763233978654,
+        "source_ratio": 2.091623511076179
+      }
+    },
+    "27579": {
+      "mse": 3582.0915783140886,
+      "mae_eV": 47.75054226811691,
+      "mae_pct": 26.32654429185078,
+      "annulus_metrics": {
+        "mse": 3582.0915783140886,
+        "mae_eV": 47.75054226811691,
+        "mae_pct": 26.32654429185078
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.37221687775470436,
+        "std": 0.20382375931122898
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.3175583311903242,
+        "std": 0.07021181758768075
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.48095703125,
+        "max": 4.2041015625,
+        "mean": 2.1255792356005037,
+        "std": 0.7898601061610826,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.005,
+        "normalized_slope_min": -0.22424402027192425,
+        "normalized_slope_max": 6.277842461555962,
+        "transition_window_slope_min": -0.22424402027192425,
+        "transition_window_slope_max": 0.08790941656360474
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.3175583311903242,
+        "latent_span": 0.20913835386176133,
+        "hmode_median": NaN,
+        "lmode_median": 0.29386541945266914,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.1699050924162242,
+        "rmse_vs_1_minus_norm_dalpha": 0.3873161556451136,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3116767951323688
+      },
+      "regime_classification": {
+        "n_scored": 85,
+        "n_H": 0,
+        "n_L": 85,
+        "accuracy": 1.0,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.07511613811400311
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43920776009782336,
+        "drive_max": 0.18100987848615235,
+        "bistable_fraction": 0.29411764705882354,
+        "h_basin_fraction": 0.49019607843137253
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 8086.7779564075,
+        "source_magnitude": 16511.89116534779,
+        "source_ratio": 2.0418380784429573
+      }
+    },
+    "27581": {
+      "mse": 6116.312867796044,
+      "mae_eV": 58.54880202060518,
+      "mae_pct": 21.064725417684063,
+      "annulus_metrics": {
+        "mse": 6116.312867796044,
+        "mae_eV": 58.54880202060518,
+        "mae_pct": 21.064725417684063
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.12827058157650661,
+        "std": 0.2051349323786308
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.43941196604849425,
+        "std": 0.07889219926598116
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.51513671875,
+        "max": 9.416503906249979,
+        "mean": 4.20505099826387,
+        "std": 2.566993590545153,
+        "hmode_fraction": 0.044444444444444446,
+        "transition_fraction": 0.03333333333333333,
+        "transition_time": 0.245,
+        "normalized_slope_min": -0.7881012702489514,
+        "normalized_slope_max": 3.739019196932041,
+        "transition_window_slope_min": -0.05894321180941799,
+        "transition_window_slope_max": 3.171074345294059
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.43941196604849425,
+        "latent_span": 0.3309919887199314,
+        "hmode_median": 0.30879257938477817,
+        "lmode_median": 0.31876078717297873,
+        "h_minus_l_median": -0.009968207788200567
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.7102897193792039,
+        "rmse_vs_1_minus_norm_dalpha": 0.45654596851944157,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.36884862461308865
+      },
+      "regime_classification": {
+        "n_scored": 70,
+        "n_H": 4,
+        "n_L": 66,
+        "accuracy": 0.9428571428571428,
+        "f1": 0.0,
+        "auc": 0.4696969696969697,
+        "brier": 0.12770560513460522
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.255,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4395979345034432,
+        "drive_max": 0.1712463620574603,
+        "bistable_fraction": 0.1,
+        "h_basin_fraction": 0.8444444444444444
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 9375.02583206418,
+        "source_magnitude": 15597.713864079657,
+        "source_ratio": 1.6637515609897386
+      }
+    },
+    "27582": {
+      "mse": 9793.036086879685,
+      "mae_eV": 72.87627064477726,
+      "mae_pct": 30.79894425910317,
+      "annulus_metrics": {
+        "mse": 9793.036086879685,
+        "mae_eV": 72.87627064477726,
+        "mae_pct": 30.79894425910317
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.765254465361382,
+        "std": 0.4174404006490375
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8411054136306436,
+        "std": 0.1892614860202923
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.59326171875,
+        "max": 9.1259765625,
+        "mean": 4.401214291351018,
+        "std": 2.3798569349957077,
+        "hmode_fraction": 0.08080808080808081,
+        "transition_fraction": 0.020202020202020204,
+        "transition_time": 0.42,
+        "normalized_slope_min": -3.896748115788327,
+        "normalized_slope_max": 3.9216175019773942,
+        "transition_window_slope_min": 0.650204659119133,
+        "transition_window_slope_max": 1.5558648061722238
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8411054136306436,
+        "latent_span": 0.7326854363020808,
+        "hmode_median": 0.7219036088133545,
+        "lmode_median": 0.33872143634683827,
+        "h_minus_l_median": 0.3831821724665162
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.40001954506258386,
+        "rmse_vs_1_minus_norm_dalpha": 0.42988567114298804,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.348731968887167
+      },
+      "regime_classification": {
+        "n_scored": 68,
+        "n_H": 8,
+        "n_L": 60,
+        "accuracy": 0.9264705882352942,
+        "f1": 0.761904761904762,
+        "auc": 1.0,
+        "brier": 0.13086935807708816
+      },
+      "transition_timing": {
+        "t_transition_model": 0.395,
+        "t_transition_label": 0.43,
+        "transition_time_error_s": -0.034999999999999976
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4397211445987116,
+        "drive_max": 0.19561262912027466,
+        "bistable_fraction": 0.030303030303030304,
+        "h_basin_fraction": 0.9090909090909091
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 9092.084484071278,
+        "source_magnitude": 15207.141106421741,
+        "source_ratio": 1.6725692696093026
+      }
+    },
+    "27584": {
+      "mse": 7530.146645134772,
+      "mae_eV": 67.78526340147043,
+      "mae_pct": 27.714890611869816,
+      "annulus_metrics": {
+        "mse": 7530.146645134772,
+        "mae_eV": 67.78526340147043,
+        "mae_pct": 27.714890611869816
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.42120096054069833,
+        "std": 0.1924031030623436
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.29531146002168446,
+        "std": 0.06389526196039097
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.25878906249999994,
+        "max": 3.7988281250001052,
+        "mean": 1.3592263926630315,
+        "std": 0.5678078747907023,
+        "hmode_fraction": 0.10144927536231885,
+        "transition_fraction": 0.028985507246376812,
+        "transition_time": 0.29,
+        "normalized_slope_min": -1.149837118665319,
+        "normalized_slope_max": 8.540331209841634,
+        "transition_window_slope_min": -0.7821818476876992,
+        "transition_window_slope_max": 0.42671853484856825
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.29531146002168446,
+        "latent_span": 0.1868914826931216,
+        "hmode_median": 0.292678569123792,
+        "lmode_median": 0.27946280601541695,
+        "h_minus_l_median": 0.013215763108375023
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.8174216456109468,
+        "rmse_vs_1_minus_norm_dalpha": 0.4971329614110977,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4564179616447226
+      },
+      "regime_classification": {
+        "n_scored": 51,
+        "n_H": 7,
+        "n_L": 44,
+        "accuracy": 0.8627450980392157,
+        "f1": 0.0,
+        "auc": 0.9318181818181818,
+        "brier": 0.13199052537062603
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.295,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43960443250023545,
+        "drive_max": 0.1658485478026289,
+        "bistable_fraction": 0.3188405797101449,
+        "h_basin_fraction": 0.5362318840579711
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5562.508101054766,
+        "source_magnitude": 15188.9215746313,
+        "source_ratio": 2.730588665393688
+      }
+    },
+    "27585": {
+      "mse": 10014.949107269627,
+      "mae_eV": 76.39383330085373,
+      "mae_pct": 43.30500410956197,
+      "annulus_metrics": {
+        "mse": 10014.949107269627,
+        "mae_eV": 76.39383330085373,
+        "mae_pct": 43.30500410956197
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.4222622015892128,
+        "std": 0.22650730525434246
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.2948395903721694,
+        "std": 0.07351562889592964
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.22216796874999994,
+        "max": 1.98974609375,
+        "mean": 0.9974016462053561,
+        "std": 0.40189638392328814,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.265,
+        "normalized_slope_min": -3.3945488532746424,
+        "normalized_slope_max": 6.823965247840533,
+        "transition_window_slope_min": -3.3945488532746424,
+        "transition_window_slope_max": 1.4543638889742994
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.2948395903721694,
+        "latent_span": 0.18641961304360655,
+        "hmode_median": NaN,
+        "lmode_median": 0.26302680046117555,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.7579376340051006,
+        "rmse_vs_1_minus_norm_dalpha": 0.4591378583328595,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3687980391232818
+      },
+      "regime_classification": {
+        "n_scored": 40,
+        "n_H": 0,
+        "n_L": 40,
+        "accuracy": 1.0,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.05982940575849681
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43901286633658615,
+        "drive_max": 0.18390326637568646,
+        "bistable_fraction": 0.16071428571428573,
+        "h_basin_fraction": 0.48214285714285715
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 6290.154005577222,
+        "source_magnitude": 14380.441162850711,
+        "source_ratio": 2.2861826829381253
+      }
+    },
+    "27587": {
+      "mse": 9200.519717584195,
+      "mae_eV": 72.87903243021167,
+      "mae_pct": 17.71338434844248,
+      "annulus_metrics": {
+        "mse": 9200.519717584195,
+        "mae_eV": 72.87903243021167,
+        "mae_pct": 17.71338434844248
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0058315043426553,
+        "std": 0.8705327855518229
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8985066113094444,
+        "std": 0.35353076238624936
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.19531250000000006,
+        "max": 2.6245117187501625,
+        "mean": 1.033550941780817,
+        "std": 0.4251182947853097,
+        "hmode_fraction": 0.2054794520547945,
+        "transition_fraction": 0.0410958904109589,
+        "transition_time": 0.25,
+        "normalized_slope_min": -2.7401771356417797,
+        "normalized_slope_max": 6.757709822028069,
+        "transition_window_slope_min": 1.8462545596340334,
+        "transition_window_slope_max": 5.339180241799642
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8985066113094444,
+        "latent_span": 0.7900866339808816,
+        "hmode_median": 0.8979819529278203,
+        "lmode_median": 0.5332442235676474,
+        "h_minus_l_median": 0.3647377293601729
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5753623173321241,
+        "rmse_vs_1_minus_norm_dalpha": 0.491770531051266,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4263927573514878
+      },
+      "regime_classification": {
+        "n_scored": 54,
+        "n_H": 15,
+        "n_L": 39,
+        "accuracy": 0.6296296296296297,
+        "f1": 0.6,
+        "auc": 0.8803418803418803,
+        "brier": 0.2820499377387327
+      },
+      "transition_timing": {
+        "t_transition_model": 0.18,
+        "t_transition_label": 0.255,
+        "transition_time_error_s": -0.07500000000000001
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43936674356557043,
+        "drive_max": 0.5975618419161018,
+        "bistable_fraction": 0.0273972602739726,
+        "h_basin_fraction": 0.6986301369863014
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 6657.2708804574395,
+        "source_magnitude": 14527.182502191346,
+        "source_ratio": 2.1821528312230836
+      }
+    },
+    "27866": {
+      "mse": 7830.010314763813,
+      "mae_eV": 66.80763708674785,
+      "mae_pct": 29.000869780309415,
+      "annulus_metrics": {
+        "mse": 7830.010314763813,
+        "mae_eV": 66.80763708674785,
+        "mae_pct": 29.000869780309415
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0051325749619107,
+        "std": 0.7489814710890567
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8983702838962017,
+        "std": 0.3153086852518462
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.3466796875,
+        "max": 1.850585937499961,
+        "mean": 1.2680592256433774,
+        "std": 0.3651042032374604,
+        "hmode_fraction": 0.27941176470588236,
+        "transition_fraction": 0.058823529411764705,
+        "transition_time": 0.215,
+        "normalized_slope_min": -3.3847874732274015,
+        "normalized_slope_max": 7.383018869441569,
+        "transition_window_slope_min": 0.9813367424301269,
+        "transition_window_slope_max": 7.383018869441569
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8983702838962017,
+        "latent_span": 0.7899503065676389,
+        "hmode_median": 0.8978328487646382,
+        "lmode_median": 0.3989481026688426,
+        "h_minus_l_median": 0.4988847460957956
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.30173451498373177,
+        "rmse_vs_1_minus_norm_dalpha": 0.49559789681284655,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.42970227933377203
+      },
+      "regime_classification": {
+        "n_scored": 54,
+        "n_H": 19,
+        "n_L": 35,
+        "accuracy": 0.7222222222222222,
+        "f1": 0.7169811320754718,
+        "auc": 0.9323308270676691,
+        "brier": 0.21828802071269834
+      },
+      "transition_timing": {
+        "t_transition_model": 0.16,
+        "t_transition_label": 0.22,
+        "transition_time_error_s": -0.06
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": 0.044557302147724895,
+        "drive_max": 0.5527599902485753,
+        "bistable_fraction": 0.19117647058823528,
+        "h_basin_fraction": 0.8088235294117647
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 4620.422268823199,
+        "source_magnitude": 11853.95510976856,
+        "source_ratio": 2.5655566564097074
+      }
+    },
+    "27525": {
+      "mse": 6352.89278069049,
+      "mae_eV": 63.403735815159166,
+      "mae_pct": 35.04000894448016,
+      "annulus_metrics": {
+        "mse": 6352.89278069049,
+        "mae_eV": 63.403735815159166,
+        "mae_pct": 35.04000894448016
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.987979030323423,
+        "std": 0.7724509265085088
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8949732209658132,
+        "std": 0.32811359094154235
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2124023437500002,
+        "max": 3.51806640625,
+        "mean": 1.1355633802816922,
+        "std": 0.5104712699147115,
+        "hmode_fraction": 0.23943661971830985,
+        "transition_fraction": 0.056338028169014086,
+        "transition_time": 0.195,
+        "normalized_slope_min": -2.453653919759358,
+        "normalized_slope_max": 7.441700274695538,
+        "transition_window_slope_min": 2.611905204973066,
+        "transition_window_slope_max": 5.407393285774441
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8949732209658132,
+        "latent_span": 0.7865532436372504,
+        "hmode_median": 0.857606766434164,
+        "lmode_median": 0.41757471061762763,
+        "h_minus_l_median": 0.44003205581653637
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5409251904824823,
+        "rmse_vs_1_minus_norm_dalpha": 0.48182410930711583,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3941545709663711
+      },
+      "regime_classification": {
+        "n_scored": 52,
+        "n_H": 17,
+        "n_L": 35,
+        "accuracy": 0.6923076923076923,
+        "f1": 0.6799999999999999,
+        "auc": 0.9193277310924369,
+        "brier": 0.21450971279092307
+      },
+      "transition_timing": {
+        "t_transition_model": 0.18,
+        "t_transition_label": 0.2,
+        "transition_time_error_s": -0.020000000000000018
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4386339011358277,
+        "drive_max": 0.5842489624854018,
+        "bistable_fraction": 0.30985915492957744,
+        "h_basin_fraction": 0.647887323943662
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 8564.089450434192,
+        "source_magnitude": 17107.677214514555,
+        "source_ratio": 1.9976060866166692
+      }
+    },
+    "27663": {
+      "mse": 7486.244929795956,
+      "mae_eV": 63.79724224743818,
+      "mae_pct": 32.83494989870948,
+      "annulus_metrics": {
+        "mse": 7486.244929795956,
+        "mae_eV": 63.79724224743818,
+        "mae_pct": 32.83494989870948
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9890197061845427,
+        "std": 0.7422601921119432
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8951821391589161,
+        "std": 0.3061718839713386
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.29541015625,
+        "max": 2.9858398437498845,
+        "mean": 1.4094034830729163,
+        "std": 0.5274615430944166,
+        "hmode_fraction": 0.16666666666666666,
+        "transition_fraction": 0.027777777777777776,
+        "transition_time": 0.3,
+        "normalized_slope_min": -2.176614447603882,
+        "normalized_slope_max": 5.847341052325071,
+        "transition_window_slope_min": -0.6712522527314135,
+        "transition_window_slope_max": 0.530894638832109
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8951821391589161,
+        "latent_span": 0.7867621618303533,
+        "hmode_median": 0.8930615589387658,
+        "lmode_median": 0.20791679789534512,
+        "h_minus_l_median": 0.6851447610434207
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.20319672624867724,
+        "rmse_vs_1_minus_norm_dalpha": 0.4563447086716152,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.38576823402193877
+      },
+      "regime_classification": {
+        "n_scored": 55,
+        "n_H": 12,
+        "n_L": 43,
+        "accuracy": 0.8727272727272727,
+        "f1": 0.7741935483870968,
+        "auc": 1.0,
+        "brier": 0.09063242333576316
+      },
+      "transition_timing": {
+        "t_transition_model": 0.265,
+        "t_transition_label": 0.305,
+        "transition_time_error_s": -0.03999999999999998
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.439491014798327,
+        "drive_max": 0.5686056973115292,
+        "bistable_fraction": 0.125,
+        "h_basin_fraction": 0.4722222222222222
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 4345.425301668589,
+        "source_magnitude": 12199.781850626556,
+        "source_ratio": 2.8075000721182555
+      }
+    },
+    "26586": {
+      "mse": 8787.710270520061,
+      "mae_eV": 69.18749659361765,
+      "mae_pct": 21.0925798684841,
+      "annulus_metrics": {
+        "mse": 8787.710270520061,
+        "mae_eV": 69.18749659361765,
+        "mae_pct": 21.0925798684841
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.1642483425350445,
+        "std": 0.22850413628701682
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.42056462120259397,
+        "std": 0.08559975827989857
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.51025390625,
+        "max": 3.461914062500451,
+        "mean": 1.361083984375001,
+        "std": 0.46893371907011955,
+        "hmode_fraction": 0.42391304347826086,
+        "transition_fraction": 0.09782608695652174,
+        "transition_time": 0.165,
+        "normalized_slope_min": -4.204638379153999,
+        "normalized_slope_max": 5.698614869187975,
+        "transition_window_slope_min": -2.382439781458173,
+        "transition_window_slope_max": -0.5149691689137667
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.42056462120259397,
+        "latent_span": 0.3121446438740311,
+        "hmode_median": 0.3294809841880433,
+        "lmode_median": 0.2723845141190486,
+        "h_minus_l_median": 0.057096470068994654
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.3144470464457414,
+        "rmse_vs_1_minus_norm_dalpha": 0.4672407027403029,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.43472989741230295
+      },
+      "regime_classification": {
+        "n_scored": 71,
+        "n_H": 39,
+        "n_L": 32,
+        "accuracy": 0.4507042253521127,
+        "f1": 0.0,
+        "auc": 0.7740384615384616,
+        "brier": 0.2771586354656886
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.17,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43957478023754964,
+        "drive_max": 0.17452214433320484,
+        "bistable_fraction": 0.18478260869565216,
+        "h_basin_fraction": 0.7717391304347826
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5267.548516297196,
+        "source_magnitude": 14244.7097115512,
+        "source_ratio": 2.7042389196369903
+      }
+    },
+    "26878": {
+      "mse": 16376.434224026609,
+      "mae_eV": 91.85598606129075,
+      "mae_pct": 23.41172510083977,
+      "annulus_metrics": {
+        "mse": 16376.434224026609,
+        "mae_eV": 91.85598606129075,
+        "mae_pct": 23.41172510083977
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.002662194827833,
+        "std": 0.8266025466104844
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8978871297090586,
+        "std": 0.33749996843350766
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.4028320312500001,
+        "max": 3.3837890625,
+        "mean": 1.4812762920673004,
+        "std": 0.49217722692654486,
+        "hmode_fraction": 0.16666666666666666,
+        "transition_fraction": 0.02564102564102564,
+        "transition_time": 0.32,
+        "normalized_slope_min": -2.7693181658425092,
+        "normalized_slope_max": 5.701537400263712,
+        "transition_window_slope_min": -1.8921961959863083,
+        "transition_window_slope_max": -1.5424236313197568
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8978871297090586,
+        "latent_span": 0.7894671523804958,
+        "hmode_median": 0.8972729526293983,
+        "lmode_median": 0.22792825101682618,
+        "h_minus_l_median": 0.6693447016125722
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.05016057352301388,
+        "rmse_vs_1_minus_norm_dalpha": 0.4282751966284091,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3608944996964073
+      },
+      "regime_classification": {
+        "n_scored": 61,
+        "n_H": 13,
+        "n_L": 48,
+        "accuracy": 0.7704918032786885,
+        "f1": 0.65,
+        "auc": 0.9967948717948718,
+        "brier": 0.1716241831396413
+      },
+      "transition_timing": {
+        "t_transition_model": 0.255,
+        "t_transition_label": 0.325,
+        "transition_time_error_s": -0.07
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388396178877718,
+        "drive_max": 0.5800664960572314,
+        "bistable_fraction": 0.05128205128205128,
+        "h_basin_fraction": 0.5769230769230769
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3803.9706292537203,
+        "source_magnitude": 12548.338450049034,
+        "source_ratio": 3.298747458839364
+      }
+    },
+    "26990": {
+      "mse": 9479.943124354515,
+      "mae_eV": 73.44438320144144,
+      "mae_pct": 33.736729717637054,
+      "annulus_metrics": {
+        "mse": 9479.943124354515,
+        "mae_eV": 73.44438320144144,
+        "mae_pct": 33.736729717637054
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0035155088331553,
+        "std": 0.8195559736053517
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8980542496198172,
+        "std": 0.3369245017879109
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.19287109375,
+        "max": 2.5244140625,
+        "mean": 1.0664807335804891,
+        "std": 0.5081512142264851,
+        "hmode_fraction": 0.288135593220339,
+        "transition_fraction": 0.01694915254237288,
+        "transition_time": 0.22,
+        "normalized_slope_min": -2.005983526934198,
+        "normalized_slope_max": 6.427732133814516,
+        "transition_window_slope_min": 0.46140105480532156,
+        "transition_window_slope_max": 5.7626134729984635
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8980542496198172,
+        "latent_span": 0.7896342722912544,
+        "hmode_median": 0.8974941341237337,
+        "lmode_median": 0.2859382531428737,
+        "h_minus_l_median": 0.61155588098086
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5215917938235152,
+        "rmse_vs_1_minus_norm_dalpha": 0.5081289490023311,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4382923969819008
+      },
+      "regime_classification": {
+        "n_scored": 44,
+        "n_H": 17,
+        "n_L": 27,
+        "accuracy": 0.8181818181818182,
+        "f1": 0.8095238095238095,
+        "auc": 1.0,
+        "brier": 0.13564168640040178
+      },
+      "transition_timing": {
+        "t_transition_model": 0.18,
+        "t_transition_label": 0.225,
+        "transition_time_error_s": -0.04500000000000001
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43855143678123965,
+        "drive_max": 0.5571257274658604,
+        "bistable_fraction": 0.0847457627118644,
+        "h_basin_fraction": 0.6779661016949152
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 7100.569253566243,
+        "source_magnitude": 15816.763353504155,
+        "source_ratio": 2.2275345520125294
+      }
+    },
+    "27452": {
+      "mse": 17252.28422736319,
+      "mae_eV": 95.34288747533381,
+      "mae_pct": 60.297290999825705,
+      "annulus_metrics": {
+        "mse": 17252.28422736319,
+        "mae_eV": 95.34288747533381,
+        "mae_pct": 60.297290999825705
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.898586313216434,
+        "std": 0.6548952102828624
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8756090194647567,
+        "std": 0.2792275979189182
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2368164062500001,
+        "max": 1.5893554687500173,
+        "mean": 1.1213424970518833,
+        "std": 0.4283741228422541,
+        "hmode_fraction": 0.09433962264150944,
+        "transition_fraction": 0.03773584905660377,
+        "transition_time": 0.255,
+        "normalized_slope_min": -4.135742411110396,
+        "normalized_slope_max": 7.748836055981583,
+        "transition_window_slope_min": -2.412989820218641,
+        "transition_window_slope_max": 2.3507020984657103
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8756090194647567,
+        "latent_span": 0.7671890421361939,
+        "hmode_median": 0.8612655227965881,
+        "lmode_median": 0.3114437076452824,
+        "h_minus_l_median": 0.5498218151513057
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.4030032502051276,
+        "rmse_vs_1_minus_norm_dalpha": 0.5009774520987919,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4314235265592673
+      },
+      "regime_classification": {
+        "n_scored": 40,
+        "n_H": 5,
+        "n_L": 35,
+        "accuracy": 0.75,
+        "f1": 0.5,
+        "auc": 0.9714285714285714,
+        "brier": 0.16904770141291545
+      },
+      "transition_timing": {
+        "t_transition_model": 0.21,
+        "t_transition_label": 0.26,
+        "transition_time_error_s": -0.05000000000000002
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4381253247695663,
+        "drive_max": 0.3524231270729169,
+        "bistable_fraction": 0.1320754716981132,
+        "h_basin_fraction": 0.5849056603773585
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 7682.28883251955,
+        "source_magnitude": 15800.17048577439,
+        "source_ratio": 2.056700916637591
+      }
+    },
+    "27724": {
+      "mse": 17360.2381290117,
+      "mae_eV": 91.30801702739994,
+      "mae_pct": 28.74417624736643,
+      "annulus_metrics": {
+        "mse": 17360.2381290117,
+        "mae_eV": 91.30801702739994,
+        "mae_pct": 28.74417624736643
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6445313257185177,
+        "std": 0.098698641852529
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.2063411655301282,
+        "std": 0.02797159151554465
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.4345703125,
+        "max": 2.51220703125,
+        "mean": 1.1980892913510093,
+        "std": 0.371262051056612,
+        "hmode_fraction": 0.3939393939393939,
+        "transition_fraction": 0.030303030303030304,
+        "transition_time": 0.13,
+        "normalized_slope_min": -2.7065984409001396,
+        "normalized_slope_max": 4.928639272970327,
+        "transition_window_slope_min": 0.0765550030011628,
+        "transition_window_slope_max": 3.8228522401376326
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.2063411655301282,
+        "latent_span": 0.09792118820156538,
+        "hmode_median": 0.20159304289146676,
+        "lmode_median": 0.20181287634689468,
+        "h_minus_l_median": -0.0002198334554279202
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.39610119163683655,
+        "rmse_vs_1_minus_norm_dalpha": 0.4828731511831371,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.447349656598559
+      },
+      "regime_classification": {
+        "n_scored": 84,
+        "n_H": 39,
+        "n_L": 45,
+        "accuracy": 0.5357142857142857,
+        "f1": 0.0,
+        "auc": 0.5373219373219373,
+        "brier": 0.31623759957579456
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.135,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43910002301564355,
+        "drive_max": 0.042249176415152766,
+        "bistable_fraction": 0.898989898989899,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3164.6622927558537,
+        "source_magnitude": 12262.682910705815,
+        "source_ratio": 3.8748788251122797
+      }
+    },
+    "27759": {
+      "mse": 7965.11334244915,
+      "mae_eV": 68.75757597036782,
+      "mae_pct": 25.55648690684273,
+      "annulus_metrics": {
+        "mse": 7965.11334244915,
+        "mae_eV": 68.75757597036782,
+        "mae_pct": 25.55648690684273
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9600149502272668,
+        "std": 0.8444116137546174
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.889220314842467,
+        "std": 0.34888777399346693
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.22705078125,
+        "max": 1.4477539062500135,
+        "mean": 0.6862095424107147,
+        "std": 0.4041374724970957,
+        "hmode_fraction": 0.4489795918367347,
+        "transition_fraction": 0.01020408163265306,
+        "transition_time": 0.245,
+        "normalized_slope_min": -3.8148212102596553,
+        "normalized_slope_max": 1.8563349748908795,
+        "transition_window_slope_min": -2.6753062873427527,
+        "transition_window_slope_max": 1.4063410601995436
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.889220314842467,
+        "latent_span": 0.7808003375139042,
+        "hmode_median": 0.8883946266960057,
+        "lmode_median": 0.11962561272293767,
+        "h_minus_l_median": 0.768769013973068
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.8009768222820388,
+        "rmse_vs_1_minus_norm_dalpha": 0.2438237498950289,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.15830425442151694
+      },
+      "regime_classification": {
+        "n_scored": 82,
+        "n_H": 44,
+        "n_L": 38,
+        "accuracy": 0.9878048780487805,
+        "f1": 0.9885057471264368,
+        "auc": 1.0,
+        "brier": 0.03505815698235082
+      },
+      "transition_timing": {
+        "t_transition_model": 0.255,
+        "t_transition_label": 0.25,
+        "transition_time_error_s": 0.0050000000000000044
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388541820905479,
+        "drive_max": 0.4734293591741467,
+        "bistable_fraction": 0.19387755102040816,
+        "h_basin_fraction": 0.6020408163265306
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2065.366962755309,
+        "source_magnitude": 6770.2447230037305,
+        "source_ratio": 3.277986353908692
+      }
+    },
+    "27934": {
+      "mse": 13194.68211838014,
+      "mae_eV": 88.68497413011518,
+      "mae_pct": 30.63004957304385,
+      "annulus_metrics": {
+        "mse": 13194.68211838014,
+        "mae_eV": 88.68497413011518,
+        "mae_pct": 30.63004957304385
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6625912095732431,
+        "std": 0.12588461768858483
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.20009062110947137,
+        "std": 0.035095914678551166
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21484375,
+        "max": 1.682128906249922,
+        "mean": 0.6168306790865454,
+        "std": 0.4297574885570228,
+        "hmode_fraction": 0.6538461538461539,
+        "transition_fraction": 0.019230769230769232,
+        "transition_time": 0.18,
+        "normalized_slope_min": -4.1267501946699845,
+        "normalized_slope_max": 1.7644042035921874,
+        "transition_window_slope_min": -1.4810092174833045,
+        "transition_window_slope_max": 1.7644042035921874
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.20009062110947137,
+        "latent_span": 0.09167064378090854,
+        "hmode_median": 0.19645915938760658,
+        "lmode_median": 0.11940058729115906,
+        "h_minus_l_median": 0.07705857209644752
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.7109544556715047,
+        "rmse_vs_1_minus_norm_dalpha": 0.616170388935505,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5585101689049147
+      },
+      "regime_classification": {
+        "n_scored": 93,
+        "n_H": 68,
+        "n_L": 25,
+        "accuracy": 0.26881720430107525,
+        "f1": 0.0,
+        "auc": 1.0,
+        "brier": 0.476787502688807
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.19,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43935619509801044,
+        "drive_max": 0.027246046530292306,
+        "bistable_fraction": 0.7211538461538461,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2336.2739951776575,
+        "source_magnitude": 10751.977115054615,
+        "source_ratio": 4.602190125236064
+      }
+    },
+    "28046": {
+      "mse": 8372.85007615194,
+      "mae_eV": 64.07588455302141,
+      "mae_pct": 19.006299888887323,
+      "annulus_metrics": {
+        "mse": 8372.85007615194,
+        "mae_eV": 64.07588455302141,
+        "mae_pct": 19.006299888887323
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0226368586446757,
+        "std": 0.7710374386876713
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9017359958976706,
+        "std": 0.31973866672068085
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.361328125,
+        "max": 2.2607421874999876,
+        "mean": 1.3369954427083388,
+        "std": 0.3360213241679221,
+        "hmode_fraction": 0.08888888888888889,
+        "transition_fraction": 0.03333333333333333,
+        "transition_time": 0.39,
+        "normalized_slope_min": -3.469192935424129,
+        "normalized_slope_max": 6.274793737838969,
+        "transition_window_slope_min": -2.2098210041657147,
+        "transition_window_slope_max": -0.022065918453638034
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9017359958976706,
+        "latent_span": 0.7933160185691078,
+        "hmode_median": 0.8919013806902156,
+        "lmode_median": 0.8513277976419567,
+        "h_minus_l_median": 0.04057358304825898
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5886422646924889,
+        "rmse_vs_1_minus_norm_dalpha": 0.4732954772656374,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.43303525422852396
+      },
+      "regime_classification": {
+        "n_scored": 76,
+        "n_H": 8,
+        "n_L": 68,
+        "accuracy": 0.35526315789473684,
+        "f1": 0.24615384615384614,
+        "auc": 0.6599264705882353,
+        "brier": 0.49450209429778846
+      },
+      "transition_timing": {
+        "t_transition_model": 0.155,
+        "t_transition_label": 0.4,
+        "transition_time_error_s": -0.24500000000000002
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43889821537462154,
+        "drive_max": 0.6026605025497928,
+        "bistable_fraction": 0.14444444444444443,
+        "h_basin_fraction": 0.8333333333333334
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5071.916362870305,
+        "source_magnitude": 12273.61739465017,
+        "source_ratio": 2.4199171504642774
+      }
+    },
+    "28335": {
+      "mse": 7736.414014645313,
+      "mae_eV": 67.98768132377144,
+      "mae_pct": 27.420993117590886,
+      "annulus_metrics": {
+        "mse": 7736.414014645313,
+        "mae_eV": 67.98768132377144,
+        "mae_pct": 27.420993117590886
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0231889629722772,
+        "std": 0.6404563695942933
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9018405211919521,
+        "std": 0.2622251877716857
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.4443359375000001,
+        "max": 3.76953125,
+        "mean": 1.5146734775641102,
+        "std": 0.5733137514256688,
+        "hmode_fraction": 0.21794871794871795,
+        "transition_fraction": 0.02564102564102564,
+        "transition_time": 0.22,
+        "normalized_slope_min": -4.328398234452957,
+        "normalized_slope_max": 6.071936397781169,
+        "transition_window_slope_min": 1.1946491116695241,
+        "transition_window_slope_max": 6.071936397781169
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9018405211919521,
+        "latent_span": 0.7934205438633893,
+        "hmode_median": 0.901291188836652,
+        "lmode_median": 0.9007534422682691,
+        "h_minus_l_median": 0.0005377465683829019
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.47680108295698315,
+        "rmse_vs_1_minus_norm_dalpha": 0.38399512799740554,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.32383025911563385
+      },
+      "regime_classification": {
+        "n_scored": 64,
+        "n_H": 17,
+        "n_L": 47,
+        "accuracy": 0.328125,
+        "f1": 0.4415584415584416,
+        "auc": 0.7709637046307884,
+        "brier": 0.5199216542651051
+      },
+      "transition_timing": {
+        "t_transition_model": 0.08,
+        "t_transition_label": 0.225,
+        "transition_time_error_s": -0.14500000000000002
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.021726106100600526,
+        "drive_max": 0.5985000885120774,
+        "bistable_fraction": 0.038461538461538464,
+        "h_basin_fraction": 0.9615384615384616
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5561.951722653666,
+        "source_magnitude": 11324.399956045003,
+        "source_ratio": 2.036047869291099
+      }
+    },
+    "28979": {
+      "mse": 12925.645443530428,
+      "mae_eV": 82.50213125363561,
+      "mae_pct": 24.05288727246479,
+      "annulus_metrics": {
+        "mse": 12925.645443530428,
+        "mae_eV": 82.50213125363561,
+        "mae_pct": 24.05288727246479
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0112271204056604,
+        "std": 0.8301663766102035
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8995535855496956,
+        "std": 0.33812082392542764
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21728515625,
+        "max": 2.248535156249995,
+        "mean": 0.7647569444444441,
+        "std": 0.5565205617026989,
+        "hmode_fraction": 0.6,
+        "transition_fraction": 0.007407407407407408,
+        "transition_time": 0.26,
+        "normalized_slope_min": -5.30337512201322,
+        "normalized_slope_max": 1.4441550382302424,
+        "transition_window_slope_min": -1.3616291354307037,
+        "transition_window_slope_max": -0.1628318105529445
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8995535855496956,
+        "latent_span": 0.7911336082211328,
+        "hmode_median": 0.8984355431976054,
+        "lmode_median": 0.13745684981365225,
+        "h_minus_l_median": 0.7609786933839532
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.5982487850997579,
+        "rmse_vs_1_minus_norm_dalpha": 0.3170019433887093,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.21480316391442472
+      },
+      "regime_classification": {
+        "n_scored": 121,
+        "n_H": 81,
+        "n_L": 40,
+        "accuracy": 0.9173553719008265,
+        "f1": 0.9375000000000001,
+        "auc": 0.9817901234567902,
+        "brier": 0.06265932798359329
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": -0.025000000000000022
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4400402802948994,
+        "drive_max": 0.5757609541171426,
+        "bistable_fraction": 0.05925925925925926,
+        "h_basin_fraction": 0.6222222222222222
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2640.0864639825045,
+        "source_magnitude": 5935.574625134805,
+        "source_ratio": 2.2482500872084654
+      }
+    },
+    "29181": {
+      "mse": 31332.40315714422,
+      "mae_eV": 137.1264218719309,
+      "mae_pct": 35.53610085192646,
+      "annulus_metrics": {
+        "mse": 31332.40315714422,
+        "mae_eV": 137.1264218719309,
+        "mae_pct": 35.53610085192646
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0043988310594507,
+        "std": 0.7916001153926728
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.898226991135787,
+        "std": 0.3285349333506251
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.576171875,
+        "max": 4.66552734375,
+        "mean": 2.1380615234375036,
+        "std": 0.6710761999426745,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.08,
+        "normalized_slope_min": -1.0845909209006557,
+        "normalized_slope_max": 7.057799200158465,
+        "transition_window_slope_min": -1.0845909209006557,
+        "transition_window_slope_max": 0.6389309198596962
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.898226991135787,
+        "latent_span": 0.7898070138072242,
+        "hmode_median": NaN,
+        "lmode_median": 0.8721397395630279,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6352252708280252,
+        "rmse_vs_1_minus_norm_dalpha": 0.45928814247932387,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4107122905644749
+      },
+      "regime_classification": {
+        "n_scored": 60,
+        "n_H": 0,
+        "n_L": 60,
+        "accuracy": 0.35,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.5114595864240014
+      },
+      "transition_timing": {
+        "t_transition_model": 0.21,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4391856439887877,
+        "drive_max": 0.557002097264543,
+        "bistable_fraction": 0.075,
+        "h_basin_fraction": 0.8
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 8569.323655520191,
+        "source_magnitude": 16356.40069480456,
+        "source_ratio": 1.9087154774880477
+      }
+    },
+    "29826": {
+      "mse": 9309.331991724102,
+      "mae_eV": 66.39894424971519,
+      "mae_pct": 30.721227195961998,
+      "annulus_metrics": {
+        "mse": 9309.331991724102,
+        "mae_eV": 66.39894424971519,
+        "mae_pct": 30.721227195961998
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0279654970548187,
+        "std": 0.9058023931472363
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9027406924758014,
+        "std": 0.36464001595271
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.38330078124998684,
+        "max": 2.18994140625,
+        "mean": 0.8289230510752662,
+        "std": 0.3844089551081182,
+        "hmode_fraction": 0.3333333333333333,
+        "transition_fraction": 0.010752688172043012,
+        "transition_time": 0.31,
+        "normalized_slope_min": -4.370246832822337,
+        "normalized_slope_max": 4.820966400324043,
+        "transition_window_slope_min": 0.6149847471207064,
+        "transition_window_slope_max": 1.5983728943970963
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9027406924758014,
+        "latent_span": 0.7943207151472386,
+        "hmode_median": 0.9020003317988186,
+        "lmode_median": 0.1772975300594437,
+        "h_minus_l_median": 0.7247028017393748
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.19720720364915068,
+        "rmse_vs_1_minus_norm_dalpha": 0.45528157099049305,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.35223608359827563
+      },
+      "regime_classification": {
+        "n_scored": 79,
+        "n_H": 31,
+        "n_L": 48,
+        "accuracy": 0.8227848101265823,
+        "f1": 0.8157894736842105,
+        "auc": 1.0,
+        "brier": 0.1334850788461383
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.315,
+        "transition_time_error_s": -0.07500000000000001
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4390716160033286,
+        "drive_max": 0.6332654904950099,
+        "bistable_fraction": 0.10752688172043011,
+        "h_basin_fraction": 0.5698924731182796
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2401.370672056404,
+        "source_magnitude": 6085.674137047421,
+        "source_ratio": 2.5342502119015755
+      }
+    },
+    "30209": {
+      "mse": 28043.983781321658,
+      "mae_eV": 131.9883975448452,
+      "mae_pct": 26.196676273242637,
+      "annulus_metrics": {
+        "mse": 28043.983781321658,
+        "mae_eV": 131.9883975448452,
+        "mae_pct": 26.196676273242637
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0241447416190752,
+        "std": 0.846379422872216
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9020212365440293,
+        "std": 0.3411400540782247
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21972656250000067,
+        "max": 1.6015625,
+        "mean": 0.5481187352594309,
+        "std": 0.2706475335126705,
+        "hmode_fraction": 0.6698113207547169,
+        "transition_fraction": 0.009433962264150943,
+        "transition_time": 0.17500000000000002,
+        "normalized_slope_min": -4.465464237226218,
+        "normalized_slope_max": 3.357987314812144,
+        "transition_window_slope_min": -1.3398583399443322,
+        "transition_window_slope_max": 3.357987314812144
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9020212365440293,
+        "latent_span": 0.7936012592154665,
+        "hmode_median": 0.9011344720147298,
+        "lmode_median": 0.19313593038568722,
+        "h_minus_l_median": 0.7079985416290426
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.5280343697406035,
+        "rmse_vs_1_minus_norm_dalpha": 0.31398019113601155,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.2061158204883472
+      },
+      "regime_classification": {
+        "n_scored": 90,
+        "n_H": 71,
+        "n_L": 19,
+        "accuracy": 0.9888888888888889,
+        "f1": 0.9929078014184397,
+        "auc": 1.0,
+        "brier": 0.027240742175573037
+      },
+      "transition_timing": {
+        "t_transition_model": 0.185,
+        "t_transition_label": 0.18,
+        "transition_time_error_s": 0.0050000000000000044
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43954827938805396,
+        "drive_max": 0.6062894364665906,
+        "bistable_fraction": 0.0,
+        "h_basin_fraction": 0.8113207547169812
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2661.93462042727,
+        "source_magnitude": 8420.428909279124,
+        "source_ratio": 3.1632741245779648
+      }
+    },
+    "30358": {
+      "mse": 19129.16226075936,
+      "mae_eV": 110.36149279857165,
+      "mae_pct": 25.328308644858442,
+      "annulus_metrics": {
+        "mse": 19129.16226075936,
+        "mae_eV": 110.36149279857165,
+        "mae_pct": 25.328308644858442
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0195999472478725,
+        "std": 0.8880297662626783
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9011592681256996,
+        "std": 0.3584793232068938
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.13916015625,
+        "max": 0.7177734374999692,
+        "mean": 0.3946627103365371,
+        "std": 0.18814545857679205,
+        "hmode_fraction": 0.5,
+        "transition_fraction": 0.01282051282051282,
+        "transition_time": 0.195,
+        "normalized_slope_min": -4.303610081512282,
+        "normalized_slope_max": 0.1881149812614753,
+        "transition_window_slope_min": -3.255540900198533,
+        "transition_window_slope_max": -0.4773257687791199
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9011592681256996,
+        "latent_span": 0.7927392907971368,
+        "hmode_median": 0.8998792673964809,
+        "lmode_median": 0.15576670721241914,
+        "h_minus_l_median": 0.7441125601840618
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.862616670593292,
+        "rmse_vs_1_minus_norm_dalpha": 0.18401420972042906,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.13240148125061976
+      },
+      "regime_classification": {
+        "n_scored": 63,
+        "n_H": 39,
+        "n_L": 24,
+        "accuracy": 0.9841269841269841,
+        "f1": 0.9873417721518987,
+        "auc": 1.0,
+        "brier": 0.033530627281066754
+      },
+      "transition_timing": {
+        "t_transition_model": 0.19,
+        "t_transition_label": 0.2,
+        "transition_time_error_s": -0.010000000000000009
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43951715417761006,
+        "drive_max": 0.5997852797103996,
+        "bistable_fraction": 0.038461538461538464,
+        "h_basin_fraction": 0.6538461538461539
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2727.8166040175997,
+        "source_magnitude": 7578.505562696143,
+        "source_ratio": 2.7782313329848094
+      }
+    },
+    "26868": {
+      "mse": 9980.684900142633,
+      "mae_eV": 77.58419738905081,
+      "mae_pct": 22.497783515845867,
+      "annulus_metrics": {
+        "mse": 9980.684900142633,
+        "mae_eV": 77.58419738905081,
+        "mae_pct": 22.497783515845867
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0015279530203962,
+        "std": 0.8908979964536622
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8976646147891298,
+        "std": 0.36025546753927473
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.27343750000000167,
+        "max": 4.03076171875,
+        "mean": 1.3580932617187473,
+        "std": 0.5460841011591986,
+        "hmode_fraction": 0.25,
+        "transition_fraction": 0.0625,
+        "transition_time": 0.185,
+        "normalized_slope_min": -1.9478469258526871,
+        "normalized_slope_max": 7.667324579744145,
+        "transition_window_slope_min": 1.6231592013022702,
+        "transition_window_slope_max": 7.667324579744145
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8976646147891298,
+        "latent_span": 0.7892446374605671,
+        "hmode_median": 0.847796102706887,
+        "lmode_median": 0.27958431133234707,
+        "h_minus_l_median": 0.5682117913745399
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.603207573625651,
+        "rmse_vs_1_minus_norm_dalpha": 0.5042370976528258,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4416577225995789
+      },
+      "regime_classification": {
+        "n_scored": 58,
+        "n_H": 20,
+        "n_L": 38,
+        "accuracy": 0.6379310344827587,
+        "f1": 0.6181818181818183,
+        "auc": 0.6657894736842105,
+        "brier": 0.28928044081064186
+      },
+      "transition_timing": {
+        "t_transition_model": 0.20500000000000002,
+        "t_transition_label": 0.19,
+        "transition_time_error_s": 0.015000000000000013
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43929565454135167,
+        "drive_max": 0.5952455000719082,
+        "bistable_fraction": 0.0125,
+        "h_basin_fraction": 0.625
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 4490.806114932648,
+        "source_magnitude": 10609.394025708785,
+        "source_ratio": 2.3624698443489653
+      }
+    },
+    "27116": {
+      "mse": 7601.754634616832,
+      "mae_eV": 67.20206993838146,
+      "mae_pct": 25.703672618916542,
+      "annulus_metrics": {
+        "mse": 7601.754634616832,
+        "mae_eV": 67.20206993838146,
+        "mae_pct": 25.703672618916542
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0032673060067179,
+        "std": 0.8669475861952476
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8980056645939671,
+        "std": 0.35358617974108586
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.23681640625000003,
+        "max": 1.923828125,
+        "mean": 1.1242345861486402,
+        "std": 0.4350797664638377,
+        "hmode_fraction": 0.16216216216216217,
+        "transition_fraction": 0.02702702702702703,
+        "transition_time": 0.26,
+        "normalized_slope_min": -3.4348734221436197,
+        "normalized_slope_max": 5.4898540786971,
+        "transition_window_slope_min": 0.5533507302975558,
+        "transition_window_slope_max": 5.360943853009298
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8980056645939671,
+        "latent_span": 0.7895856872654043,
+        "hmode_median": 0.8966184939143851,
+        "lmode_median": 0.6293065944577778,
+        "h_minus_l_median": 0.26731189945660727
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.48884048403038816,
+        "rmse_vs_1_minus_norm_dalpha": 0.5323542428909567,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4746304436439391
+      },
+      "regime_classification": {
+        "n_scored": 57,
+        "n_H": 12,
+        "n_L": 45,
+        "accuracy": 0.5614035087719298,
+        "f1": 0.489795918367347,
+        "auc": 0.8185185185185185,
+        "brier": 0.32456879342460354
+      },
+      "transition_timing": {
+        "t_transition_model": 0.185,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": -0.08000000000000002
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4385959950068718,
+        "drive_max": 0.5827084641684916,
+        "bistable_fraction": 0.10810810810810811,
+        "h_basin_fraction": 0.6351351351351351
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 6960.143370552889,
+        "source_magnitude": 14344.336539360289,
+        "source_ratio": 2.0609254398390218
+      }
+    },
+    "27170": {
+      "mse": 6688.262998445408,
+      "mae_eV": 66.43036868936287,
+      "mae_pct": 26.621793353586018,
+      "annulus_metrics": {
+        "mse": 6688.262998445408,
+        "mae_eV": 66.43036868936287,
+        "mae_pct": 26.621793353586018
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9957139583887589,
+        "std": 0.8475305977490976
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8965172726381745,
+        "std": 0.3466790874003889
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.23681640625000006,
+        "max": 2.5805664062500964,
+        "mean": 1.2420828683035792,
+        "std": 0.4944064124095423,
+        "hmode_fraction": 0.08571428571428572,
+        "transition_fraction": 0.04285714285714286,
+        "transition_time": 0.23,
+        "normalized_slope_min": -0.9348022276963661,
+        "normalized_slope_max": 6.789711652526955,
+        "transition_window_slope_min": 1.3651176128052,
+        "transition_window_slope_max": 5.802304124823834
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8965172726381745,
+        "latent_span": 0.7880972953096117,
+        "hmode_median": 0.8918669568098603,
+        "lmode_median": 0.49650283518642324,
+        "h_minus_l_median": 0.39536412162343704
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6968249870257719,
+        "rmse_vs_1_minus_norm_dalpha": 0.5227829435853107,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.474027520735167
+      },
+      "regime_classification": {
+        "n_scored": 51,
+        "n_H": 6,
+        "n_L": 45,
+        "accuracy": 0.5686274509803921,
+        "f1": 0.35294117647058826,
+        "auc": 0.6666666666666666,
+        "brier": 0.33665126912355814
+      },
+      "transition_timing": {
+        "t_transition_model": 0.195,
+        "t_transition_label": 0.24,
+        "transition_time_error_s": -0.044999999999999984
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388402019176222,
+        "drive_max": 0.550549741434168,
+        "bistable_fraction": 0.1,
+        "h_basin_fraction": 0.6142857142857143
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5743.818575836274,
+        "source_magnitude": 12809.253512357967,
+        "source_ratio": 2.2300936808859606
+      }
+    },
+    "27399": {
+      "mse": 4183.311029270098,
+      "mae_eV": 50.77181288785461,
+      "mae_pct": 26.165532730036997,
+      "annulus_metrics": {
+        "mse": 4183.311029270098,
+        "mae_eV": 50.77181288785461,
+        "mae_pct": 26.165532730036997
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.001814647083389,
+        "std": 0.727266371779543
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8977208988066023,
+        "std": 0.3035700820503427
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2539062500000001,
+        "max": 1.7529296875,
+        "mean": 1.2976620802238847,
+        "std": 0.4304120146250842,
+        "hmode_fraction": 0.23880597014925373,
+        "transition_fraction": 0.014925373134328358,
+        "transition_time": 0.26,
+        "normalized_slope_min": -3.1574504876381386,
+        "normalized_slope_max": 7.188039396501775,
+        "transition_window_slope_min": -2.1245947054244105,
+        "transition_window_slope_max": 4.50430756894669
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8977208988066023,
+        "latent_span": 0.7893009214780395,
+        "hmode_median": 0.8952489474619849,
+        "lmode_median": 0.24929440738105282,
+        "h_minus_l_median": 0.6459545400809321
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.105751257948423,
+        "rmse_vs_1_minus_norm_dalpha": 0.451833010072896,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3812163281852961
+      },
+      "regime_classification": {
+        "n_scored": 51,
+        "n_H": 16,
+        "n_L": 35,
+        "accuracy": 0.9019607843137255,
+        "f1": 0.8648648648648648,
+        "auc": 1.0,
+        "brier": 0.0831639285449879
+      },
+      "transition_timing": {
+        "t_transition_model": 0.23500000000000001,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": -0.03
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388952620540555,
+        "drive_max": 0.5572054658796588,
+        "bistable_fraction": 0.208955223880597,
+        "h_basin_fraction": 0.5970149253731343
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3809.014491375904,
+        "source_magnitude": 12801.117505609169,
+        "source_ratio": 3.3607426622376453
+      }
+    },
+    "27404": {
+      "mse": 29651.332296229084,
+      "mae_eV": 131.01327032539018,
+      "mae_pct": 45.256304208571215,
+      "annulus_metrics": {
+        "mse": 29651.332296229084,
+        "mae_eV": 131.01327032539018,
+        "mae_pct": 45.256304208571215
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0020005709353477,
+        "std": 0.8783278501992657
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8977573848688476,
+        "std": 0.355927893403644
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.27587890625,
+        "max": 3.0834960937498566,
+        "mean": 1.133783179593375,
+        "std": 0.46965805095798424,
+        "hmode_fraction": 0.2289156626506024,
+        "transition_fraction": 0.024096385542168676,
+        "transition_time": 0.28,
+        "normalized_slope_min": -2.9610947515880506,
+        "normalized_slope_max": 4.351470672610145,
+        "transition_window_slope_min": -1.5419696052366305,
+        "transition_window_slope_max": 3.5435495293133545
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8977573848688476,
+        "latent_span": 0.7893374075402848,
+        "hmode_median": 0.8969459333424028,
+        "lmode_median": 0.17859993398087376,
+        "h_minus_l_median": 0.7183459993615291
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.0044473886495545,
+        "rmse_vs_1_minus_norm_dalpha": 0.45654268750129906,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3735857275393833
+      },
+      "regime_classification": {
+        "n_scored": 68,
+        "n_H": 19,
+        "n_L": 49,
+        "accuracy": 0.7794117647058824,
+        "f1": 0.7169811320754718,
+        "auc": 0.8711063372717508,
+        "brier": 0.16902928486599325
+      },
+      "transition_timing": {
+        "t_transition_model": 0.245,
+        "t_transition_label": 0.28500000000000003,
+        "transition_time_error_s": -0.040000000000000036
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43919739243696865,
+        "drive_max": 0.572405678377997,
+        "bistable_fraction": 0.04819277108433735,
+        "h_basin_fraction": 0.5542168674698795
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 4010.1435911456015,
+        "source_magnitude": 8258.501653287882,
+        "source_ratio": 2.0594029773555373
+      }
+    },
+    "27519": {
+      "mse": 10459.25098770008,
+      "mae_eV": 81.75560236772981,
+      "mae_pct": 31.72866002704112,
+      "annulus_metrics": {
+        "mse": 10459.25098770008,
+        "mae_eV": 81.75560236772981,
+        "mae_pct": 31.72866002704112
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.005891588864909,
+        "std": 0.8912938258605443
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8985183233268758,
+        "std": 0.3600466026510899
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.26123046875,
+        "max": 3.032226562500787,
+        "mean": 1.2266138980263201,
+        "std": 0.4648711122928633,
+        "hmode_fraction": 0.3026315789473684,
+        "transition_fraction": 0.06578947368421052,
+        "transition_time": 0.125,
+        "normalized_slope_min": -2.316020610574996,
+        "normalized_slope_max": 5.375073587262541,
+        "transition_window_slope_min": -2.2240053444827885,
+        "transition_window_slope_max": 5.038654136136323
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8985183233268758,
+        "latent_span": 0.790098345998313,
+        "hmode_median": 0.8978435082090562,
+        "lmode_median": 0.43304296681654664,
+        "h_minus_l_median": 0.4648005413925096
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.3757036094808538,
+        "rmse_vs_1_minus_norm_dalpha": 0.47475016325088154,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.412812881559983
+      },
+      "regime_classification": {
+        "n_scored": 58,
+        "n_H": 23,
+        "n_L": 35,
+        "accuracy": 0.6551724137931034,
+        "f1": 0.6551724137931034,
+        "auc": 0.8695652173913043,
+        "brier": 0.26084716617965403
+      },
+      "transition_timing": {
+        "t_transition_model": 0.20500000000000002,
+        "t_transition_label": 0.135,
+        "transition_time_error_s": 0.07
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4393888693937751,
+        "drive_max": 0.5766158456471255,
+        "bistable_fraction": 0.0,
+        "h_basin_fraction": 0.618421052631579
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3735.5757824383377,
+        "source_magnitude": 11052.925937543649,
+        "source_ratio": 2.9588279232740393
+      }
+    },
+    "27522": {
+      "mse": 6036.106833050676,
+      "mae_eV": 60.742932371340075,
+      "mae_pct": 25.601003652215827,
+      "annulus_metrics": {
+        "mse": 6036.106833050676,
+        "mae_eV": 60.742932371340075,
+        "mae_pct": 25.601003652215827
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0109659186841675,
+        "std": 0.8633877775123744
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.899503123289806,
+        "std": 0.34983003427670734
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2685546875,
+        "max": 3.369140624999874,
+        "mean": 1.2490665211397087,
+        "std": 0.4953560354361016,
+        "hmode_fraction": 0.07352941176470588,
+        "transition_fraction": 0.029411764705882353,
+        "transition_time": 0.21,
+        "normalized_slope_min": -2.3538654237382133,
+        "normalized_slope_max": 8.260912235165568,
+        "transition_window_slope_min": 1.9368974135197972,
+        "transition_window_slope_max": 5.792785638893582
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.899503123289806,
+        "latent_span": 0.7910831459612432,
+        "hmode_median": 0.6987167284620005,
+        "lmode_median": 0.3393536312416697,
+        "h_minus_l_median": 0.35936309722033083
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.4937019227354326,
+        "rmse_vs_1_minus_norm_dalpha": 0.5124746295883842,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4569589806742405
+      },
+      "regime_classification": {
+        "n_scored": 53,
+        "n_H": 5,
+        "n_L": 48,
+        "accuracy": 0.6037735849056604,
+        "f1": 0.32258064516129037,
+        "auc": 0.5625,
+        "brier": 0.3473826785872223
+      },
+      "transition_timing": {
+        "t_transition_model": 0.21,
+        "t_transition_label": 0.215,
+        "transition_time_error_s": -0.0050000000000000044
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43944279255181984,
+        "drive_max": 0.6070220193366429,
+        "bistable_fraction": 0.029411764705882353,
+        "h_basin_fraction": 0.5441176470588235
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3923.72648874591,
+        "source_magnitude": 9830.312070450054,
+        "source_ratio": 2.5053509963398697
+      }
+    },
+    "27530": {
+      "mse": 9590.480018738566,
+      "mae_eV": 72.59191223950259,
+      "mae_pct": 32.301901709855976,
+      "annulus_metrics": {
+        "mse": 9590.480018738566,
+        "mae_eV": 72.59191223950259,
+        "mae_pct": 32.301901709855976
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0142633730447326,
+        "std": 0.8392312817810399
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9001385175484928,
+        "std": 0.34432854470238283
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.38818359375,
+        "max": 1.9482421875,
+        "mean": 1.3920740927419377,
+        "std": 0.40122169393772644,
+        "hmode_fraction": 0.11290322580645161,
+        "transition_fraction": 0.03225806451612903,
+        "transition_time": 0.16,
+        "normalized_slope_min": -2.2535083041613646,
+        "normalized_slope_max": 7.95344698189686,
+        "transition_window_slope_min": 0.5752493100126135,
+        "transition_window_slope_max": 7.717901859910903
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9001385175484928,
+        "latent_span": 0.79171854021993,
+        "hmode_median": 0.6696867418305041,
+        "lmode_median": 0.8838441792148837,
+        "h_minus_l_median": -0.21415743738437953
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5923376006771096,
+        "rmse_vs_1_minus_norm_dalpha": 0.5600361982342135,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.4807021404667819
+      },
+      "regime_classification": {
+        "n_scored": 49,
+        "n_H": 7,
+        "n_L": 42,
+        "accuracy": 0.5102040816326531,
+        "f1": 0.33333333333333326,
+        "auc": 0.4523809523809524,
+        "brier": 0.41321215375473175
+      },
+      "transition_timing": {
+        "t_transition_model": 0.17,
+        "t_transition_label": 0.165,
+        "transition_time_error_s": 0.0050000000000000044
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4374837561130796,
+        "drive_max": 0.5869657380261801,
+        "bistable_fraction": 0.08064516129032258,
+        "h_basin_fraction": 0.6935483870967742
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5177.270451859068,
+        "source_magnitude": 10116.632895459188,
+        "source_ratio": 1.9540475985511694
+      }
+    },
+    "27532": {
+      "mse": 5198.176377343183,
+      "mae_eV": 56.92532913751151,
+      "mae_pct": 24.535916137403873,
+      "annulus_metrics": {
+        "mse": 5198.176377343183,
+        "mae_eV": 56.92532913751151,
+        "mae_pct": 24.535916137403873
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0053787733898147,
+        "std": 0.8979426333601065
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8984183238531849,
+        "std": 0.3627968091364632
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.25634765625,
+        "max": 1.6796874999999836,
+        "mean": 0.7333877060439596,
+        "std": 0.4332573247643125,
+        "hmode_fraction": 0.3626373626373626,
+        "transition_fraction": 0.01098901098901099,
+        "transition_time": 0.24,
+        "normalized_slope_min": -4.744592021297432,
+        "normalized_slope_max": 2.302241403464438,
+        "transition_window_slope_min": -2.142534591359974,
+        "transition_window_slope_max": 2.302241403464438
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8984183238531849,
+        "latent_span": 0.7899983465246221,
+        "hmode_median": 0.8975216752428853,
+        "lmode_median": 0.11949780871081024,
+        "h_minus_l_median": 0.778023866532075
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.6927815420035957,
+        "rmse_vs_1_minus_norm_dalpha": 0.31257152870820754,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.20887602959640167
+      },
+      "regime_classification": {
+        "n_scored": 69,
+        "n_H": 33,
+        "n_L": 36,
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "auc": 1.0,
+        "brier": 0.031151122869991218
+      },
+      "transition_timing": {
+        "t_transition_model": 0.245,
+        "t_transition_label": 0.245,
+        "transition_time_error_s": 0.0
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43918688856669935,
+        "drive_max": 0.5841441269749674,
+        "bistable_fraction": 0.03296703296703297,
+        "h_basin_fraction": 0.6043956043956044
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2421.794681087389,
+        "source_magnitude": 6020.583892631761,
+        "source_ratio": 2.4860009550613555
+      }
+    },
+    "27533": {
+      "mse": 19024.210907587803,
+      "mae_eV": 110.57389467191122,
+      "mae_pct": 47.67683621156298,
+      "annulus_metrics": {
+        "mse": 19024.210907587803,
+        "mae_eV": 110.57389467191122,
+        "mae_pct": 47.67683621156298
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0105969998487225,
+        "std": 0.8911185950552348
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8994318125091915,
+        "std": 0.3602945087902979
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2709960937499932,
+        "max": 1.37451171875,
+        "mean": 0.6213628029336724,
+        "std": 0.3524104413022402,
+        "hmode_fraction": 0.5102040816326531,
+        "transition_fraction": 0.030612244897959183,
+        "transition_time": 0.17500000000000002,
+        "normalized_slope_min": -4.269590671833008,
+        "normalized_slope_max": 1.944146102166639,
+        "transition_window_slope_min": -1.9936297852360418,
+        "transition_window_slope_max": -0.48791200041055127
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8994318125091915,
+        "latent_span": 0.7910118351806287,
+        "hmode_median": 0.8981787157585113,
+        "lmode_median": 0.11947364790398682,
+        "h_minus_l_median": 0.7787050678545244
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.7351558343674415,
+        "rmse_vs_1_minus_norm_dalpha": 0.2872463984646099,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.18881793586717127
+      },
+      "regime_classification": {
+        "n_scored": 76,
+        "n_H": 50,
+        "n_L": 26,
+        "accuracy": 0.9078947368421053,
+        "f1": 0.924731182795699,
+        "auc": 0.9861538461538462,
+        "brier": 0.07536351287387383
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.18,
+        "transition_time_error_s": 0.06
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43922555349452835,
+        "drive_max": 0.583690347848571,
+        "bistable_fraction": 0.030612244897959183,
+        "h_basin_fraction": 0.673469387755102
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 1965.3879687170477,
+        "source_magnitude": 5879.393348527922,
+        "source_ratio": 2.9914670482970163
+      }
+    },
+    "27537": {
+      "mse": 10719.753434418813,
+      "mae_eV": 88.38897685501247,
+      "mae_pct": 32.20554734309764,
+      "annulus_metrics": {
+        "mse": 10719.753434418813,
+        "mae_eV": 88.38897685501247,
+        "mae_pct": 32.20554734309764
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.008538336074519,
+        "std": 0.7414352436999773
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8990330540193374,
+        "std": 0.309566244451908
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.25634765625,
+        "max": 1.8945312499999933,
+        "mean": 0.9207196302816847,
+        "std": 0.4553853276917654,
+        "hmode_fraction": 0.323943661971831,
+        "transition_fraction": 0.014084507042253521,
+        "transition_time": 0.245,
+        "normalized_slope_min": -4.498453131886709,
+        "normalized_slope_max": 4.792940264190763,
+        "transition_window_slope_min": -1.8480689411506521,
+        "transition_window_slope_max": 3.233721829120653
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8990330540193374,
+        "latent_span": 0.7906130766907746,
+        "hmode_median": 0.8980072259776235,
+        "lmode_median": 0.26472762226200663,
+        "h_minus_l_median": 0.6332796037156169
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.4639998554406905,
+        "rmse_vs_1_minus_norm_dalpha": 0.3341632423348862,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.22705440682229625
+      },
+      "regime_classification": {
+        "n_scored": 60,
+        "n_H": 23,
+        "n_L": 37,
+        "accuracy": 0.95,
+        "f1": 0.9387755102040816,
+        "auc": 1.0,
+        "brier": 0.06266889952112341
+      },
+      "transition_timing": {
+        "t_transition_model": 0.23,
+        "t_transition_label": 0.25,
+        "transition_time_error_s": -0.01999999999999999
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43927453499384156,
+        "drive_max": 0.5732861757176291,
+        "bistable_fraction": 0.09859154929577464,
+        "h_basin_fraction": 0.7746478873239436
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2840.7007794321958,
+        "source_magnitude": 9186.486931952939,
+        "source_ratio": 3.2338805252678777
+      }
+    },
+    "27855": {
+      "mse": 16793.215338840684,
+      "mae_eV": 102.15806615701021,
+      "mae_pct": 38.41367709635087,
+      "annulus_metrics": {
+        "mse": 16793.215338840684,
+        "mae_eV": 102.15806615701021,
+        "mae_pct": 38.41367709635087
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.015860579600396,
+        "std": 0.895284944850574
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.900445001261263,
+        "std": 0.3613550898188673
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.26611328124999406,
+        "max": 5.33691406249976,
+        "mean": 0.5821907874381171,
+        "std": 0.5083956208942221,
+        "hmode_fraction": 0.44554455445544555,
+        "transition_fraction": 0.009900990099009901,
+        "transition_time": 0.225,
+        "normalized_slope_min": -1.2460405708488436,
+        "normalized_slope_max": 9.13871358866138,
+        "transition_window_slope_min": -1.1788168020939063,
+        "transition_window_slope_max": -0.3467578996137073
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.900445001261263,
+        "latent_span": 0.7920250239327002,
+        "hmode_median": 0.8992742527503494,
+        "lmode_median": 0.1261295934226829,
+        "h_minus_l_median": 0.7731446593276665
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.14595283707010742,
+        "rmse_vs_1_minus_norm_dalpha": 0.5315596152415402,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.40832481411983396
+      },
+      "regime_classification": {
+        "n_scored": 72,
+        "n_H": 45,
+        "n_L": 27,
+        "accuracy": 0.9722222222222222,
+        "f1": 0.9772727272727273,
+        "auc": 1.0,
+        "brier": 0.034037571800705956
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.23,
+        "transition_time_error_s": 0.009999999999999981
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4388055965967429,
+        "drive_max": 0.5950202185596947,
+        "bistable_fraction": 0.019801980198019802,
+        "h_basin_fraction": 0.6831683168316832
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2655.451345991733,
+        "source_magnitude": 6335.131208877434,
+        "source_ratio": 2.3857078820345476
+      }
+    },
+    "27899": {
+      "mse": 21511.671889773323,
+      "mae_eV": 116.79907296844446,
+      "mae_pct": 44.930449537248805,
+      "annulus_metrics": {
+        "mse": 21511.671889773323,
+        "mae_eV": 116.79907296844446,
+        "mae_pct": 44.930449537248805
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0140537041007889,
+        "std": 0.8386476823475751
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.900098222503513,
+        "std": 0.3429173189592895
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.400390625,
+        "max": 2.502441406249905,
+        "mean": 1.6376037597656328,
+        "std": 0.4574745577485836,
+        "hmode_fraction": 0.1375,
+        "transition_fraction": 0.0375,
+        "transition_time": 0.26,
+        "normalized_slope_min": -1.7576062284193625,
+        "normalized_slope_max": 6.60765882685226,
+        "transition_window_slope_min": 1.0374863219467443,
+        "transition_window_slope_max": 6.60765882685226
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.900098222503513,
+        "latent_span": 0.7916782451749502,
+        "hmode_median": 0.8993663406895569,
+        "lmode_median": 0.8631781047153821,
+        "h_minus_l_median": 0.036188235974174754
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6579959263702387,
+        "rmse_vs_1_minus_norm_dalpha": 0.535038336233834,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.47791649196732894
+      },
+      "regime_classification": {
+        "n_scored": 55,
+        "n_H": 11,
+        "n_L": 44,
+        "accuracy": 0.45454545454545453,
+        "f1": 0.4230769230769231,
+        "auc": 0.8037190082644629,
+        "brier": 0.42081239102495244
+      },
+      "transition_timing": {
+        "t_transition_model": 0.185,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": -0.08000000000000002
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43951833137688523,
+        "drive_max": 0.5792463862238335,
+        "bistable_fraction": 0.075,
+        "h_basin_fraction": 0.75
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5036.143850702057,
+        "source_magnitude": 8325.924894249427,
+        "source_ratio": 1.6532341290123251
+      }
+    },
+    "27901": {
+      "mse": 8856.018567318406,
+      "mae_eV": 79.34948624871713,
+      "mae_pct": 39.92587440102395,
+      "annulus_metrics": {
+        "mse": 8856.018567318406,
+        "mae_eV": 79.34948624871713,
+        "mae_pct": 39.92587440102395
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0151795844953249,
+        "std": 0.7699531423991094
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9003144293650154,
+        "std": 0.31840631568167815
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.39794921875,
+        "max": 2.373046875,
+        "mean": 1.3959703947368394,
+        "std": 0.4192623808505439,
+        "hmode_fraction": 0.0,
+        "transition_fraction": 0.0,
+        "transition_time": 0.255,
+        "normalized_slope_min": -2.323319457769312,
+        "normalized_slope_max": 8.086721741460316,
+        "transition_window_slope_min": -2.323319457769312,
+        "transition_window_slope_max": -0.6479055650572292
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9003144293650154,
+        "latent_span": 0.7918944520364526,
+        "hmode_median": NaN,
+        "lmode_median": 0.6995243068867774,
+        "h_minus_l_median": NaN
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5383604116826786,
+        "rmse_vs_1_minus_norm_dalpha": 0.47274791404720007,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.40125959691743046
+      },
+      "regime_classification": {
+        "n_scored": 35,
+        "n_H": 0,
+        "n_L": 35,
+        "accuracy": 0.4,
+        "f1": 0.0,
+        "auc": NaN,
+        "brier": 0.45243192957541173
+      },
+      "transition_timing": {
+        "t_transition_model": 0.185,
+        "t_transition_label": NaN,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4396180370351922,
+        "drive_max": 0.5862803012349711,
+        "bistable_fraction": 0.08771929824561403,
+        "h_basin_fraction": 0.6666666666666666
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3549.739647861333,
+        "source_magnitude": 12145.27896284401,
+        "source_ratio": 3.421456265599622
+      }
+    },
+    "27912": {
+      "mse": 6900.543780852677,
+      "mae_eV": 62.63382268209878,
+      "mae_pct": 21.75842327808887,
+      "annulus_metrics": {
+        "mse": 6900.543780852677,
+        "mae_eV": 62.63382268209878,
+        "mae_pct": 21.75842327808887
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6155104084080207,
+        "std": 0.13954111494659796
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.21668558218785755,
+        "std": 0.040300241545050824
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.45166015624999994,
+        "max": 2.85400390624996,
+        "mean": 1.280730716765874,
+        "std": 0.35597297174987724,
+        "hmode_fraction": 0.12698412698412698,
+        "transition_fraction": 0.047619047619047616,
+        "transition_time": 0.26,
+        "normalized_slope_min": -1.32623074942763,
+        "normalized_slope_max": 9.982759169404655,
+        "transition_window_slope_min": -0.7057102776108088,
+        "transition_window_slope_max": 0.3720358050186263
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.21668558218785755,
+        "latent_span": 0.10826560485929472,
+        "hmode_median": 0.21539477517109035,
+        "lmode_median": 0.21179607578591453,
+        "h_minus_l_median": 0.0035986993851758187
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.7502345957873076,
+        "rmse_vs_1_minus_norm_dalpha": 0.5038091416656265,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.47725037749779337
+      },
+      "regime_classification": {
+        "n_scored": 42,
+        "n_H": 8,
+        "n_L": 34,
+        "accuracy": 0.8095238095238095,
+        "f1": 0.0,
+        "auc": 0.9448529411764706,
+        "brier": 0.15196457911904254
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4393565240816829,
+        "drive_max": 0.06910121349301622,
+        "bistable_fraction": 0.7777777777777778,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 4272.080542150414,
+        "source_magnitude": 15901.971458705513,
+        "source_ratio": 3.7223014168592248
+      }
+    },
+    "27933": {
+      "mse": 14639.17513313935,
+      "mae_eV": 87.10784691894938,
+      "mae_pct": 27.76065647851729,
+      "annulus_metrics": {
+        "mse": 14639.17513313935,
+        "mae_eV": 87.10784691894938,
+        "mae_pct": 27.76065647851729
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9534018920884364,
+        "std": 0.7725276430986143
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8878201053865147,
+        "std": 0.31998946316360777
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.16845703125000122,
+        "max": 1.51123046875,
+        "mean": 0.7045572916666687,
+        "std": 0.46164250196983664,
+        "hmode_fraction": 0.5333333333333333,
+        "transition_fraction": 0.013333333333333334,
+        "transition_time": 0.18,
+        "normalized_slope_min": -4.638563822700856,
+        "normalized_slope_max": 2.2647044887451417,
+        "transition_window_slope_min": -2.4480395000807853,
+        "transition_window_slope_max": 1.0212230221167937
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8878201053865147,
+        "latent_span": 0.7794001280579519,
+        "hmode_median": 0.7414596319533846,
+        "lmode_median": 0.11935499650019737,
+        "h_minus_l_median": 0.6221046354531872
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.6352955820460758,
+        "rmse_vs_1_minus_norm_dalpha": 0.354804139674252,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.2846587101546612
+      },
+      "regime_classification": {
+        "n_scored": 64,
+        "n_H": 40,
+        "n_L": 24,
+        "accuracy": 0.765625,
+        "f1": 0.7692307692307693,
+        "auc": 1.0,
+        "brier": 0.1446301417718829
+      },
+      "transition_timing": {
+        "t_transition_model": 0.26,
+        "t_transition_label": 0.185,
+        "transition_time_error_s": 0.07500000000000001
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43969561439101434,
+        "drive_max": 0.4471065010120566,
+        "bistable_fraction": 0.13333333333333333,
+        "h_basin_fraction": 0.48
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2112.5854636477197,
+        "source_magnitude": 9284.061531771804,
+        "source_ratio": 4.3946442343434144
+      }
+    },
+    "27935": {
+      "mse": 12211.635065299808,
+      "mae_eV": 85.41454271207562,
+      "mae_pct": 26.75722930602323,
+      "annulus_metrics": {
+        "mse": 12211.635065299808,
+        "mae_eV": 85.41454271207562,
+        "mae_pct": 26.75722930602323
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6618641653121387,
+        "std": 0.12934395435126236
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.20033948566950896,
+        "std": 0.036144424802151284
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2465820312500225,
+        "max": 1.6113281250000036,
+        "mean": 0.6214624521683687,
+        "std": 0.42842603704350596,
+        "hmode_fraction": 0.6428571428571429,
+        "transition_fraction": 0.01020408163265306,
+        "transition_time": 0.18,
+        "normalized_slope_min": -4.151196069060756,
+        "normalized_slope_max": 1.5298939344881939,
+        "transition_window_slope_min": -1.6113015701582976,
+        "transition_window_slope_max": 0.9762982779267575
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.20033948566950896,
+        "latent_span": 0.09191950834094613,
+        "hmode_median": 0.19773626831926633,
+        "lmode_median": 0.11941014427477703,
+        "h_minus_l_median": 0.0783261240444893
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.718009856205114,
+        "rmse_vs_1_minus_norm_dalpha": 0.6252375189021913,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5594996040561089
+      },
+      "regime_classification": {
+        "n_scored": 86,
+        "n_H": 63,
+        "n_L": 23,
+        "accuracy": 0.26744186046511625,
+        "f1": 0.0,
+        "auc": 1.0,
+        "brier": 0.4767053984760961
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.185,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43928465145163376,
+        "drive_max": 0.032585551642906184,
+        "bistable_fraction": 0.7040816326530612,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2247.687400681601,
+        "source_magnitude": 10454.2124835612,
+        "source_ratio": 4.651097156899981
+      }
+    },
+    "27936": {
+      "mse": 14574.839886209655,
+      "mae_eV": 94.48726388824642,
+      "mae_pct": 33.18327539817288,
+      "annulus_metrics": {
+        "mse": 14574.839886209655,
+        "mae_eV": 94.48726388824642,
+        "mae_pct": 33.18327539817288
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6602082074122659,
+        "std": 0.12870975707351598
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.2009071796123972,
+        "std": 0.035962848565299646
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.20751953125,
+        "max": 1.97265625,
+        "mean": 0.6219186134708743,
+        "std": 0.4432663181636964,
+        "hmode_fraction": 0.6407766990291263,
+        "transition_fraction": 0.009708737864077669,
+        "transition_time": 0.185,
+        "normalized_slope_min": -3.9400833307088625,
+        "normalized_slope_max": 1.5785746383823671,
+        "transition_window_slope_min": -1.5513085416971322,
+        "transition_window_slope_max": 0.35186500693206746
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.2009071796123972,
+        "latent_span": 0.09248720228383438,
+        "hmode_median": 0.1981351135918441,
+        "lmode_median": 0.11934992032532635,
+        "h_minus_l_median": 0.07878519326651776
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.7400148999699402,
+        "rmse_vs_1_minus_norm_dalpha": 0.6354563055545208,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5962946442588528
+      },
+      "regime_classification": {
+        "n_scored": 92,
+        "n_H": 66,
+        "n_L": 26,
+        "accuracy": 0.2826086956521739,
+        "f1": 0.0,
+        "auc": 1.0,
+        "brier": 0.46718094185952175
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.19,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.44059260781377085,
+        "drive_max": 0.03743612779452239,
+        "bistable_fraction": 0.7087378640776699,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2562.8649691236355,
+        "source_magnitude": 10832.944247600562,
+        "source_ratio": 4.2268884135077816
+      }
+    },
+    "27938": {
+      "mse": 13734.43689900933,
+      "mae_eV": 90.17479772830566,
+      "mae_pct": 33.86844301620227,
+      "annulus_metrics": {
+        "mse": 13734.43689900933,
+        "mae_eV": 90.17479772830566,
+        "mae_pct": 33.86844301620227
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.6550107191622949,
+        "std": 0.12947829618555562
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.2026967945022424,
+        "std": 0.036236111450017136
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2294921875,
+        "max": 1.63818359375,
+        "mean": 0.617182567866159,
+        "std": 0.4324696297146503,
+        "hmode_fraction": 0.6363636363636364,
+        "transition_fraction": 0.010101010101010102,
+        "transition_time": 0.185,
+        "normalized_slope_min": -4.090835886132545,
+        "normalized_slope_max": 2.1349551969836487,
+        "transition_window_slope_min": -1.582928795216949,
+        "transition_window_slope_max": -0.7218851099066228
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.2026967945022424,
+        "latent_span": 0.09427681717367957,
+        "hmode_median": 0.1982566588561644,
+        "lmode_median": 0.11937903041861764,
+        "h_minus_l_median": 0.07887762843754675
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.7318455521330477,
+        "rmse_vs_1_minus_norm_dalpha": 0.6210220636414506,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5586996434789262
+      },
+      "regime_classification": {
+        "n_scored": 88,
+        "n_H": 63,
+        "n_L": 25,
+        "accuracy": 0.2840909090909091,
+        "f1": 0.0,
+        "auc": 1.0,
+        "brier": 0.4658055696169308
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.19,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43921965639964927,
+        "drive_max": 0.02965233472541429,
+        "bistable_fraction": 0.7070707070707071,
+        "h_basin_fraction": 0.0
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2366.6922467654335,
+        "source_magnitude": 10932.529861227926,
+        "source_ratio": 4.619328884670208
+      }
+    },
+    "28005": {
+      "mse": 8965.681695035499,
+      "mae_eV": 76.78634585070834,
+      "mae_pct": 30.834681503189856,
+      "annulus_metrics": {
+        "mse": 8965.681695035499,
+        "mae_eV": 76.78634585070834,
+        "mae_pct": 30.834681503189856
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0249403128654517,
+        "std": 0.8927368126259768
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9021714342033131,
+        "std": 0.3600783101203148
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.30517578125,
+        "max": 1.60888671875,
+        "mean": 0.8927778764204582,
+        "std": 0.432618688240561,
+        "hmode_fraction": 0.42045454545454547,
+        "transition_fraction": 0.011363636363636364,
+        "transition_time": 0.26,
+        "normalized_slope_min": -3.4413686488791977,
+        "normalized_slope_max": 3.762011162327206,
+        "transition_window_slope_min": -0.6581916321505147,
+        "transition_window_slope_max": 2.8945274168533643
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9021714342033131,
+        "latent_span": 0.7937514568747503,
+        "hmode_median": 0.9014797207275801,
+        "lmode_median": 0.1261352040860173,
+        "h_minus_l_median": 0.7753445166415628
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.6303064435936551,
+        "rmse_vs_1_minus_norm_dalpha": 0.30186004967902486,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.19234207315334217
+      },
+      "regime_classification": {
+        "n_scored": 78,
+        "n_H": 37,
+        "n_L": 41,
+        "accuracy": 0.9487179487179487,
+        "f1": 0.9487179487179488,
+        "auc": 1.0,
+        "brier": 0.04799426842948999
+      },
+      "transition_timing": {
+        "t_transition_model": 0.24,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": -0.025000000000000022
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4389955927768554,
+        "drive_max": 0.6114005332724468,
+        "bistable_fraction": 0.011363636363636364,
+        "h_basin_fraction": 0.6590909090909091
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2175.750759953823,
+        "source_magnitude": 7660.416218288539,
+        "source_ratio": 3.520815139198345
+      }
+    },
+    "28017": {
+      "mse": 9303.125082998073,
+      "mae_eV": 71.93511963024599,
+      "mae_pct": 32.26370716053094,
+      "annulus_metrics": {
+        "mse": 9452.04842110487,
+        "mae_eV": 71.06051868269259,
+        "mae_pct": 25.66997384398325
+      },
+      "outside_annulus_metrics": {
+        "mse": 7813.891695588336,
+        "mae_eV": 80.68112914302426,
+        "mae_pct": 98.20104060679624
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0240171363236446,
+        "std": 0.8961253748290378
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9019971265371077,
+        "std": 0.36029710411702703
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2685546875000004,
+        "max": 2.509765625,
+        "mean": 1.3085055064006106,
+        "std": 0.46275281008450925,
+        "hmode_fraction": 0.20481927710843373,
+        "transition_fraction": 0.03614457831325301,
+        "transition_time": 0.32,
+        "normalized_slope_min": -3.228597183630925,
+        "normalized_slope_max": 5.402489675080668,
+        "transition_window_slope_min": -0.9666339402198361,
+        "transition_window_slope_max": -0.22293387735539838
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9019971265371077,
+        "latent_span": 0.7935771492085449,
+        "hmode_median": 0.9014777165310066,
+        "lmode_median": 0.14127093472322313,
+        "h_minus_l_median": 0.7602067818077834
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.05389126953278607,
+        "rmse_vs_1_minus_norm_dalpha": 0.4324713291584311,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.3726599632367117
+      },
+      "regime_classification": {
+        "n_scored": 66,
+        "n_H": 17,
+        "n_L": 49,
+        "accuracy": 0.7727272727272727,
+        "f1": 0.6938775510204082,
+        "auc": 0.9987995198079231,
+        "brier": 0.17683627747009312
+      },
+      "transition_timing": {
+        "t_transition_model": 0.25,
+        "t_transition_label": 0.325,
+        "transition_time_error_s": -0.07500000000000001
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43925377526393783,
+        "drive_max": 0.6012298824059064,
+        "bistable_fraction": 0.024096385542168676,
+        "h_basin_fraction": 0.5301204819277109
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 3493.929812228536,
+        "source_magnitude": 10823.072746805943,
+        "source_ratio": 3.097678924696251
+      }
+    },
+    "28110": {
+      "mse": 11086.008531418467,
+      "mae_eV": 81.85808405581498,
+      "mae_pct": 26.01425128073463,
+      "annulus_metrics": {
+        "mse": 11086.008531418467,
+        "mae_eV": 81.85808405581498,
+        "mae_pct": 26.01425128073463
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.022052233245045,
+        "std": 0.8147291556000201
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9016252055622703,
+        "std": 0.33226067333957743
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.3662109375,
+        "max": 2.3144531249999623,
+        "mean": 1.3774181547619082,
+        "std": 0.3289667340751746,
+        "hmode_fraction": 0.5119047619047619,
+        "transition_fraction": 0.03571428571428571,
+        "transition_time": 0.145,
+        "normalized_slope_min": -1.4720823658608495,
+        "normalized_slope_max": 7.106720584201781,
+        "transition_window_slope_min": 0.3411999996322037,
+        "transition_window_slope_max": 1.0038263860939756
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9016252055622703,
+        "latent_span": 0.7932052282337075,
+        "hmode_median": 0.900257489768894,
+        "lmode_median": 0.2932721770882502,
+        "h_minus_l_median": 0.6069853126806437
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5318374090708786,
+        "rmse_vs_1_minus_norm_dalpha": 0.47054860506470847,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.42505322943598955
+      },
+      "regime_classification": {
+        "n_scored": 68,
+        "n_H": 43,
+        "n_L": 25,
+        "accuracy": 0.8382352941176471,
+        "f1": 0.8842105263157894,
+        "auc": 0.7320930232558139,
+        "brier": 0.15325612644701261
+      },
+      "transition_timing": {
+        "t_transition_model": 0.155,
+        "t_transition_label": 0.15,
+        "transition_time_error_s": 0.0050000000000000044
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43899493706555204,
+        "drive_max": 0.6315526950869933,
+        "bistable_fraction": 0.05952380952380952,
+        "h_basin_fraction": 0.8214285714285714
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5355.370340929296,
+        "source_magnitude": 11799.019481956495,
+        "source_ratio": 2.2032126125017615
+      }
+    },
+    "28176": {
+      "mse": 11548.178573384943,
+      "mae_eV": 81.76704244262125,
+      "mae_pct": 22.204392099823778,
+      "annulus_metrics": {
+        "mse": 11548.178573384943,
+        "mae_eV": 81.76704244262125,
+        "mae_pct": 22.204392099823778
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.8305887307600912,
+        "std": 0.5759612159351589
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8588942746800824,
+        "std": 0.2456378778914637
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.17822265624999994,
+        "max": 2.5244140625,
+        "mean": 1.194862266639617,
+        "std": 0.5116292180866451,
+        "hmode_fraction": 0.06493506493506493,
+        "transition_fraction": 0.025974025974025976,
+        "transition_time": 0.29,
+        "normalized_slope_min": -1.3086483319133961,
+        "normalized_slope_max": 5.14260162756881,
+        "transition_window_slope_min": -0.7075232156119,
+        "transition_window_slope_max": 2.9240161467862684
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8588942746800824,
+        "latent_span": 0.7504742973515196,
+        "hmode_median": 0.515439505092666,
+        "lmode_median": 0.255263436895955,
+        "h_minus_l_median": 0.260176068196711
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.5761104668989194,
+        "rmse_vs_1_minus_norm_dalpha": 0.48197719858873156,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.40720117405388134
+      },
+      "regime_classification": {
+        "n_scored": 57,
+        "n_H": 5,
+        "n_L": 52,
+        "accuracy": 0.7368421052631579,
+        "f1": 0.2857142857142857,
+        "auc": 0.75,
+        "brier": 0.199298120799301
+      },
+      "transition_timing": {
+        "t_transition_model": 0.305,
+        "t_transition_label": 0.295,
+        "transition_time_error_s": 0.010000000000000009
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4389817397682729,
+        "drive_max": 0.2669859009067205,
+        "bistable_fraction": 0.12987012987012986,
+        "h_basin_fraction": 0.4805194805194805
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 6959.389999974157,
+        "source_magnitude": 15131.400324444203,
+        "source_ratio": 2.1742423290440898
+      }
+    },
+    "28180": {
+      "mse": 9150.257764040862,
+      "mae_eV": 75.87378047546521,
+      "mae_pct": 22.982443884998894,
+      "annulus_metrics": {
+        "mse": 9150.257764040862,
+        "mae_eV": 75.87378047546521,
+        "mae_pct": 22.982443884998894
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": -0.4033271768141944,
+        "std": 0.21676257707987023
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.3033242336260562,
+        "std": 0.07100000923783684
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.2001953125000001,
+        "max": 1.7529296875000377,
+        "mean": 1.0450676305970217,
+        "std": 0.4068705029102158,
+        "hmode_fraction": 0.07462686567164178,
+        "transition_fraction": 0.029850746268656716,
+        "transition_time": 0.26,
+        "normalized_slope_min": -2.4797077474765317,
+        "normalized_slope_max": 6.153754814866559,
+        "transition_window_slope_min": -1.7990613213996767,
+        "transition_window_slope_max": 3.7356688274882544
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.3033242336260562,
+        "latent_span": 0.19490425629749336,
+        "hmode_median": 0.2801072004416263,
+        "lmode_median": 0.24020706664583702,
+        "h_minus_l_median": 0.03990013379578927
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6544639884843301,
+        "rmse_vs_1_minus_norm_dalpha": 0.40084475405998404,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.28478207832929675
+      },
+      "regime_classification": {
+        "n_scored": 50,
+        "n_H": 5,
+        "n_L": 45,
+        "accuracy": 0.9,
+        "f1": 0.0,
+        "auc": 0.7777777777777778,
+        "brier": 0.10003485500259242
+      },
+      "transition_timing": {
+        "t_transition_model": NaN,
+        "t_transition_label": 0.265,
+        "transition_time_error_s": NaN
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.4387490672745173,
+        "drive_max": 0.1523352429999938,
+        "bistable_fraction": 0.208955223880597,
+        "h_basin_fraction": 0.47761194029850745
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 6175.171918693428,
+        "source_magnitude": 16904.070163362438,
+        "source_ratio": 2.737425027707027
+      }
+    },
+    "28336": {
+      "mse": 5511.538315048082,
+      "mae_eV": 56.31870045756426,
+      "mae_pct": 30.218111222359955,
+      "annulus_metrics": {
+        "mse": 5511.538315048082,
+        "mae_eV": 56.31870045756426,
+        "mae_pct": 30.218111222359955
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0220467827819384,
+        "std": 0.7141230386328795
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9016241721404793,
+        "std": 0.29468180273998873
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.4736328125,
+        "max": 2.34130859375,
+        "mean": 1.6276207748724496,
+        "std": 0.5146313502455626,
+        "hmode_fraction": 0.12244897959183673,
+        "transition_fraction": 0.04081632653061224,
+        "transition_time": 0.215,
+        "normalized_slope_min": -4.360076448196146,
+        "normalized_slope_max": 8.832973109920177,
+        "transition_window_slope_min": -3.2593384279441366,
+        "transition_window_slope_max": 2.5786630591112285
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9016241721404793,
+        "latent_span": 0.7932041948119165,
+        "hmode_median": 0.9008074384475309,
+        "lmode_median": 0.8961315378590854,
+        "h_minus_l_median": 0.00467590058844547
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.7235110995178113,
+        "rmse_vs_1_minus_norm_dalpha": 0.6055463866101932,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5519206623357771
+      },
+      "regime_classification": {
+        "n_scored": 36,
+        "n_H": 6,
+        "n_L": 30,
+        "accuracy": 0.2777777777777778,
+        "f1": 0.3157894736842105,
+        "auc": 0.85,
+        "brier": 0.5487461946247573
+      },
+      "transition_timing": {
+        "t_transition_model": 0.085,
+        "t_transition_label": 0.22,
+        "transition_time_error_s": -0.135
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": 0.08631802430476157,
+        "drive_max": 0.627186443343076,
+        "bistable_fraction": 0.12244897959183673,
+        "h_basin_fraction": 0.8775510204081632
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 5377.794690709881,
+        "source_magnitude": 10289.668204730717,
+        "source_ratio": 1.91336203678298
+      }
+    },
+    "29039": {
+      "mse": 7679.5472219435815,
+      "mae_eV": 66.85248528505724,
+      "mae_pct": 22.14150056783331,
+      "annulus_metrics": {
+        "mse": 7679.5472219435815,
+        "mae_eV": 66.85248528505724,
+        "mae_pct": 22.14150056783331
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 0.9675016738446072,
+        "std": 0.7957895491778336
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.8907870209994991,
+        "std": 0.33023975601931477
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.60302734375,
+        "max": 4.086914062499974,
+        "mean": 2.1264919704861187,
+        "std": 0.9326187138708069,
+        "hmode_fraction": 0.05555555555555555,
+        "transition_fraction": 0.022222222222222223,
+        "transition_time": 0.405,
+        "normalized_slope_min": -1.3816781135425558,
+        "normalized_slope_max": 4.147684453027413,
+        "transition_window_slope_min": 0.7563162241093444,
+        "transition_window_slope_max": 2.719661690934476
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.8907870209994991,
+        "latent_span": 0.7823670436709363,
+        "hmode_median": 0.8900829398919152,
+        "lmode_median": 0.8837900507725939,
+        "h_minus_l_median": 0.006292889119321354
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": -0.6774616368642155,
+        "rmse_vs_1_minus_norm_dalpha": 0.5498631230642341,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.5037748488066665
+      },
+      "regime_classification": {
+        "n_scored": 76,
+        "n_H": 5,
+        "n_L": 71,
+        "accuracy": 0.3684210526315789,
+        "f1": 0.1724137931034483,
+        "auc": 0.8507042253521127,
+        "brier": 0.4891853710030738
+      },
+      "transition_timing": {
+        "t_transition_model": 0.18,
+        "t_transition_label": 0.41000000000000003,
+        "transition_time_error_s": -0.23000000000000004
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.439351230385876,
+        "drive_max": 0.4623866153925818,
+        "bistable_fraction": 0.16666666666666666,
+        "h_basin_fraction": 0.7222222222222222
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 10131.830197911939,
+        "source_magnitude": 17014.8265060793,
+        "source_ratio": 1.6793438275255073
+      }
+    },
+    "30260": {
+      "mse": 33090.45596614506,
+      "mae_eV": 143.53735829713497,
+      "mae_pct": 32.79442105377653,
+      "annulus_metrics": {
+        "mse": 33090.45596614506,
+        "mae_eV": 143.53735829713497,
+        "mae_pct": 32.79442105377653
+      },
+      "outside_annulus_metrics": {
+        "mse": 0.0,
+        "mae_eV": 0.0,
+        "mae_pct": 0.0
+      },
+      "z_stats": {
+        "min": -1.0,
+        "max": 1.0270408631849897,
+        "std": 0.8438226477353133
+      },
+      "z_barrier_stats": {
+        "min": 0.10841997732856283,
+        "max": 0.9025670156021206,
+        "std": 0.3422301522200417
+      },
+      "dalpha_stats": {
+        "available": true,
+        "finite_fraction": 1.0,
+        "min": 0.21972656250000502,
+        "max": 1.728515625,
+        "mean": 0.5704871407390586,
+        "std": 0.33466519336705636,
+        "hmode_fraction": 0.6131386861313869,
+        "transition_fraction": 0.0072992700729927005,
+        "transition_time": 0.25,
+        "normalized_slope_min": -6.0646914906477924,
+        "normalized_slope_max": 2.0682046237742675,
+        "transition_window_slope_min": -0.8331022831292589,
+        "transition_window_slope_max": 0.5344887322089171
+      },
+      "regime_consistency": {
+        "available": true,
+        "latent_min": 0.10841997732856283,
+        "latent_max": 0.9025670156021206,
+        "latent_span": 0.7941470382735578,
+        "hmode_median": 0.9014536622044015,
+        "lmode_median": 0.11949098455749456,
+        "h_minus_l_median": 0.781962677646907
+      },
+      "dalpha_latent_alignment": {
+        "available": true,
+        "pearson_corr_with_1_minus_norm_dalpha": 0.40526581430459874,
+        "rmse_vs_1_minus_norm_dalpha": 0.3753506578382409,
+        "mean_abs_error_vs_1_minus_norm_dalpha": 0.2643044770004642
+      },
+      "regime_classification": {
+        "n_scored": 123,
+        "n_H": 84,
+        "n_L": 39,
+        "accuracy": 0.9186991869918699,
+        "f1": 0.9390243902439025,
+        "auc": 0.9798534798534798,
+        "brier": 0.06497873413637938
+      },
+      "transition_timing": {
+        "t_transition_model": 0.23500000000000001,
+        "t_transition_label": 0.255,
+        "transition_time_error_s": -0.01999999999999999
+      },
+      "bifurcation": {
+        "c1": 0.459970294403162,
+        "c2": 0.017582757632606662,
+        "tau_s": 0.025527924581555766,
+        "bistable": true,
+        "a_fold_low": -0.12280889429596684,
+        "a_fold_high": 0.11741639152710641,
+        "drive_min": -0.43977527465941346,
+        "drive_max": 0.6197995941877882,
+        "bistable_fraction": 0.0364963503649635,
+        "h_basin_fraction": 0.6204379562043796
+      },
+      "physics_consistency": {
+        "diffusion_magnitude": 2580.8283220771727,
+        "source_magnitude": 7119.712279962922,
+        "source_ratio": 2.758692709739774
+      }
+    }
+  },
+  "regime_classification_summary": {
+    "n_shots_scored": 63,
+    "mean_accuracy": 0.7054987316380226,
+    "mean_f1": 0.4357915853143454,
+    "mean_auc": 0.886044783974342,
+    "mean_brier": 0.22506479716111158,
+    "mean_abs_transition_time_error_s": 0.05426829268292684
+  },
+  "overall_metrics": {
+    "mean_mse": 11684.497872689788,
+    "mean_mae_eV": 81.00055571084327,
+    "mean_mae_pct": 32.31260576261412,
+    "annulus_mean_mse": 11686.861735199422,
+    "annulus_mean_mae_eV": 80.9866731561202,
+    "annulus_mean_mae_pct": 32.20794332901812,
+    "outside_annulus_mean_mse": 124.03002691410057,
+    "outside_annulus_mean_mae_eV": 1.2806528435400677,
+    "outside_annulus_mean_mae_pct": 1.558746676298353
+  }
+}

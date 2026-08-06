@@ -1,0 +1,116 @@
+% Identification: losses, optimization, stopping rule, model selection.
+% Numbers are measured from the runs recorded in experiments/ledger.md.
+
+\section{Identification}
+\label{sec:ident}
+
+\subsection{Objective}
+\label{sec:ident-loss}
+
+Let $\Theta$ collect all identified quantities: the residual-source network
+weights, the three transport-coefficient scalars, the eight latent
+parameters (topology $\beta$, time scale $\tau$, four drive coefficients,
+readout gain and offset), and the observation-head weights. Writing
+$\phi_\delta(x) = \delta^2\big(\sqrt{1 + (x/\delta)^2} - 1\big)$ for the
+pseudo-Huber function, the per-discharge objective is
+\begin{equation}
+\mathcal{L}(\Theta) =
+\underbrace{\frac{\sum_{ij} W_{ij}\,\phi_1\!\big(r_{ij}/s_T\big)}{\sum_{ij} W_{ij}}}_{\text{profile}}
++ \lambda_s\,\overline{\phi_1\!\big(s_\theta/s_s\big)}
++ \lambda_1\,\overline{\lat^{2}}
++ \lambda_2\,\overline{\dot\lat^{2}}
++ \lambda_r\,\overline{\mathrm{BCE}\big(\pH,\ell\big)}
++ \lambda_y\,\overline{\big(\hat\yD - \tilde\yD\big)^{2}},
+\label{eq:loss-full}
+\end{equation}
+with $r_{ij} = \hat T_{\mathrm{e}}(\rho_i,t_j) - T_{\mathrm{e},ij}$ the
+profile residual. Each term is an average of order-one quantities, so the
+weights are interpretable ratios rather than scale compensators. The fixed
+robust scales are $s_T = \SI{100}{eV}$ (comparable to the measurement
+scatter of the outer Thomson channels) and $s_s = \SI{1e4}{eV/s}$; both are
+frozen constants, not per-discharge statistics.
+
+\paragraph{Which samples are scored.} The profile term is evaluated only
+where a measurement exists and survives the quality gates, and only in the
+reliable annulus. Its weights $W_{ij}$ are inverse-coverage weights: a
+radial channel measured in few time slices receives proportionally more
+weight per sample, so densely and sparsely observed radii contribute
+comparably instead of the well-covered channels dominating. The regime term
+is scored only on samples labelled cleanly L or H; transition windows and
+out-of-gate samples are excluded entirely, so ambiguous instants can neither
+reward nor penalise the model.
+
+\paragraph{Weights.} $\lambda_s = 0.1$, $\lambda_1 = \lambda_2 = 10^{-3}$,
+$\lambda_r = 0.5$, $\lambda_y = 2$. The latent regularisers are deliberately
+weak: $\lambda_1$ penalises latent magnitude and $\lambda_2$ its rate, and
+both are set an order of magnitude below the terms that carry information,
+because a strong smoothness prior would suppress precisely the fast
+switching the model is meant to identify. We report in
+\S\ref{sec:res-modelcomp} that the topology conclusion is unchanged when
+these are varied by a factor of ten.
+
+\subsection{Optimisation and the stopping rule}
+\label{sec:ident-opt}
+
+Parameters are updated with AdamW (peak learning rate $2\times10^{-4}$,
+cosine decay, five warm-up steps, global-norm gradient clipping at
+$10^{3}$, weight decay $3\times10^{-5}$) on mini-batches of eight
+discharges drawn uniformly from the training sessions, in double precision.
+Any step whose gradient contains a non-finite entry is skipped rather than
+applied, which makes a single pathological rollout unable to destroy an
+otherwise converged fit; across all runs reported here the skip rate was
+zero.
+
+Training stops when the grouped-validation loss has failed to improve by at
+least $5\times10^{-4}$ relative for sixteen consecutive evaluations
+(evaluations are $50$ steps apart, so the patience is $800$ steps), subject
+to a ceiling of $3000$ steps. We record the empirical behaviour of this rule
+because it is easy to set badly. Across the nine main runs the best
+checkpoint occurred at a median of step $1850$ (range $1250$--$2500$); only
+two runs reached the ceiling, and their validation losses ($0.432$, $0.473$)
+sit among their siblings rather than below them, so the ceiling is not
+truncating a still-improving fit. Measuring the intervals between successive
+validation improvements across all runs ($n = 198$) gives a median of $50$
+steps and a maximum of $750$; no improvement ever followed a gap larger than
+$800$ steps, which is the justification for that patience value.
+
+\paragraph{An incidental diagnostic.} Under the erroneous flux coordinate of
+\S\ref{app:eq-rho}, the same rule stopped runs at best checkpoints of step
+$150$--$250$: the fit plateaued almost immediately. After the coordinate was
+corrected the best checkpoint moved to $\approx 1850$. The location of the
+plateau is therefore itself a diagnostic of whether the model has real
+structure to fit, and we report it as such.
+
+\subsection{Model selection and calibration}
+\label{sec:ident-select}
+
+The validation loss used for checkpoint selection is the full objective
+\eqref{eq:loss-full}, including the regime and observation terms, so
+selection reflects regime fidelity and not only profile fit. Sessions
+assigned to the locked test set take no part in training, checkpoint
+selection, calibration, or any modelling decision reported here.
+
+The regime probability requires a separate calibration step, and we state
+plainly why. Trained end-to-end, $\pH$ discriminates well but is poorly
+scaled: pooled over held-out discharges its expected calibration error is
+$0.14$--$0.33$ depending on the configuration, and because the raw
+probabilities rarely cross $0.5$, threshold-dependent scores such as $F_1$
+collapse to zero even where the ranking is near-perfect. We therefore fit a
+two-parameter Platt scaling, $\pH \mapsto \sigma(A\,\eta + B)$ with $\eta$
+the regime logit, by minimising binary cross-entropy \emph{on the validation
+discharges only}, and apply the fitted $(A,B)$ unchanged elsewhere. This
+reduces the expected calibration error to $0.036$--$0.095$. Being a monotone
+map, it leaves AUC exactly invariant; only the threshold-dependent and
+calibration-sensitive scores change. Calibration is thus \emph{measured},
+never assumed, and the uncalibrated values are reported alongside.
+
+\subsection{Cost}
+\label{sec:ident-cost}
+
+A single identification run takes $2$--$3$ hours on fourteen CPU cores in
+double precision; three runs execute concurrently with pinned thread counts.
+A consumer GPU gives no advantage here, because the pipeline is float64
+throughout and the rollout is latency- rather than throughput-bound; we
+measured a tie at the usable batch size and instability in the compiler at
+larger ones. The complete experiment grid reported in
+\S\ref{sec:res-modelcomp} is thirteen runs.

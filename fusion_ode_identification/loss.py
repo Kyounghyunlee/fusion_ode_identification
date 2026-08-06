@@ -7,7 +7,13 @@ import jax.numpy as jnp
 from .types import LossCfg, ShotBundle, ShotEval, IMEXConfig
 from .imex_solver import IMEXIntegrator
 from .interp import LinearInterpolation
-from .model import build_latent_feature_series, normalize_observed_signal, smooth_clamp
+from .model import normalize_observed_signal, smooth_clamp
+
+# Fixed robust scales for loss normalization (training-corpus magnitudes,
+# frozen; see paper Sec. identification). Losses are averages of O(1)
+# quantities so task weights are interpretable.
+S_TE = 100.0   # eV
+S_SRC = 1.0e4  # eV/s
 
 
 def pseudo_huber(r, delta):
@@ -45,10 +51,9 @@ def _observation_weight_grid(mask_obs, time_mask=None, reliable_mask=None):
     return mask_use * col_weight[None, :]
 
 
-def _latent_feature_inputs(model, ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts):
-    if model.uses_barrier_latent():
-        return build_latent_feature_series(ts_t, ctrl_norm_ts, dalpha_ts, Te_edge_ts, ne_edge_ts)
-    return ctrl_norm_ts
+# Controls are scaled by fixed physical constants (see model.CONTROL_SCALES),
+# so the same normalized series feeds both the source network and the latent
+# drive; no separate latent feature construction is needed.
 
 
 def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXConfig):
@@ -83,7 +88,8 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
+    # Latent drive uses its own physically scaled feature set.
+    latent_features_ts = bundle.drive_feats
 
     # Precompute static geometry factors once per shot (used by diffusion operator).
     rho = bundle.rho_rom
@@ -91,14 +97,16 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
     dr = jnp.diff(rho)
     dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
     Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
-    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    denom_raw = Vprime_cell * dr
+    from .imex_solver import cell_volumes
+    denom_raw = cell_volumes(rho, Vprime, dr)
     denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
     denom = jnp.maximum(denom_raw, denom_floor)
-    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_face, denom)
 
-    z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
-    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
+    # Causal initialization: lowest equilibrium of the latent vector field
+    # at the initial drive (gated discharges start in state L).
+    z0 = model.latent.initial_state(latent_features_ts[0])
+    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.atleast_1d(z0)])
 
     t0 = ts_t_full[0]
     t1 = ts_t_full[-1]
@@ -183,7 +191,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / wsum
 
         huber_delta = loss_cfg.huber_delta
-        obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / wsum
+        obs_loss = jnp.sum(weight_grid * pseudo_huber(resid / S_TE, huber_delta)) / wsum
 
         S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
             Te_model,
@@ -195,7 +203,7 @@ def shot_loss_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex_cfg: IMEXC
         src_delta = loss_cfg.src_delta
 
         src_wsum = (jnp.sum(tm) * S_nn_vals.shape[1]) + 1e-8
-        src_penalty = lambda_src * jnp.sum(tm2 * pseudo_huber(S_nn_vals, src_delta)) / src_wsum
+        src_penalty = lambda_src * jnp.sum(tm2 * pseudo_huber(S_nn_vals / S_SRC, src_delta)) / src_wsum
 
         # Physics diagnostics: mean magnitudes (time-masked for padded arrays)
         div_vals = jax.vmap(lambda Te_row, zi: model.compute_divergence_from_values(bundle.rho_rom, bundle.Vprime_rom, Te_row, zi))(
@@ -308,21 +316,24 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     ctrl_norm_ts = (ctrl_vals_ts - bundle.ctrl_means) / (bundle.ctrl_stds + 1e-6)
     ctrl_norm_ts = jnp.clip(ctrl_norm_ts, -10.0, 10.0)
     ne_edge_ts = ne_vals_full[:, -1]
-    latent_features_ts = _latent_feature_inputs(model, ts_t_full, ctrl_norm_ts, dalpha_full, Te_edge_full, ne_edge_ts)
+    # Latent drive uses its own physically scaled feature set.
+    latent_features_ts = bundle.drive_feats
 
     rho = bundle.rho_rom
     Vprime = jnp.clip(bundle.Vprime_rom, 1e-6, None)
     dr = jnp.diff(rho)
     dr = jnp.clip(dr, 1e-6 * jnp.max(dr) + 1e-12, None)
     Vprime_face = 0.5 * (Vprime[:-1] + Vprime[1:])
-    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    denom_raw = Vprime_cell * dr
+    from .imex_solver import cell_volumes
+    denom_raw = cell_volumes(rho, Vprime, dr)
     denom_floor = jnp.maximum(1e-4 * jnp.max(denom_raw), 1e-10)
     denom = jnp.maximum(denom_raw, denom_floor)
-    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_cell, denom)
+    ode_args_geom = (rho, Vprime, dr, Vprime_face, Vprime_face, denom)
 
-    z0_arr = jnp.atleast_1d(jnp.asarray(bundle.z0, dtype=jnp.float64))
-    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, z0_arr])
+    # Causal initialization: lowest equilibrium of the latent vector field
+    # at the initial drive (gated discharges start in state L).
+    z0 = model.latent.initial_state(latent_features_ts[0])
+    y0 = jnp.concatenate([bundle.Te0[:-1] / model.Te_scale, jnp.atleast_1d(z0)])
 
     t0 = ts_t_full[0]
     t1 = ts_t_full[-1]
@@ -387,7 +398,7 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     mae_pct = 100.0 * jnp.sum(weight_grid * (abs_resid / denom)) / (jnp.sum(weight_grid) + 1e-8)
 
     huber_delta = loss_cfg.huber_delta
-    obs_loss = jnp.sum(weight_grid * pseudo_huber(resid, huber_delta)) / (jnp.sum(weight_grid) + 1e-8)
+    obs_loss = jnp.sum(weight_grid * pseudo_huber(resid / S_TE, huber_delta)) / (jnp.sum(weight_grid) + 1e-8)
 
     S_nn_vals = jax.vmap(lambda Te_row, zi, cn, ne: model.compute_source_from_values(bundle.rho_rom, Te_row, zi, ne, cn))(
         Te_model,
@@ -397,13 +408,31 @@ def eval_shot_trajectory_imex(model, bundle: ShotBundle, loss_cfg: LossCfg, imex
     )
     lambda_src = loss_cfg.lambda_src
     src_delta = loss_cfg.src_delta
-    src_penalty = lambda_src * jnp.sum(pseudo_huber(S_nn_vals, src_delta)) / (S_nn_vals.size + 1e-8)
+    src_penalty = lambda_src * jnp.sum(pseudo_huber(S_nn_vals / S_SRC, src_delta)) / (S_nn_vals.size + 1e-8)
 
     z_reg = loss_cfg.lambda_zreg * jnp.mean(zs**2)
     dz = zs[1:] - zs[:-1]
     z_smooth = loss_cfg.lambda_z * jnp.mean(dz**2)
 
-    total_loss = obs_loss + src_penalty + z_reg + z_smooth
+    # Regime and D-alpha terms mirror the training loss so that checkpoint
+    # selection (validation loss) also reflects L/H discrimination quality.
+    regime_mask = bundle.regime_mask[:L].astype(jnp.float64)
+    regime_target = jnp.where(bundle.regime_ts[:L] > 2.0, 1.0, 0.0)
+    regime_logits = jax.vmap(model.compute_regime_logit)(zs)
+    regime_bce = jnp.maximum(regime_logits, 0.0) - regime_logits * regime_target + jnp.log1p(jnp.exp(-jnp.abs(regime_logits)))
+    regime_weight = loss_cfg.lambda_regime + loss_cfg.lambda_pH
+    regime_penalty = regime_weight * (jnp.sum(regime_mask * regime_bce) / (jnp.sum(regime_mask) + 1e-8))
+
+    dalpha_target = normalize_observed_signal(dalpha_full)
+    dalpha_hat = jax.vmap(lambda zi, cn, Tee, nee: model.compute_aux_dalpha_hat(zi, cn, Tee, nee))(
+        zs,
+        ctrl_norm_ts,
+        Te_edge_full,
+        ne_edge_ts,
+    )
+    dalpha_penalty = loss_cfg.lambda_dalpha * jnp.mean((dalpha_hat - dalpha_target) ** 2)
+
+    total_loss = obs_loss + src_penalty + z_reg + z_smooth + regime_penalty + dalpha_penalty
 
     return ShotEval(
         ok=jnp.array(1, dtype=jnp.int32),

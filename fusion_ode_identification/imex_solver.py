@@ -79,6 +79,23 @@ def solve_tridiagonal(a, b, c, d, eps: float = 1e-12):
     return x
 
 
+
+def cell_volumes(rho, Vprime, dr):
+    """Node-centered finite-volume cell volumes.
+
+    Faces sit midway between nodes, so interior cells have width dr and the
+    axis cell (node 0) has width dr/2 with center at rho = dr/4. Using the
+    node value of V' (and the quarter-point value for the axis cell) keeps
+    the scheme second-order; the previous face-averaged V' shifted every
+    cell volume by O(dr) and stalled spatial convergence.
+    """
+    import jax.numpy as jnp
+    vol = Vprime[:-1] * dr
+    vol0 = (0.75 * Vprime[0] + 0.25 * Vprime[1]) * 0.5 * dr[0]
+    vol = vol.at[0].set(vol0)
+    return vol
+
+
 def build_diffusion_matrix_implicit(
     rho: Float[Array, "N"],  # type: ignore
     Vprime: Float[Array, "N"],  # type: ignore
@@ -205,11 +222,8 @@ def build_diffusion_solve_tridiag_implicit(
     Vprime_face = jnp.asarray(Vprime_face)
     k_face = Vprime_face * chi_face / dr  # (N-1,)
 
-    if Vprime_cell is None:
-        Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    Vprime_cell = jnp.asarray(Vprime_cell)
     if denom is None:
-        vol = Vprime_cell * dr
+        vol = cell_volumes(rho, Vprime, dr)
         vol_floor = jnp.maximum(1e-4 * jnp.max(vol), 1e-10)
         denom = jnp.maximum(vol, vol_floor)  # (N-1,)
     denom = jnp.asarray(denom)
@@ -286,9 +300,8 @@ def apply_diffusion_explicit(
     flux_in = jnp.concatenate([jnp.array([0.0]), flux_face[:-1]])
     flux_out = flux_face
     
-    # Cell volumes
-    Vprime_cell = 0.5 * (Vprime[:-1] + Vprime[1:])
-    vol = Vprime_cell * dr
+    # Cell volumes (node-centered; axis cell is half width)
+    vol = cell_volumes(rho, Vprime, dr)
     vol_floor = jnp.maximum(1e-4 * jnp.max(vol), 1e-10)
     denom = jnp.maximum(vol, vol_floor)
     

@@ -25,6 +25,7 @@ import sys
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import json
 import numpy as np
 import xarray as xr  # Loads NetCDF files
 
@@ -32,6 +33,7 @@ if __package__ in (None, ""):
     _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
+    from preprocessing.equilibrium_geometry import choose_plasma_itime, flux_geometry
     from preprocessing.geometry import (
         choose_itime,
         compute_rho_scalars,
@@ -40,6 +42,7 @@ if __package__ in (None, ""):
         volume_derivatives,
     )
 else:
+    from .equilibrium_geometry import choose_plasma_itime, flux_geometry
     from .geometry import (
         choose_itime,
         compute_rho_scalars,
@@ -152,73 +155,174 @@ def interp_channels_to_time(t_src: np.ndarray, values_c_t: np.ndarray, t_dst: np
     return out
 
 
+def _smooth_time_window(x: np.ndarray, t: np.ndarray, window_s: float) -> np.ndarray:
+    """Moving average over an approximately fixed time window (seconds)."""
+    if x.size < 3:
+        return x
+    dt = float(np.median(np.diff(t)))
+    if not np.isfinite(dt) or dt <= 0:
+        return x
+    k = int(np.clip(round(window_s / dt), 1, x.size))
+    if k <= 1:
+        return x
+    pad_l = k // 2
+    pad_r = k - 1 - pad_l
+    x_pad = np.concatenate([np.repeat(x[:1], pad_l), x, np.repeat(x[-1:], pad_r)])
+    return np.convolve(x_pad, np.ones(k) / k, mode="valid")
+
+
+def _rolling_quantile(x: np.ndarray, t: np.ndarray, window_s: float, q: float) -> np.ndarray:
+    """Rolling quantile over an approximately fixed time window (seconds).
+
+    Used to extract the lower envelope (baseline) of D-alpha: ELM bursts are
+    short positive spikes, so a low quantile tracks the inter-ELM level.
+    """
+    dt = float(np.median(np.diff(t)))
+    if not np.isfinite(dt) or dt <= 0 or x.size < 5:
+        return x.copy()
+    half = max(1, int(round(0.5 * window_s / dt)))
+    out = np.empty_like(x, dtype=float)
+    for i in range(x.size):
+        lo = max(0, i - half)
+        hi = min(x.size, i + half + 1)
+        out[i] = np.nanquantile(x[lo:hi], q)
+    return out
+
+
+def _otsu_threshold(x: np.ndarray, n_bins: int = 128) -> float:
+    """Two-class variance-maximizing threshold (Otsu) on a 1D sample."""
+    x = x[np.isfinite(x)]
+    hist, edges = np.histogram(x, bins=n_bins)
+    hist = hist.astype(float)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    w0 = np.cumsum(hist)
+    w1 = w0[-1] - w0
+    m0 = np.cumsum(hist * centers)
+    mu0 = np.divide(m0, w0, out=np.zeros_like(m0), where=w0 > 0)
+    mu1 = np.divide(m0[-1] - m0, w1, out=np.zeros_like(m0), where=w1 > 0)
+    between = w0 * w1 * (mu0 - mu1) ** 2
+    return float(centers[int(np.argmax(between))])
+
+
 def estimate_regime_labels(
     t: np.ndarray,
     nebar: np.ndarray,
     P_nbi: np.ndarray,
     D_alpha: np.ndarray,
+    Ip: Optional[np.ndarray] = None,
+    min_dwell_s: float = 0.02,
+    transition_halfwidth_s: float = 0.003,
 ) -> Tuple[np.ndarray, np.ndarray, float]:
-    """Estimate L/H transition timing using D-alpha drop plus actuator rises."""
+    """Label L/H regime from D-alpha with a dwell-time-constrained bimodal split.
+
+    Method: smooth D-alpha over ~4 ms, split its distribution (within the
+    plasma window, gated on Ip and nebar) with an Otsu threshold, and accept
+    low-D-alpha (H-regime) segments only if they persist for >= min_dwell_s.
+    Multiple segments are allowed, so H->L back-transitions are labelled too.
+
+    Returns:
+        regime: int8 array; 0 = unknown/no plasma, 1 = L, 2 = transition, 3 = H
+        score: H-evidence in [0, 1] (distance of smoothed D-alpha below threshold)
+        transition_time: time of the first L->H switch (nan if none)
+    """
     regime = np.zeros_like(t, dtype=np.int8)
     score = np.zeros_like(t, dtype=float)
-    if t.size < 5:
+    if t.size < 5 or not np.any(np.isfinite(D_alpha)):
         return regime, score, float("nan")
 
-    def _smooth(x: np.ndarray, k: int) -> np.ndarray:
-        if x.size < 3:
-            return x
-        k = min(k, x.size)
-        if k <= 1:
-            return x
-        filt = np.ones(k, dtype=float) / float(k)
-        return np.convolve(x, filt, mode="same")
+    dalpha = interp_fill_1d(t, np.asarray(D_alpha, dtype=float))
+    # Lower envelope of D-alpha: robust to ELM bursts, tracks the inter-ELM
+    # baseline whose step-down is the actual L->H signature.
+    dalpha_s = _rolling_quantile(dalpha, t, 0.015, 0.15)
 
-    def _norm(x: np.ndarray) -> Optional[np.ndarray]:
-        if not np.any(np.isfinite(x)):
-            return None
-        x_filled = interp_fill_1d(t, x)
-        span = float(np.nanmax(x_filled) - np.nanmin(x_filled))
-        if span < 1e-9:
-            return None
-        return (x_filled - np.nanmin(x_filled)) / (span + 1e-6)
-
-    score_terms = []
-
-    d_alpha_norm = _norm(D_alpha)
-    if d_alpha_norm is not None:
-        d_alpha_s = _smooth(d_alpha_norm, 101)
-        score_terms.append(1.2 * np.maximum(-np.gradient(d_alpha_s, t), 0.0))
-
-    ne_norm = _norm(nebar)
-    if ne_norm is not None:
-        ne_s = _smooth(ne_norm, 31)
-        score_terms.append(0.7 * np.maximum(np.gradient(ne_s, t), 0.0))
-
-    pnbi_norm = _norm(P_nbi)
-    if pnbi_norm is not None:
-        pnbi_s = _smooth(pnbi_norm, 31)
-        score_terms.append(0.3 * np.maximum(np.gradient(pnbi_s, t), 0.0))
-
-    if not score_terms:
+    # Flat-top gate: only label where the discharge is established. This must
+    # exclude the current ramp, where D-alpha is low simply because recycling
+    # has not built up yet (not because of confinement).
+    gate = np.ones_like(t, dtype=bool)
+    if Ip is not None and np.any(np.isfinite(Ip)):
+        ip_abs = np.abs(interp_fill_1d(t, np.asarray(Ip, dtype=float)))
+        gate &= ip_abs > 0.6 * np.nanpercentile(ip_abs, 95)
+    if np.any(np.isfinite(nebar)):
+        ne_f = interp_fill_1d(t, np.asarray(nebar, dtype=float))
+        gate &= ne_f > 0.2 * np.nanpercentile(ne_f, 95)
+    if np.count_nonzero(gate) < 10:
         return regime, score, float("nan")
 
-    score = np.sum(score_terms, axis=0)
-    pad = max(10, score.size // 20)
-    if score.size > 2 * pad:
-        score[:pad] = 0.0
-        score[-pad:] = 0.0
-
-    trans_idx = int(np.argmax(score))
-    if not np.isfinite(score[trans_idx]) or score[trans_idx] <= 0.0:
+    gated = dalpha_s[gate]
+    lo, hi = np.nanpercentile(gated, [1, 99])
+    span = hi - lo
+    if span < 1e-12:
+        return regime, score, float("nan")
+    norm_s = np.clip((dalpha_s - lo) / span, 0.0, 1.0)
+    thr = _otsu_threshold(norm_s[gate])
+    # Guards against fabricating a transition on unimodal data: the threshold
+    # must sit inside the central range, both classes must be populated, and
+    # the class means must be genuinely separated.
+    def _all_L():
+        regime[gate] = 1
         return regime, score, float("nan")
 
-    regime[:] = 1
-    width = max(2, regime.size // 20)
-    lo = max(0, trans_idx - width)
-    hi = min(regime.size, trans_idx + width + 1)
-    regime[lo:hi] = 2
-    regime[hi:] = 3
-    return regime, score, float(t[trans_idx])
+    if not (0.05 < thr < 0.95):
+        return _all_L()
+    low = norm_s[gate] < thr
+    low_frac = float(np.mean(low))
+    if low_frac < 0.05 or low_frac > 0.90:
+        return _all_L()
+    mean_low = float(np.mean(norm_s[gate][low]))
+    mean_high = float(np.mean(norm_s[gate][~low]))
+    if (mean_high - mean_low) < 0.20:
+        return _all_L()
+
+    score = np.clip((thr - norm_s) / max(thr, 1e-6), 0.0, 1.0)
+
+    # H candidate = low D-alpha inside the gate; enforce minimum dwell time.
+    # An H run must also be preceded by an L reference inside the gate: right
+    # at gate opening D-alpha is still building up, so a low baseline there is
+    # ramp physics, not confinement.
+    h_cand = (norm_s < thr) & gate
+    dt = float(np.median(np.diff(t)))
+    min_dwell_n = max(2, int(round(min_dwell_s / max(dt, 1e-9))))
+    gate_start = int(np.argmax(gate))
+    min_L_lead_n = max(min_dwell_n, int(round(0.02 / max(dt, 1e-9))))
+    sharp_n = max(2, int(round(0.025 / max(dt, 1e-9))))  # 25 ms contrast windows
+    h_ok = np.zeros_like(h_cand)
+    i = 0
+    n = h_cand.size
+    while i < n:
+        if h_cand[i]:
+            j = i
+            while j < n and h_cand[j]:
+                j += 1
+            accept = (j - i) >= min_dwell_n and (i - gate_start) >= min_L_lead_n
+            if accept:
+                # Entry sharpness: the baseline must step DOWN across the run
+                # entry. A slowly drifting baseline that happens to straddle
+                # the Otsu threshold is not a confinement transition.
+                pre = norm_s[max(gate_start, i - sharp_n) : i]
+                post = norm_s[i : min(j, i + sharp_n)]
+                accept = pre.size > 0 and post.size > 0 and (float(np.mean(pre)) - float(np.mean(post))) >= 0.10
+            if accept:
+                h_ok[i:j] = True
+            i = j
+        else:
+            i += 1
+
+    regime[gate] = 1
+    regime[h_ok] = 3
+
+    # Mark short transition windows around every regime switch inside the gate.
+    half_n = max(1, int(round(transition_halfwidth_s / max(dt, 1e-9))))
+    switches = np.where(np.diff(regime.astype(int)) != 0)[0]
+    transition_time = float("nan")
+    for s_idx in switches:
+        if regime[s_idx] in (1, 3) and regime[s_idx + 1] in (1, 3):
+            if np.isnan(transition_time) and regime[s_idx] == 1 and regime[s_idx + 1] == 3:
+                transition_time = float(t[s_idx + 1])
+            lo_i = max(0, s_idx - half_n + 1)
+            hi_i = min(n, s_idx + 1 + half_n)
+            regime[lo_i:hi_i] = 2
+
+    return regime, score, transition_time
 
 
 def infer_ts_radial_coordinate(ts: xr.Dataset) -> Optional[str]: 
@@ -886,133 +990,141 @@ def build_one_shot(
     ts = xr.load_dataset(ts_path) # Load Thomson scattering dataset; used for Te and ne profiles
     summ = xr.load_dataset(sm_path) # Load summary dataset; used for global time-series like Ip, nebar, powers
 
-    # Geometry and rho normalisation (with fallback if equilibrium is degenerate)
-    it = choose_itime(eq) # pick representative time index for equilibrium; middle of time dimension.
-    geom = extract_geom_params(eq, it) # Extract geometry parameters (R_major, a_minor, kappa, delta) from equilibrium at chosen time index
+    # ---- Geometry: flux-surface coordinate and volume element ----
+    # Primary path (preprocessing/equilibrium_geometry.py): psi is normalized
+    # from the magnetic axis to the LCFS, so rho = 0 on axis and 1 at the
+    # separatrix, and V(rho) is integrated over the poloidal plane. The
+    # legacy path assumed psi is minimal on axis, which is false for these
+    # Wb/rad files and inverted the coordinate; it is retained only as a
+    # last-resort fallback and is recorded in the pack metadata.
+    it = choose_plasma_itime(eq)
+    fg = flux_geometry(eq, it, n_rho=Nrho)
 
     rho_fallback_used = False
     psi_axis_val = float("nan")
     psi_edge_val = float("nan")
+    fallback_meta = {"rho_fallback_method": "psi_axis_to_lcfs", "rho_r_min": float("nan"), "rho_r_max": float("nan")}
+    geom_meta = {}
 
-    fallback_meta = {"rho_fallback_method": "psi", "rho_r_min": float("nan"), "rho_r_max": float("nan")}
-
-    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray: # Rho fallback function
-        # Simple linear normalisation of R when psi is unusable
-        r_candidates = ("major_radius", "R", "R_grid", "Rcoord", "R_grid_1d")
+    def _rho_from_R_linear(R: np.ndarray) -> np.ndarray:
         r_vals = None
-        for cand in r_candidates:
+        for cand in ("major_radius", "R", "R_grid", "Rcoord", "R_grid_1d"):
             if cand in eq.coords:
-                r_vals = np.asarray(eq.coords[cand].values)
-                break
+                r_vals = np.asarray(eq.coords[cand].values); break
             if cand in eq:
-                r_vals = np.asarray(eq[cand].values)
-                break
+                r_vals = np.asarray(eq[cand].values); break
         if r_vals is None and "major_radius" in ts:
             r_vals = np.asarray(ts["major_radius"].values)
         if r_vals is None:
             r_min, r_max = 0.0, 1.0
         else:
-            r_min = float(np.nanmin(r_vals))
-            r_max = float(np.nanmax(r_vals))
+            r_min, r_max = float(np.nanmin(r_vals)), float(np.nanmax(r_vals))
             if not np.isfinite(r_min) or not np.isfinite(r_max) or abs(r_max - r_min) < 1e-9:
                 r_min, r_max = 0.0, 1.0
         fallback_meta.update({"rho_fallback_method": "linear_R", "rho_r_min": r_min, "rho_r_max": r_max})
         return np.clip((R - r_min) / (r_max - r_min + 1e-6), 0.0, 1.0)
 
-    try:
-        scalars = compute_rho_scalars(eq, it)
-        psi_axis_val = scalars["psi_axis"]
-        psi_edge_val = scalars["psi_edge"]
-        rho_fn = lambda r, z: rho_from_RZ(eq, r, z, itime=it)
-    except Exception:
+    if fg is not None:
+        rho_fn = lambda r, z: fg["rho_of_RZ"](r, z)
+        psi_axis_val = fg["psi_axis"]
+        psi_edge_val = fg["psi_boundary"]
+        rho_torax = np.asarray(fg["rho_grid"], dtype=float)
+        Vprime_torax = np.asarray(fg["Vprime"], dtype=float)
+        geom_meta = {
+            "geom_itime": fg["itime"],
+            "geom_t_equilibrium": fg["t_equilibrium"],
+            "geom_V_total": fg["V_total"],
+            "geom_V_total_reference": fg["V_total_reference"],
+            "geom_V_total_ratio": fg["V_total_ratio"],
+            "geom_axis_R": fg["axis_R"],
+            "geom_axis_Z": fg["axis_Z"],
+            "geom_method": fg["method"],
+        }
+        print(f"  .. geometry: rho from psi(axis->LCFS) at t={fg['t_equilibrium']:.3f}s; "
+              f"V(1)={fg['V_total']:.2f} m^3 (equilibrium {fg['V_total_reference']:.2f}, "
+              f"ratio {fg['V_total_ratio']:.3f})")
+    else:
         rho_fallback_used = True
         rho_fn = lambda r, z: _rho_from_R_linear(r)
-
-    rho_eq, V, Vprime = volume_derivatives(eq, it) if not rho_fallback_used else (None, None, None)
-
-    # TORAX rho grid
-    if rho_eq is not None and rho_eq.size >= Nrho:
-        idx = np.linspace(0, rho_eq.size - 1, Nrho).astype(int)
-        rho_torax = rho_eq[idx]
-    else:
         rho_torax = np.linspace(0.0, 1.0, Nrho)
+        Vprime_torax = 2.0 * rho_torax   # explicit cylindrical stand-in
+        fallback_meta["rho_fallback_method"] = "linear_R"
+        geom_meta = {"geom_method": "cylindrical_fallback"}
+        print("  !! geometry fallback: equilibrium lacked axis/LCFS fields; "
+              "using linear-R rho and cylindrical V'=2rho")
 
-    # Interpolate Vprime onto TORAX rho grid
-    if rho_eq is not None and Vprime is not None:
-        Vprime_torax = np.interp(rho_torax, rho_eq, Vprime)
-    else:
-        Vprime_torax = np.ones_like(rho_torax)
+    geom = extract_geom_params(eq, it)
 
     # Thomson scattering profiles from NetCDF
     # Variables: try common names
-        Te_da = get_var(ts, ["Te", "T_e", "te", "Te_eV", "t_e"])  # units may vary
-        ne_da = get_var(ts, ["ne", "n_e", "ne_cm3", "ne_m3"])  # units may vary
-        if Te_da is None or ne_da is None:
-            raise KeyError("Could not find Te/ne in thomson_scattering.nc")
+    Te_da = get_var(ts, ["Te", "T_e", "te", "Te_eV", "t_e"])  # units may vary
+    ne_da = get_var(ts, ["ne", "n_e", "ne_cm3", "ne_m3"])  # units may vary
+    if Te_da is None or ne_da is None:
+        raise KeyError("Could not find Te/ne in thomson_scattering.nc")
 
-        # Time alignment: assume ts has time dimension named 'time'
-        if ("time" not in Te_da.dims) and ("time" not in ne_da.dims):
-            raise KeyError("Expected 'time' dimension in Thomson scattering variables")
+    # Time alignment: assume ts has time dimension named 'time'
+    if ("time" not in Te_da.dims) and ("time" not in ne_da.dims):
+        raise KeyError("Expected 'time' dimension in Thomson scattering variables")
 
-        ts_sizes = getattr(ts, "sizes", {})
-        Nt = ts_sizes.get("time")
-        if Nt is None:
-            Nt = Te_da.sizes.get("time")
-        if Nt is None:
-            Nt = ne_da.sizes.get("time", 0)
+    ts_sizes = getattr(ts, "sizes", {})
+    Nt = ts_sizes.get("time")
+    if Nt is None:
+        Nt = Te_da.sizes.get("time")
+    if Nt is None:
+        Nt = ne_da.sizes.get("time", 0)
 
-        # Determine radial-like axis for TS
-        rho_coord_name = infer_ts_radial_coordinate(ts)
-        if rho_coord_name is not None and rho_coord_name in ts.coords:
-            rho_ts = ts.coords[rho_coord_name].values
+    # Determine radial-like axis for TS
+    rho_coord_name = infer_ts_radial_coordinate(ts)
+    if rho_coord_name is not None and rho_coord_name in ts.coords:
+        rho_ts = ts.coords[rho_coord_name].values
 
-            def to_time_samples(da: xr.DataArray) -> np.ndarray: # Convert DataArray to 2D time-by-sample array, aligning time dimension if present. If no time dimension, replicate across time samples.
-                dims = list(da.dims)
-                if "time" in dims:
-                    dims_no_time = [d for d in dims if d != "time"]
-                    if dims_no_time:
-                        arr = da.transpose("time", *dims_no_time).values
-                        return arr.reshape(Nt, -1)
-                    else:
-                        arr = da.transpose("time").values
-                        return arr.reshape(Nt, -1)
-                else:
-                    arr = da.values.reshape(1, -1)
-                    return np.tile(arr, (Nt, 1))
-
-            Te_ts = to_time_samples(Te_da)
-            ne_ts = to_time_samples(ne_da)
-            rho_t_s = np.broadcast_to(np.asarray(rho_ts, dtype=float)[None, :], Te_ts.shape).copy()
-
-        else:
-            R_da = get_var(ts, ["R", "R_midplane", "R_channel", "major_radius"])
-            Z_da = get_var(ts, ["Z", "Z_midplane", "Z_channel"])
-            if R_da is None:
-                raise KeyError("Thomson dataset missing R coordinate for channels and no rho given")
-
-            def to_time_samples_fill(da: xr.DataArray) -> np.ndarray:
-                if "time" in da.dims:
-                    dims_no_time = [d for d in da.dims if d != "time"]
-                    if dims_no_time:
-                        arr = da.transpose("time", *dims_no_time).values
-                    else:
-                        arr = da.transpose("time").values[..., None]
+        def to_time_samples(da: xr.DataArray) -> np.ndarray: # Convert DataArray to 2D time-by-sample array, aligning time dimension if present. If no time dimension, replicate across time samples.
+            dims = list(da.dims)
+            if "time" in dims:
+                dims_no_time = [d for d in dims if d != "time"]
+                if dims_no_time:
+                    arr = da.transpose("time", *dims_no_time).values
                     return arr.reshape(Nt, -1)
                 else:
-                    arr = np.array(da.values).reshape(1, -1)
-                    return np.tile(arr, (Nt, 1))
-
-            R_t_s = to_time_samples_fill(R_da)
-            if Z_da is None:
-                Z_t_s = np.zeros_like(R_t_s)
+                    arr = da.transpose("time").values
+                    return arr.reshape(Nt, -1)
             else:
-                Z_t_s = to_time_samples_fill(Z_da)
+                arr = da.values.reshape(1, -1)
+                return np.tile(arr, (Nt, 1))
 
-            Te_t_s = to_time_samples_fill(Te_da)
-            ne_t_s = to_time_samples_fill(ne_da)
-            rho_t_s = np.vstack([rho_fn(R_t_s[t_idx], Z_t_s[t_idx]) for t_idx in range(Nt)])
+        Te_ts = to_time_samples(Te_da)
+        ne_ts = to_time_samples(ne_da)
+        rho_t_s = np.broadcast_to(np.asarray(rho_ts, dtype=float)[None, :], Te_ts.shape).copy()
 
-        t_ts = ts["time"].values if "time" in ts.coords else np.arange(Nt)
+    else:
+        R_da = get_var(ts, ["R", "R_midplane", "R_channel", "major_radius"])
+        Z_da = get_var(ts, ["Z", "Z_midplane", "Z_channel"])
+        if R_da is None:
+            raise KeyError("Thomson dataset missing R coordinate for channels and no rho given")
+
+        def to_time_samples_fill(da: xr.DataArray) -> np.ndarray:
+            if "time" in da.dims:
+                dims_no_time = [d for d in da.dims if d != "time"]
+                if dims_no_time:
+                    arr = da.transpose("time", *dims_no_time).values
+                else:
+                    arr = da.transpose("time").values[..., None]
+                return arr.reshape(Nt, -1)
+            else:
+                arr = np.array(da.values).reshape(1, -1)
+                return np.tile(arr, (Nt, 1))
+
+        R_t_s = to_time_samples_fill(R_da)
+        if Z_da is None:
+            Z_t_s = np.zeros_like(R_t_s)
+        else:
+            Z_t_s = to_time_samples_fill(Z_da)
+
+        Te_t_s = to_time_samples_fill(Te_da)
+        ne_t_s = to_time_samples_fill(ne_da)
+        rho_t_s = np.vstack([rho_fn(R_t_s[t_idx], Z_t_s[t_idx]) for t_idx in range(Nt)])
+
+    t_ts = ts["time"].values if "time" in ts.coords else np.arange(Nt)
 
     qa = run_shot_quality_screen(
         t_ts,
@@ -1132,9 +1244,70 @@ def build_one_shot(
     P_nbi = sanitize_nonnegative_signal(interp_fill_1d(t, P_nbi))
     P_rad = sanitize_nonnegative_signal(interp_fill_1d(t, P_rad))
 
+    # ---- Physics-directed drive covariates (all causally measurable) ----
+    # Ohmic power and a loss-power proxy P_loss = P_nbi + P_ohm - P_rad - dW/dt.
+    # The L-H threshold is conventionally expressed in loss power, not in
+    # injected power (see Martin et al. 2008; Meyer et al. 2011).
+    P_ohm_arr = get_var(summ, ["power_ohm", "p_ohm", "power_ohmic", "P_ohm"])
+    P_ohm_clean = sanitize_nonnegative_signal(interp_fill_1d(t, P_ohm_arr.values)) if P_ohm_arr is not None else np.zeros_like(t)
+    # Ohmic traces can carry large spikes at breakdown/termination; clip to a
+    # physically plausible band before differencing.
+    P_ohm_clean = np.clip(P_ohm_clean, 0.0, 5.0e6)
+
+    def _eq_series(names):
+        """Equilibrium scalar time series interpolated onto the summary grid."""
+        da = get_var(eq, names)
+        if da is None:
+            return None
+        v = np.asarray(da.values, dtype=float).squeeze()
+        if v.ndim != 1 or v.size < 3:
+            return None
+        t_eq = None
+        for cand in ("time", "t"):
+            if cand in da.coords:
+                t_eq = np.asarray(da.coords[cand].values, dtype=float)
+                break
+        if t_eq is None or t_eq.size != v.size:
+            return None
+        good = np.isfinite(v) & np.isfinite(t_eq)
+        if good.sum() < 3:
+            return None
+        return np.interp(t, t_eq[good], v[good], left=v[good][0], right=v[good][-1])
+
+    W_mhd = _eq_series(["wmhd", "w_mhd", "stored_energy"])
+    if W_mhd is not None:
+        W_smooth = _smooth_time_window(W_mhd, t, 0.010)
+        dWdt = np.gradient(W_smooth, t)
+        dWdt = np.clip(dWdt, -5.0e6, 5.0e6)
+    else:
+        W_smooth = np.full_like(t, np.nan)
+        dWdt = np.zeros_like(t)
+    P_loss = np.clip(P_nbi + P_ohm_clean - P_rad - dWdt, 0.0, 2.0e7)
+
+    kappa_s = _eq_series(["elongation"])
+    dtri_u = _eq_series(["triangularity_upper"])
+    dtri_l = _eq_series(["triangularity_lower"])
+    if dtri_u is not None and dtri_l is not None:
+        delta_s = 0.5 * (dtri_u + dtri_l)
+    else:
+        delta_s = dtri_u if dtri_u is not None else dtri_l
+    zX_s = _eq_series(["x_point_z"])
+    q95_s = _eq_series(["q95"])
+    # Fall back to corpus-neutral constants when a channel is missing, and
+    # record availability so the manifest can report it.
+    shape_avail = {
+        "kappa": kappa_s is not None, "delta": delta_s is not None,
+        "x_point_z": zX_s is not None, "q95": q95_s is not None,
+        "wmhd": W_mhd is not None, "P_ohm": P_ohm_arr is not None,
+    }
+    kappa_ts = kappa_s if kappa_s is not None else np.full_like(t, np.nan)
+    delta_ts = delta_s if delta_s is not None else np.full_like(t, np.nan)
+    zX_ts = zX_s if zX_s is not None else np.full_like(t, np.nan)
+    q95_ts = q95_s if q95_s is not None else np.full_like(t, np.nan)
+
     # Extended Summary Signals (Level-2)
     W_tot_da = get_var(summ, ["W_tot", "w_tot", "stored_energy", "energy_total"])
-    P_ohm_da = get_var(summ, ["p_ohm", "power_ohmic", "P_ohm"])
+    P_ohm_da = get_var(summ, ["power_ohm", "p_ohm", "power_ohmic", "P_ohm"])
     P_tot_da = get_var(summ, ["p_tot", "power_total", "P_tot"])
     ne_line_da = get_var(summ, ["n_e_line", "ne_line", "line_average_density", "line_average_n_e"])
     H98_da = get_var(summ, ["H98", "H_98", "h98", "h_factor_98y2"])
@@ -1202,7 +1375,7 @@ def build_one_shot(
 
     # Simple regime labelling on summary grid (t_summary)
     # 0 = unknown, 1 = L-mode, 2 = transition, 3 = H-mode
-    regime, regime_score, transition_time = estimate_regime_labels(t_summary, nebar, P_nbi, D_alpha)
+    regime, regime_score, transition_time = estimate_regime_labels(t_summary, nebar, P_nbi, D_alpha, Ip=Ip)
 
     # Coverage diagnostics
     Te_mask_col_cov = Te_mask.mean(axis=0).astype(np.float32)
@@ -1260,6 +1433,14 @@ def build_one_shot(
         **ne_scalar_meta,
         P_nbi=P_nbi,
         P_rad=P_rad,
+        P_ohm_clean=P_ohm_clean,
+        P_loss=P_loss,
+        W_mhd=W_smooth,
+        kappa_ts=kappa_ts,
+        delta_ts=delta_ts,
+        x_point_z_ts=zX_ts,
+        q95_ts=q95_ts,
+        shape_available=json.dumps(shape_avail),
         P_nbi_raw=P_nbi_raw,
         P_rad_raw=P_rad_raw,
         D_alpha=D_alpha,
@@ -1290,6 +1471,7 @@ def build_one_shot(
         Te_mask_mean_edge=Te_mask_mean_edge,
         ne_mask_mean_edge=ne_mask_mean_edge,
         **geom,
+        **{k: v for k, v in geom_meta.items()},
     )
 
     # Attach optional signals only if present and not all-NaN
