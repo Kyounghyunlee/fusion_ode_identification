@@ -41,31 +41,34 @@ dynamics from public MAST data}
 \maketitle
 
 \begin{abstract}
-Operating a tokamak in the high-confinement regime requires knowing, in
-real time, which confinement state the plasma is in and how far it is from
-a transition. Integrated transport simulators organize profile evolution
-but do not represent the abrupt, possibly path-dependent regime change;
-static classifiers detect it but supply no dynamics, margins, or
-continuous-time state. We identify, from \nShots{} public MAST discharges,
-a compact gray-box model: a phenomenological flux-coordinate
-temperature-diffusion backbone whose edge transport coefficient is
-modulated by a scalar regime coordinate governed by the depressed cubic
-$\tau\dot\lat = \dr(\inr) + \beta\lat - \lat^{3}$, with the topology
-parameter $\beta$ left free so that one-equilibrium and three-equilibrium
-dynamics compete on held-out evidence rather than by assumption. All
-components are identified jointly by reverse-mode differentiation through
-a verified implicit--explicit finite-volume integrator; inputs enter in
-fixed physical units and causally, so the identified regime state can be
-replayed in streaming fashion. On session-grouped held-out discharges the
-model attains a median per-shot event AUC of \resAUCmed{}
-(95\% CI \resAUCci) and median transition-timing error \resTTmed{}, while
-confirmed non-transitioning discharges remain in the low state.
-The best-fit dynamics are bistable ($\beta = \resBeta$,
-$P(\beta>0) \approx \resPbetaPos$ under a local Laplace approximation);
-we report the implied conditional fold margins and equivalent
-injected-power thresholds with uncertainty, and state precisely what
-evidence separates structural bistability from finite-rate lag.
-% TODO: finalize abstract numbers after locked-test evaluation.
+Operating a tokamak in the high-confinement regime requires knowing, in real
+time, which confinement state the plasma is in. We identify, from \nShots{}
+public MAST discharges, a compact causal gray-box model: a phenomenological
+flux-coordinate temperature-diffusion backbone whose edge transport
+coefficient is modulated by a scalar regime coordinate governed by the
+depressed cubic $\tau\dot\lat = \dr(\inr) + \beta\lat - \lat^{3}$, with the
+topology parameter $\beta$ left free so that one- and three-equilibrium
+dynamics compete on held-out evidence rather than by assumption. Inputs
+enter causally in fixed physical units; the D$_\alpha$ emission that
+conventionally diagnoses the transition never drives the dynamics. All
+components are identified jointly by differentiating through a verified
+implicit--explicit finite-volume integrator. On sessions held out until a
+single final evaluation, the model attains a median per-discharge regime
+AUC of $0.948$ (95\% CI $[0.84, 0.99]$). Three results are negative and, we
+argue, more useful than the positive one. First, the data do not select a
+latent topology: a model constrained to be monostable matches or beats the
+free model on every regime endpoint across seeds, so the reproducibly
+positive $\beta$ of the free fit is not evidence that these discharges
+require folds or hysteresis. Second, removing the regime--transport coupling
+entirely changes nothing measurable, so the mechanism the architecture was
+built around is not identifiable from this dataset, and we withdraw the
+interpretability claim. Third, discrimination is the only quantity that
+transfers: profile error doubles on held-out sessions, event recall falls
+threefold, and a probability calibration fitted on validation data makes
+test calibration worse than none. We also document two data-pipeline defects
+--- an inverted flux coordinate and a metric that was never the
+reconstruction's --- that were invisible to every training and validation
+metric and that, once corrected, reversed the study's original conclusion.
 \end{abstract}
 
 \section{Introduction}
@@ -589,24 +592,91 @@ approximations are stated as such.
 \section{Discussion}
 \label{sec:discussion}
 
-\emph{TODO after results: what the data require (topology), whether
-profiles independently constrain the latent, comparison of the
-conditional equivalent-power threshold with published MAST loss-power
-thresholds and why they differ, what high-power non-transitions imply
-about missing shape/loss-power covariates, scalar-state limits
-(dithering), transport-source identifiability, label uncertainty, and the
-observer/closed-loop work needed before any control-ready claim. The
-static fold margin is a candidate scheduling variable whose control
-utility remains to be validated; finite-rate delay, uncertainty, and
-actuator limits all intervene.}
+\paragraph{What was established.} A four-parameter scalar vector field,
+driven only by causally measurable actuators and plasma context and
+supervised by weak labels, orders confinement states within unseen
+discharges at AUC $0.948$. The identified relaxation time,
+$\tau \approx \SI{30}{ms}$, matches the observed duration of the
+transition, and the drive extension motivated by MAST threshold physics ---
+a loss-power proxy and plasma shape in place of injected power alone ---
+improved held-out trajectory loss and event recall by margins many times
+the seed spread. The regime estimate costs microseconds to propagate and
+requires no diagnostic that is unavailable in real time.
+
+\paragraph{What was not.} The study set out to test whether the L--H
+transition in these data behaves like a fold bifurcation of a
+low-dimensional system. It does not answer that question, and we think the
+inability is the honest finding rather than a failure of execution. A
+constrained monostable latent, which cannot exhibit static multistability at
+all, describes the same discharges at least as well on every regime
+endpoint and is the only variant that reproduces any back-transition.
+That last observation has a mechanical explanation
+(\S\ref{sec:res-modelcomp}): a bistable latent, once on the upper branch,
+requires the drive to fall below the lower fold to return, an excursion
+these discharges rarely provide. Hysteresis is thus simultaneously the
+attraction of the bistable description and the reason it fits the observed
+H$\to$L events worse.
+
+\paragraph{The coupling that did nothing.} Setting $\Delta\chi = 0$ leaves
+every metric unchanged. The architecture's central conceit --- that the
+regime coordinate acts on the profile through the edge diffusivity, making
+the inferred transport coefficient physically interpretable --- is not
+supported. We suspect a structural cause: the measured edge temperature is
+supplied as a Dirichlet trace and supervision spans only
+$\rho \approx 0.73$--$1.0$, so the boundary condition already prescribes
+most of the variance in the scored region. Withholding that trace and
+predicting it from the model state is the experiment that would settle it,
+and it is the single most valuable next step for this line of work.
+
+\paragraph{Generalisation.} The gap between validation and locked test is
+large and one-directional except in AUC. We draw two lessons. Statistically,
+twenty validation discharges are too few to fit even a two-parameter
+calibration map that transfers: the fitted map was actively harmful on new
+sessions. Methodologically, a study of this kind that reports only
+cross-validated numbers would have overstated its performance on
+calibration, event detection, and profile accuracy simultaneously.
+
+\paragraph{On finding one's own errors.} Three defects in this work
+(Appendix~\ref{app:history}) produced healthy training curves, plausible
+validation losses, and publishable figures while being wrong; two changed
+conclusions. None was caught by a machine-learning diagnostic. They were
+caught by a manufactured-solution convergence study, by auditing the data
+path line by line against the file contents, and by validating a derived
+geometric quantity against a value the files already contained. We would
+argue that any study identifying physical parameters from experimental data
+through a differentiable solver should budget for all three before
+interpreting a fitted coefficient, and should report the fitted coefficient
+only alongside a constrained alternative.
+
+\paragraph{Limitations.} Beyond those already stated: a single device and a
+narrow operating space; a thin supervised annulus that leaves core transport
+unidentified; labels and observation target derived from the same
+diagnostic; injected rather than absorbed power; a quasi-static geometry;
+and a scalar latent that cannot represent the oscillatory dithering seen
+near threshold, for which a two-dimensional normal form with a Hopf sector
+is the natural extension.
 
 \section{Conclusion}
 \label{sec:conclusion}
 
-\emph{TODO after results: research question, method, strongest held-out
-finding with uncertainty, exact strength of the bistability statement,
-and the next validation step (independent-device replay; observer;
-closed-loop simulation with separated plant/model).}
+We asked whether a compact, causal, continuous-time gray-box model
+identified from experimental MAST discharges can jointly predict edge
+temperature evolution and confinement-regime transitions while yielding
+interpretable and statistically defensible stability margins. The answer is
+partial and worth stating precisely. Regime discrimination transfers to
+unseen experimental sessions at AUC $0.948$, using only inputs available in
+real time and a latent whose vector field has four parameters. Profile
+prediction, event timing, and probability calibration do not transfer at
+useful accuracy. The stability margins can be computed in closed form, but
+we cannot claim they are physically meaningful, because a model forbidden
+from having folds fits these data equally well and because the coupling
+between the regime state and the transport coefficient is not identifiable
+here.
+
+The next step is not a larger model. It is to remove the measured edge
+boundary condition so that the transport coupling has variance to explain,
+to add X-point geometry to the drive, and to test whether the resulting
+margins retain predictive content on a second device.
 
 \paragraph{Data and code availability.} All data are from the UKAEA MAST
 open-data archive \citep{mastopendata} and are acknowledged per the data

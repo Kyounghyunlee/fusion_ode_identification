@@ -302,5 +302,59 @@ would need to be resolved first.
 \subsection{Locked-test evaluation}
 \label{sec:res-test}
 
-% Written after the single evaluation on the held-out sessions.
-\emph{TODO: single-pass locked-test numbers.}
+The selected configuration --- extended drive, constrained monostable
+topology, median-seed checkpoint --- was evaluated exactly once on the
+\nTest{} discharges of the four held-out sessions, after every modelling,
+weighting, stopping, and calibration decision had been fixed. The
+comparison with validation is the substantive result of this subsection.
+
+\begin{center}\small
+\begin{tabular}{lrr}
+\toprule
+& grouped validation & locked test \\
+\midrule
+median per-discharge AUC        & $0.941$ & $0.948$\ \ $[0.84, 0.99]$ \\
+Brier score (calibrated)        & $0.064$ & $0.156$ \\
+expected calibration error, raw $\to$ calibrated & $0.114 \to 0.048$ & $0.114 \to 0.314$ \\
+L$\to$H recall / precision      & $0.33$ / --- & $0.10$ / $0.22$ \\
+H$\to$L recall                  & $0.10$ & $0.00$ \\
+annulus profile MAE             & \SI{39}{eV} & \SI{77}{eV} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{What transfers.} Discrimination does, and comfortably: the
+median per-discharge AUC on unseen sessions is $0.948$, marginally higher
+than on validation, with a bootstrap interval of $[0.84, 0.99]$ over $27$
+scorable discharges. The ordering the model imposes on samples within a
+discharge is therefore a genuine property of the identified dynamics and
+not an artefact of the sessions used to fit it.
+
+\paragraph{What does not.} Everything else. Profile error doubles from
+\SI{39}{eV} to \SI{77}{eV}. Event recall falls by a factor of three, to
+$0.10$ at precision $0.22$ against $41$ labelled L$\to$H events, and no
+back-transition is detected. Most instructively, the Platt map fitted on the
+$20$ validation discharges makes calibration on the test sessions
+\emph{worse than no calibration at all}: expected calibration error rises
+from $0.114$ uncalibrated to $0.314$ after applying it. A two-parameter
+probability scale estimated from twenty discharges is evidently
+session-specific, and transferring it is harmful. We report the
+uncalibrated figure as the operative one and treat calibration as
+unsolved.
+
+\paragraph{A limit of the negative control.} Of the $29$ test discharges,
+$27$ fall in the ambiguous cohort and none in the confirmed-negative
+cohort, so the false-positive rate cannot be estimated on the locked test at
+all. This is a consequence of assigning sessions to splits before the label
+audit was complete, and it is a design flaw we record rather than repair by
+re-splitting, which would destroy the very property that makes the test set
+meaningful.
+
+\paragraph{Reading.} The validation numbers were optimistic on every axis
+except discrimination, and the size of that gap is itself one of the
+findings of this study. A reader assessing whether this model class is
+ready for control-oriented deployment should weight the test column, not
+the validation column: the present system ranks confinement regimes
+reliably on unseen sessions, and does not yet deliver calibrated
+probabilities, dependable event timing, or transferable profile
+accuracy.
