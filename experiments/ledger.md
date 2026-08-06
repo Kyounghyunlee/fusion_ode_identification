@@ -192,3 +192,22 @@ honest statement is that the regime coordinate is identified from actuators
 plus weak labels, and that its physical coupling to transport is not
 resolved by this dataset. The observation head (145 params) is also
 redundant and should be dropped for simplicity.
+
+## MODEL SELECTION (validation only; declared before the locked-test run)
+Ablation summary (ext drive, seed 0): AUC / Brier / LH / MAE
+  full            0.916 / 0.081 / 0.40 / 39 eV
+  delta_chi=0     0.925 / 0.084 / 0.43 / 38 eV
+  no source       0.926 / 0.080 / 0.50 / 58 eV
+  no obs loss     0.925 / 0.085 / 0.43 / 39 eV
+  no label loss   0.912 / 0.073 / 0.50 / 39 eV
+The full model is best on none of the regime metrics; only the residual source
+is load-bearing, and only for profile accuracy. Applying "simplest model within
+statistical uncertainty of the best": the extended drive is retained (clearly
+better than basic across 3 seeds), and the CONSTRAINED MONOSTABLE topology is
+selected, since it is the simpler hypothesis and is not worse on any endpoint
+(it is better on AUC, Brier and back-transition recall).
+PRIMARY MODEL = e_ext_mono_s2, chosen as the MEDIAN validation loss within the
+selected configuration (s0 0.4595, s2 0.4613, s1 0.4726) to avoid selecting the
+best-performing seed.
+The locked test sessions (27445, 29181, 29039, 29934 -> 29 discharges) have not
+been touched by any decision above. They are now evaluated exactly once.
