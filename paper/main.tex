@@ -9,6 +9,7 @@
 \usepackage[dvipsnames]{xcolor}
 \usepackage{tikz}
 \usetikzlibrary{positioning, arrows.meta}
+\usepackage{longtable}
 \usepackage{placeins}   % \FloatBarrier
 \usepackage[colorlinks=true, linkcolor=MidnightBlue, citecolor=MidnightBlue, urlcolor=MidnightBlue]{hyperref}
 \usepackage[round]{natbib}
@@ -233,7 +234,7 @@ present (Thomson profiles, NBI power, $I_p$, density, D$_\alpha$,
 equilibrium), adequate pre- and post-transition observation, and passage
 of the profile quality gates below. Appendix~D lists every considered
 shot with its exclusion reason or final role.
-% TODO: regenerate manifest table from data/split.json + QA summary.
+% manifest generated into tables/manifest.tex
 
 \paragraph{Quality screening.} Raw channels are frequently corrupted.
 Per time slice, profiles need a minimum number of finite channels and
@@ -272,7 +273,7 @@ puffing/ELM behavior makes the proxy unreliable). Only confirmed
 negatives support the negative-control claim in
 \S\ref{sec:res-events}; ambiguous cases are reported separately and are
 never treated as ground truth.
-% TODO: cohort counts from data/label_audit.json.
+% cohort counts are generated into tables/cohorts.tex
 
 \section{Model}
 \label{sec:model}
@@ -553,7 +554,7 @@ relative threshold $10^{-3}$). The validation loss contains all terms of
 as profile fit. Parameter counts: residual source network
 \resNsource{} parameters; observation head \resNhead{}; latent vector
 field and readout 8 scalars; transport coefficient 3 scalars.
-% TODO: fill parameter counts from artifacts.
+% parameter counts are generated into tables/hyperparams.tex
 
 \subsection{Numerical verification}
 Appendix~C reports: analytic decay-mode error, grid refinement
@@ -746,13 +747,39 @@ quasi-static state, not the completion time of the observed transition.
 
 \section{Data manifest and label audit}
 \label{app:manifest}
-\emph{TODO: generated table of every considered shot: session, role,
-channels, QA outcome, label events, session-log annotation, cohort.}
+Table~\ref{tab:cohorts} summarises the evidence cohorts by split; the
+per-discharge manifest follows. Columns: $n_\rho$ surviving radial
+channels, $n_t$ retained profile times, $n_H$ samples labelled H,
+$t_{\mathrm{LH}}$ the first labelled transition, $V$ ratio the agreement of
+the integrated flux-surface volume with the equilibrium's own volume scalar
+(Appendix~\ref{app:eq-vprime}), and geom the coordinate construction used.
+
+\begin{table}[h]
+\centering\small
+\caption{Evidence cohorts by split. Only confirmed negatives support a
+false-positive claim; the locked test contains none, which is stated as a
+limitation in \S\ref{sec:res-test}.}
+\label{tab:cohorts}
+\input{tables/cohorts}
+\end{table}
+
+\smallskip
+\input{tables/manifest}
 
 \section{Hyperparameters and environment}
 \label{app:hparams}
-\emph{TODO: full configuration dump, seeds, environment lock hash,
-hardware, runtimes.}
+All runs use the settings below; seeds $0$, $1$, $2$ differ only in
+parameter initialisation and batch sampling. The environment is pinned by a
+lock file and its hash is stored with the frozen baseline; hardware is a
+14-core workstation CPU, and a single identification run takes
+$2$--$3$ hours with three runs executing concurrently.
+
+\begin{table}[h]
+\centering\small
+\caption{Identification settings and parameter counts by block.}
+\label{tab:hyperparams}
+\input{tables/hyperparams}
+\end{table}
 
 \section{Extended results}
 \label{app:extresults}

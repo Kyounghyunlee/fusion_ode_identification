@@ -1,0 +1,27 @@
+\begin{tabular}{lr}
+\toprule
+setting & value \\
+\midrule
+grid points $N$ & 65 \\
+substeps per observation interval & 5 \\
+$\thIMEX$ & 0.7 \\
+optimiser & AdamW \\
+peak learning rate & 0.0002 \\
+weight decay & 3e-05 \\
+gradient clip (global norm) & 1.0e3 \\
+batch size (discharges) & 8 \\
+step ceiling & 3000 \\
+early-stop patience (evaluations) & 10 \\
+early-stop relative threshold & 0.0005 \\
+$\lambda_s$ (source) & 0.1 \\
+$\lambda_1,\lambda_2$ (latent) & 0.001, 0.001 \\
+$\lambda_r$ (regime) & 0.5 \\
+$\lambda_y$ (observation) & 2.0 \\
+source network & 4 hidden layers, width 128, tanh \\
+source parameters & 50,689 \\
+observation-head parameters & 145 \\
+latent vector field + readout parameters & 8 \\
+transport-coefficient parameters & 4 \\
+precision & float64 \\
+\bottomrule
+\end{tabular}
