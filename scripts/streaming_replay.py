@@ -28,7 +28,9 @@ import jax.numpy as jnp
 import numpy as np
 import yaml
 
-from fusion_ode_identification.model import build_hybrid_model, CONTROL_SCALES
+from fusion_ode_identification.model import (
+    DRIVE_FEATURES, DRIVE_OFFSETS, DRIVE_SCALES, build_hybrid_model,
+)
 
 
 def main():
@@ -38,15 +40,19 @@ def main():
     ap.add_argument("--config", default="config/config.yaml")
     args = ap.parse_args()
 
-    cfg = yaml.safe_load(open(args.config))
+    saved = f"logs/{args.model_id}/config.yaml"
+    cfg = yaml.safe_load(open(saved if os.path.exists(saved) else args.config))
+    drive_set = str(cfg.get("model", {}).get("drive_set", "basic"))
+    feat_names = DRIVE_FEATURES[drive_set]
     model = build_hybrid_model(cfg, jax.random.PRNGKey(0))
     model = eqx.tree_deserialise_leaves(f"models/{args.model_id}/model_best.eqx", model)
     lat = model.latent
 
     beta = float(lat.beta())
     tau = float(lat.tau_eff())
-    kP = float(jax.nn.softplus(lat.drive_weights[0]))
-    kI, kN, k0 = (float(lat.drive_weights[1]), float(lat.drive_weights[2]), float(lat.drive_bias))
+    w = np.concatenate([[float(jax.nn.softplus(lat.drive_weights[0]))],
+                        np.asarray(lat.drive_weights[1:], dtype=float)])
+    k0 = float(lat.drive_bias)
     kb = float(jax.nn.softplus(lat.kb_raw) + 0.5)
     bb = float(lat.bb)
 
@@ -56,7 +62,7 @@ def main():
 
     # --- pure NumPy streaming path (PCS-representative) ---
     def numpy_replay(t, R):
-        alpha = R @ np.array([kP, kI, kN]) + k0
+        alpha = R @ w + k0
         z = np.empty(len(t))
         # causal init: lowest equilibrium at first drive (Newton)
         zz = -(1 + np.sqrt(abs(beta)) + abs(alpha[0]) ** (1 / 3))
@@ -80,7 +86,17 @@ def main():
     for shot in shots:
         d = np.load(f"data/{shot}_torax_training.npz", allow_pickle=True)
         t = d["t"]
-        R = np.stack([d["P_nbi"], np.abs(d["Ip"]), d["nebar"]], -1) / np.asarray(CONTROL_SCALES[:3])
+        cols = []
+        for nm in feat_names:
+            off = DRIVE_OFFSETS.get(nm, 0.0)
+            sc = DRIVE_SCALES[nm]
+            v = np.asarray(d[nm], dtype=float).reshape(-1) if nm in d else np.full(t.size, off * sc)
+            if nm == "Ip":
+                v = np.abs(v)
+            if v.size != t.size or not np.any(np.isfinite(v)):
+                v = np.full(t.size, off * sc)
+            cols.append(v / sc - off)
+        R = np.stack(cols, -1)
         t0 = time.perf_counter()
         z, pH = numpy_replay(t, R)
         wall = time.perf_counter() - t0
@@ -92,7 +108,7 @@ def main():
         }
 
     # compiled-path latency on one shot
-    feat = jnp.array([2.5, 0.75, 2.0, 0.5])
+    feat = jnp.zeros((len(feat_names),))
     z = jnp.array(-1.0)
     _ = lat_step(z, feat)  # warm-up/compile
     t0 = time.perf_counter()

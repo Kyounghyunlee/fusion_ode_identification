@@ -289,11 +289,18 @@ Appendix~\ref{app:data-limits}.
 \label{sec:res-runtime}
 
 The deployed quantities are a single scalar ODE step and two closed-form
-readouts. Replaying the identified latent causally over held-out
-discharges, using only past and current inputs and no D$_\alpha$, costs a
-few microseconds per step in a plain NumPy implementation representative of
-a plasma-control-system environment, against a $\SI{1}{ms}$ actuator
-cadence. The profile solve is not required for the regime estimate. We
+readouts. We replayed the identified latent causally over the locked-test
+discharges, using only past and current inputs and no D$_\alpha$, with five
+explicit substeps per actuator sample and the same equilibrium-based
+initialisation used in training. In a plain NumPy implementation --- chosen
+as representative of a plasma-control-system environment rather than of this
+codebase --- the median cost is $\SI{1.2}{\micro s}$ per step on one core,
+against a $\SI{1}{ms}$ actuator cadence: a duty factor of roughly $10^{-3}$.
+For contrast, dispatching the same update through the compiled JAX path
+costs $\SI{43}{\micro s}$ per step, which is interpreter and dispatch
+overhead rather than arithmetic, and illustrates that the relevant
+implementation for a real-time claim is the one that would actually be
+deployed. The profile solve is not required for the regime estimate. We
 therefore describe the regime assessor as control-oriented and explicitly
 not control-ready: there is no observer correcting drift, no closed-loop
 test, and the H$\to$L behaviour documented in \S\ref{sec:res-events}
