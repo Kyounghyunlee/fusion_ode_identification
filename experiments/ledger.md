@@ -236,3 +236,11 @@ well on unseen sessions but does not yet deliver calibrated probabilities,
 reliable event detection, or transferable profile accuracy. The validation
 numbers were optimistic on every axis except AUC. Reported as such; the
 gap between validation and test is itself one of the study's results.
+
+## PROTOCOL (post-grid): early-stop patience 16 -> 10
+Applied only after EXP-003 completed, so no comparison mixes stopping rules.
+Justification measured on EXP-003: intervals between successive validation
+improvements had median 50 steps, p90 200, max 750 (n=198); no improvement
+ever followed a gap > 800 steps and only 2% followed a gap > 500. Patience 10
+evaluations (500 steps) therefore saves ~300 steps/run at ~2% risk of missing
+a final marginal improvement.

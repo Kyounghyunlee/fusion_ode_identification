@@ -19,7 +19,7 @@ training:
   log_every: 50
   # Stop after `patience` evaluations without >= min_delta relative
   # improvement of the validation loss.
-  early_stop_patience: 16
+  early_stop_patience: 10
   early_stop_min_delta: 5.0e-4
 
   # Losses are normalized to O(1) per task (see loss.py: S_TE=100 eV,
