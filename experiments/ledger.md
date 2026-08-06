@@ -211,3 +211,28 @@ selected configuration (s0 0.4595, s2 0.4613, s1 0.4726) to avoid selecting the
 best-performing seed.
 The locked test sessions (27445, 29181, 29039, 29934 -> 29 discharges) have not
 been touched by any decision above. They are now evaluated exactly once.
+
+## LOCKED TEST (2026-08-06) - single evaluation, e_ext_mono_s2, 29 discharges
+metric              validation    locked test
+median AUC          0.941         0.948  [0.84, 0.99]  (27 scorable shots)
+Brier (calibrated)  0.064         0.156
+ECE raw -> cal      0.114 -> 0.048  0.114 -> 0.314
+F1 (calibrated)     ~0.5          0.00
+L->H recall         0.33          0.10   (precision 0.22, 41 labelled events)
+H->L recall         0.10          0.00
+annulus MAE         39 eV         77 eV
+READING. Discrimination transfers and is if anything better on the held-out
+sessions (AUC 0.948). Nothing else transfers well:
+ * profile error doubles (39 -> 77 eV);
+ * event recall falls by a factor three (0.33 -> 0.10);
+ * the Platt calibration fitted on the 20 validation discharges makes test
+   calibration WORSE than no calibration at all (ECE 0.114 -> 0.314). The
+   calibration map does not transfer across sessions; with 20 shots it is a
+   high-variance fit of a session-specific probability scale.
+ * the test cohort contains 27 ambiguous and 0 confirmed-negative discharges,
+   so the false-positive claim cannot be evaluated on it at all.
+CONCLUSION. The honest headline is that the model RANKS confinement regimes
+well on unseen sessions but does not yet deliver calibrated probabilities,
+reliable event detection, or transferable profile accuracy. The validation
+numbers were optimistic on every axis except AUC. Reported as such; the
+gap between validation and test is itself one of the study's results.
